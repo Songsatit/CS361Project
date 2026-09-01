@@ -1,7 +1,42 @@
-# CS361Project
+# CS361Project G650-08
 
-# Curriculum Information & Graduation Verification System
+# Curriculum Information & Graduation Verification System (V1)
 
+> ⚠️ **สำคัญ:** Implementation ของ V1 อยู่ที่ branch `frontend` (ยังไม่ merge เข้า
+> `main` เนื่องจากโค้ดอยู่ระหว่างพัฒนาต่อเนื่อง) กรุณาสลับไปที่ branch นี้ก่อนตรวจสอบงาน
+> ```bash
+> git clone [ใส่ URL ของ repo]
+> cd CS361Project
+> git checkout frontend
+> ```
+ 
+## 🔗 ลิงก์และการเข้าถึง
+ 
+- **ระบบที่ Deploy แล้ว:** [-]
+- **Architecture Diagram:** [https://drive.google.com/file/d/1Rk5pX3-oAyrlpXV6lD0AXvWFG9bV7TVr/view]
+- **GitHub Repository:** [https://github.com/Songsatit/CS361Project.git]
+> หมายเหตุ: หากระบบยังไม่ได้ Deploy สามารถสาธิตจากเครื่องของทีมได้ โดยทำตามขั้นตอนใน
+> "วิธีรันระบบจากเครื่อง" ด้านล่าง
+ 
+---
+ 
+## 🖥️ วิธีรันระบบจากเครื่อง (Local Setup)
+ 
+ระบบเป็น Static Website ล้วน ๆ (HTML/CSS/JS) ไม่มี backend หรือ dependency ที่ต้องติดตั้ง
+ 
+1. Clone repository นี้ลงเครื่อง แล้วสลับไปที่ branch `frontend`
+```bash
+   git clone [ใส่ URL ของ repo]
+   cd CS361Project
+   git checkout frontend
+```
+2. เปิดระบบได้หลายวิธี เลือกวิธีใดวิธีหนึ่ง:
+   - เปิดไฟล์ index.html ด้วยเบราว์เซอร์โดยตรง
+   - ใช้ VS Code extension "Live Server" คลิกขวาที่ index.html แล้วเลือก 
+     "Open with Live Server"
+
+3. ไม่ต้องติดตั้ง dependency เพิ่มเติม ระบบใช้ JavaScript ล้วนพร้อมข้อมูลที่ฝังไว้ในไฟล์ `script.js`
+---
 ## Project Definition
 
 ระบบข้อมูลหลักสูตรและการตรวจสอบการสำเร็จการศึกษา เป็นระบบกลางที่ช่วยให้ผู้ใช้สามารถเข้าถึง ค้นหา และสอบถามข้อมูลที่เกี่ยวข้องกับหลักสูตร เช่น ข้อมูลหลักสูตร แผนการเรียน รายวิชา วิชาบังคับก่อน และเงื่อนไขการสำเร็จการศึกษา
