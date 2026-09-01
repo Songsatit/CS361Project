@@ -24,7 +24,7 @@
  
 1. Clone repository นี้ลงเครื่อง แล้วสลับไปที่ branch `frontend`
 ```bash
-   git clone [ใส่ URL ของ repo]
+   git clone https://github.com/Songsatit/CS361Project.git
    cd CS361Project
    git checkout frontend
 ```
