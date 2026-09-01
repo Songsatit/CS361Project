@@ -15,8 +15,6 @@
 - **ระบบที่ Deploy แล้ว:** [-]
 - **Architecture Diagram:** [https://drive.google.com/file/d/1Rk5pX3-oAyrlpXV6lD0AXvWFG9bV7TVr/view]
 - **GitHub Repository:** [https://github.com/Songsatit/CS361Project.git]
-> หมายเหตุ: หากระบบยังไม่ได้ Deploy สามารถสาธิตจากเครื่องของทีมได้ โดยทำตามขั้นตอนใน
-> "วิธีรันระบบจากเครื่อง" ด้านล่าง
  
 ---
  
