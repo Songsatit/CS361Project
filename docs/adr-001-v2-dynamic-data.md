@@ -19,18 +19,8 @@ V1 ใช้ข้อมูลหลักสูตรที่เขียน�
 - ใช้ **S3** เก็บไฟล์ดิบหรือไฟล์ Import ถ้าจำเป็น
 
 ## Data flow
+![V2 architecture](v2-architecture.png)
 
-```mermaid
-flowchart LR
-    User[User] --> Amplify[Amplify Frontend]
-    Amplify --> Gateway[API Gateway]
-    Gateway --> Query[Query Lambda]
-    Query --> RDS[(RDS)]
-
-    UniversityAPI[University Curriculum API] --> Import[Import Lambda]
-    Import --> RDS
-    Import --> S3[S3 Raw Data]
-```
 
 ## Alternatives considered
 
