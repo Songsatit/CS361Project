@@ -37,3 +37,45 @@ npm run import
 ```
 
 Script จะดึง Faculty, Department และ Course Catalog แล้วบันทึกลงตารางที่สร้างใน RDS โดยใช้ `ON DUPLICATE KEY UPDATE` จึงรันซ้ำเพื่ออัปเดตข้อมูลได้
+
+## Read API (Issue #14)
+
+`template.yaml` deploys one AWS Lambda behind API Gateway HTTP API. The Lambda connects to the existing MySQL tables.
+
+| Method and path | Description |
+| --- | --- |
+| `GET /api/courses` | List course placements. Optional query parameters: `q`, `curriculumId`, `pathwayId`, `limit` (1–500, default 100), and `offset`. |
+| `GET /api/courses/{courseId}` | Return a course (by database ID or course code), curriculum placements, classifications, and prerequisites. |
+| `GET /api/courses/{courseId}/prerequisites` | Return the prerequisite chain with depth and `completed: false` for the frontend checklist. |
+| `GET /api/curricula/{curriculumId}/graduation-conditions` | List graduation conditions in display order. |
+| `GET /api/faculties` | List faculties. |
+| `GET /api/departments` | List departments. Optional `facultyId` filters by faculty. |
+
+Successful responses use `{ "data": ... }`; list endpoints return an array in `data`. A missing course returns 404. Unexpected database or schema errors return a generic 500 response and are logged in CloudWatch.
+
+### Deploy
+
+Install AWS SAM CLI and configure AWS credentials for the target account. The deployment needs an existing VPC, private subnets with a route to RDS, a Lambda security group, and an RDS security group rule allowing inbound MySQL (3306) from that Lambda security group. The Lambda must be able to reach RDS; public subnet placement alone does not provide that access. Database tables must match the entities in `../docs/v2-data-model-erd.md`, including `prerequisite`. Run `migrations/001_curriculum_graduation_conditions.sql` once against the target RDS before deploying. The included seed covers `BSC-CS-2566`; add verified conditions for other curricula before using that endpoint for them.
+
+From this directory, validate and deploy with the database and network values for your environment:
+
+```bash
+sam validate --lint
+sam build
+sam deploy --guided
+```
+
+Provide `DbHost`, `DbName`, `DbUser`, `DbPassword`, `DbPort`, `VpcSubnetIds`, and `LambdaSecurityGroupId` when prompted. `DbPassword` is marked `NoEcho`. Do not put database credentials in source control or the SAM template. The stack output `ApiUrl` is the base URL to configure in the frontend.
+
+Example calls after deployment:
+
+```text
+GET {ApiUrl}/api/faculties
+GET {ApiUrl}/api/departments?facultyId=XX
+GET {ApiUrl}/api/courses?curriculumId=BSC-CS-2566&limit=100
+GET {ApiUrl}/api/courses/CS100
+GET {ApiUrl}/api/courses/CS100/prerequisites
+GET {ApiUrl}/api/curricula/BSC-CS-2566/graduation-conditions
+```
+
+Import `postman/CS361Project-API.postman_collection.json` into Postman and set `baseUrl`, `courseCode`, and `curriculumId` to exercise the endpoints. The collection includes basic status and response-shape checks.

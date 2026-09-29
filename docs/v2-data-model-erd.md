@@ -11,6 +11,7 @@ erDiagram
     FACULTY ||--o{ DEPARTMENT : has
     DEPARTMENT ||--o{ CURRICULUM_DEPARTMENT : maps
     CURRICULUM ||--o{ PATHWAY : has
+    CURRICULUM ||--o{ CURRICULUM_GRADUATION_CONDITION : requires
     CURRICULUM ||--o{ CURRICULUM_DEPARTMENT : linked_to
     PATHWAY ||--o{ CURRICULUM_DEPARTMENT : linked_to
     PATHWAY ||--o{ CURRICULUM_COURSE : contains
@@ -34,6 +35,12 @@ erDiagram
     CURRICULUM {
         string curriculum_id PK
         int academic_year
+    }
+    CURRICULUM_GRADUATION_CONDITION {
+        int condition_id PK
+        string curriculum_id FK
+        int display_order
+        string condition_text
     }
     PATHWAY {
         string pathway_id PK
@@ -90,6 +97,7 @@ erDiagram
 - `CURRICULUM_COURSE` เป็นตารางเชื่อมระหว่าง pathway กับรายวิชา
 - `COURSE_CLASSIFICATION` เก็บประเภทและหมวดหมู่ของรายวิชาตาม curriculum placement
 - `PREREQUISITE` รองรับความสัมพันธ์วิชาบังคับก่อนแบบหลายต่อหลาย
+- `CURRICULUM_GRADUATION_CONDITION` เก็บเงื่อนไขสำเร็จการศึกษาที่ Frontend ใช้แสดง
 - ข้อมูลจากทั้งสาม API ควรถูกแปลงเข้าสู่ Model นี้ก่อนส่งให้ Frontend
 
 ## Acceptance criteria

@@ -1,0 +1,49 @@
+{
+  "info": {
+    "name": "CS361Project API",
+    "description": "Basic status and response-shape checks for the curriculum read API.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "https://replace-with-api-id.execute-api.ap-southeast-1.amazonaws.com" },
+    { "key": "courseCode", "value": "CS100" },
+    { "key": "curriculumId", "value": "BSC-CS-2566" }
+  ],
+  "item": [
+    {
+      "name": "List courses",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/courses?limit=2" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('returns 200', () => pm.response.to.have.status(200));", "pm.test('data is an array', () => pm.expect(pm.response.json().data).to.be.an('array'));", "pm.test('pagination is present', () => pm.expect(pm.response.json().pagination).to.have.property('count'));" ] } }]
+    },
+    {
+      "name": "Search courses",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/courses?q={{courseCode}}&limit=10" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('returns 200', () => pm.response.to.have.status(200));", "pm.test('data is an array', () => pm.expect(pm.response.json().data).to.be.an('array'));" ] } }]
+    },
+    {
+      "name": "Get course by code or ID",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/courses/{{courseCode}}" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('returns 200', () => pm.response.to.have.status(200));", "pm.test('course data includes placements', () => pm.expect(pm.response.json().data).to.have.property('placements'));" ] } }]
+    },
+    {
+      "name": "Get prerequisite chain",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/courses/{{courseCode}}/prerequisites" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('returns 200', () => pm.response.to.have.status(200));", "pm.test('prerequisites is an array', () => pm.expect(pm.response.json().data.prerequisites).to.be.an('array'));", "pm.test('items expose checklist state', () => pm.response.json().data.prerequisites.forEach((item) => pm.expect(item).to.have.property('completed', false)));" ] } }]
+    },
+    {
+      "name": "List faculties",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/faculties" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('returns 200', () => pm.response.to.have.status(200));", "pm.test('data is an array', () => pm.expect(pm.response.json().data).to.be.an('array'));" ] } }]
+    },
+    {
+      "name": "List departments",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/departments" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('returns 200', () => pm.response.to.have.status(200));", "pm.test('data is an array', () => pm.expect(pm.response.json().data).to.be.an('array'));" ] } }]
+    },
+    {
+      "name": "Get graduation conditions",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/curricula/{{curriculumId}}/graduation-conditions" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('returns 200', () => pm.response.to.have.status(200));", "pm.test('data is an array', () => pm.expect(pm.response.json().data).to.be.an('array'));" ] } }]
+    }
+  ]
+}
