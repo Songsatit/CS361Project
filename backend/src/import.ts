@@ -52,8 +52,12 @@ async function getJson<T>(url: string, headers: Record<string, string> = {}): Pr
 }
 
 function academicYear(curriculumId: string): number | null {
-  const match = curriculumId.match(/(?:^|-)((?:19|20)\d{2})(?:$|-)/);
-  return match ? Number(match[1]) : null;
+  const match = curriculumId.match(/(?:^|-)(\d{4})(?:$|-)/);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  // TU curriculum IDs use Buddhist Era years (for example, 2566 = 2023).
+  return year >= 2400 && year < 2700 ? year - 543 : year;
 }
 
 async function importFaculties() {
