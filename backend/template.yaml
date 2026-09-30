@@ -23,6 +23,9 @@ Parameters:
   LambdaSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
     Description: Security group attached to Lambda; allow it in the RDS security group on port 3306
+  LambdaExecutionRoleArn:
+    Type: String
+    Description: Existing IAM execution role ARN for Lambda
 
 Globals:
   Function:
@@ -58,6 +61,7 @@ Resources:
   CurriculumReadFunction:
     Type: AWS::Serverless::Function
     Properties:
+      Role: !Ref LambdaExecutionRoleArn
       CodeUri: .
       Handler: src/api.handler
       Events:
@@ -97,15 +101,6 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/departments
             Method: GET
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        EntryPoints:
-          - src/api.mjs
-        Format: esm
-        Target: es2022
-        Bundle: true
-
 Outputs:
   ApiUrl:
     Description: Base URL for the deployed HTTP API
