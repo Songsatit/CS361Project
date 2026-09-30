@@ -852,10 +852,11 @@ const PROGRAMS = [
      ===================================================== */
 
   {
-    id: "cs",
-    code: "วท.บ. วิทยาการคอมพิวเตอร์",
-    nameEn: "Bachelor of Science Program in Computer Science",
+    id: "cis",
+    code: "วท.บ. วิทยาการคอมพิวเตอร์และสารสนเทศ",
+    nameEn: "Computer and Information Science",
     revisionYear: 2566,
+    pathwayId: "BSC-CS-2566-CIS",
     faculty: "คณะวิทยาศาสตร์และเทคโนโลยี",
     duration: "หลักสูตร 4 ปี",
     totalCredits: 123,
@@ -1155,6 +1156,20 @@ const PROGRAMS = [
 
 ];
 
+const computerScienceProgram = PROGRAMS.find(item => item.id === "cis");
+
+if (computerScienceProgram) {
+  PROGRAMS.splice(1, 0, {
+    ...computerScienceProgram,
+    id: "acs",
+    code: "วท.บ. คอมพิวเตอร์ประยุกต์",
+    nameEn: "Applied Computer Science",
+    pathwayId: "BSC-CS-2566-ACS",
+    summary:
+      "หลักสูตรคอมพิวเตอร์ประยุกต์ ฉบับ พ.ศ. 2566 มุ่งเน้นการประยุกต์ใช้ความรู้ด้านคอมพิวเตอร์และเทคโนโลยีดิจิทัลในการพัฒนาระบบและแก้ปัญหาในบริบทจริง"
+  });
+}
+
 
 /* =========================================================
    GENERAL DATA
@@ -1231,6 +1246,66 @@ const state = {
 
   homeQuery: ""
 };
+
+const API_BASE = "https://qowe6iixr6.execute-api.us-east-1.amazonaws.com";
+const CURRICULUM_ID = "BSC-CS-2566";
+
+async function loadApiData() {
+  try {
+    const coursesResponse = await fetch(
+      `${API_BASE}/api/courses?curriculumId=${encodeURIComponent(CURRICULUM_ID)}&limit=500`
+    );
+
+    if (!coursesResponse.ok) {
+      throw new Error(`Course API returned ${coursesResponse.status}`);
+    }
+
+    const coursesPayload = await coursesResponse.json();
+    const courses = coursesPayload?.data ?? [];
+
+    for (const course of courses) {
+      const code = String(course.course_code ?? "").replace(/\s+/g, "");
+      if (!code) continue;
+
+      COURSES[code] = {
+        ...(COURSES[code] ?? {}),
+        name: course.title_th ?? COURSES[code]?.name ?? code,
+        nameEn: course.title_en ?? COURSES[code]?.nameEn ?? "",
+        credits: course.credits_total ?? COURSES[code]?.credits ?? 0,
+        category:
+          course.classification?.course_type?.label_th ??
+          COURSES[code]?.category ??
+          "วิชาเฉพาะ",
+        prereq: COURSES[code]?.prereq ?? [],
+        apiCourseId: course.course_id,
+        curriculumCourseId: course.curriculum_course_id
+      };
+    }
+
+    const conditionsResponse = await fetch(
+      `${API_BASE}/api/curricula/${encodeURIComponent(CURRICULUM_ID)}/graduation-conditions`
+    );
+
+    if (!conditionsResponse.ok) {
+      throw new Error(`Graduation conditions API returned ${conditionsResponse.status}`);
+    }
+
+    const conditionsPayload = await conditionsResponse.json();
+    const conditions = (conditionsPayload?.data ?? [])
+      .map(condition => condition.condition_text)
+      .filter(Boolean);
+
+    if (conditions.length) {
+      PROGRAMS
+        .filter(item => item.revisionYear === 2566)
+        .forEach(item => {
+          item.conditions = conditions;
+        });
+    }
+  } catch (error) {
+    console.warn("Backend API unavailable; using bundled fallback data.", error);
+  }
+}
 
 
 /* =========================================================
@@ -3409,4 +3484,10 @@ window.addEventListener("popstate", event => {
   });
 });
 
-render();
+async function bootstrap() {
+  render();
+  await loadApiData();
+  render();
+}
+
+bootstrap();
