@@ -89,6 +89,18 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/curricula/{curriculumId}/graduation-conditions
             Method: GET
+        ListStudyPlans:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/study-plans
+            Method: GET
+        GetStudyPlan:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/study-plans/{studyPlanId}
+            Method: GET
         ListFaculties:
           Type: HttpApi
           Properties:
