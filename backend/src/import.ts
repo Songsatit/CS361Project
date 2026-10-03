@@ -60,9 +60,18 @@ const db = await mysql.createConnection({
 });
 
 async function getJson<T>(url: string, headers: Record<string, string> = {}): Promise<T> {
-  const response = await fetch(url, { headers });
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}: ${url}`);
-  return response.json() as Promise<T>;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const response = await fetch(url, { headers, signal: AbortSignal.timeout(30_000) });
+      if (!response.ok) throw new Error(`${response.status} ${response.statusText}: ${url}`);
+      return response.json() as Promise<T>;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+  }
+  throw lastError;
 }
 
 function academicYear(curriculumId: string): number | null {
@@ -176,14 +185,12 @@ async function importCourses(): Promise<CourseRow[]> {
 
 async function importCourseDetails(rows: CourseRow[]) {
   const baseUrl = required('COURSE_API_URL');
-  const courseByCode = new Map(rows.map((row) => [row.course_code.replace(/\s+/g, ''), row.course_id]));
+  const uniqueRows = [...new Map(rows.map((row) => [row.course_id, row])).values()];
+  const courseByCode = new Map(uniqueRows.map((row) => [row.course_code.replace(/\s+/g, ''), row.course_id]));
 
-  for (const row of rows) {
+  for (const [index, row] of uniqueRows.entries()) {
     const courseCode = encodeURIComponent(row.course_code);
-    const [payload, prerequisitePayload] = await Promise.all([
-      getJson<any>(`${baseUrl}?resource=course&course_code=${courseCode}`),
-      getJson<any>(`${baseUrl}?resource=prerequisites&course_code=${courseCode}`),
-    ]);
+    const payload = await getJson<any>(`${baseUrl}?resource=course&course_code=${courseCode}`);
     const detail = payload?.data ?? payload;
     const descriptionTh = pick(detail, ['description_th', 'detail_th', 'description', 'course_description_th']);
     const descriptionEn = pick(detail, ['description_en', 'detail_en', 'course_description_en']);
@@ -210,11 +217,21 @@ async function importCourseDetails(rows: CourseRow[]) {
       'prerequisiteCourses',
       'items',
       'courses',
+      'rules',
     ];
-    const prerequisiteRows = [
-      ...listFrom(prerequisitePayload?.data ?? prerequisitePayload, prerequisiteKeys),
-      ...listFrom(detail, prerequisiteKeys),
-    ];
+    let prerequisiteRows = listFrom(detail, prerequisiteKeys);
+    if (!prerequisiteRows.length) {
+      const prerequisitePayload = await getJson<any>(
+        `${baseUrl}?resource=prerequisites&course_code=${courseCode}`,
+      );
+      const prerequisiteData = prerequisitePayload?.data ?? prerequisitePayload;
+      prerequisiteRows = [
+        ...listFrom(prerequisiteData, prerequisiteKeys),
+        ...(Array.isArray(prerequisiteData?.groups)
+          ? prerequisiteData.groups.flatMap((group: any) => Array.isArray(group?.rules) ? group.rules : [])
+          : []),
+      ];
+    }
     const seenPrerequisites = new Set<string>();
     for (const prerequisite of prerequisiteRows) {
       const prerequisiteCode = pick(prerequisite, ['course_code', 'code', 'prerequisite_course_code']);
@@ -229,8 +246,11 @@ async function importCourseDetails(rows: CourseRow[]) {
         [row.course_id, prerequisiteId],
       );
     }
+    if ((index + 1) % 10 === 0 || index + 1 === uniqueRows.length) {
+      console.log(`Imported course details: ${index + 1}/${uniqueRows.length}`);
+    }
   }
-  console.log(`Imported course details: ${rows.length}`);
+  console.log(`Imported course details: ${uniqueRows.length}`);
 }
 
 async function importStudyPlans(rows: CourseRow[]) {
