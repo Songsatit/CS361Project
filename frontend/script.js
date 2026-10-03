@@ -3675,6 +3675,14 @@ window.addEventListener("popstate", event => {
 });
 
 async function bootstrap() {
+  const pageState = history.state;
+  if (pageState?.view) {
+    state.view = pageState.view;
+    state.programId = pageState.programId || null;
+    state.courseCode = pageState.courseCode || null;
+    state.programTab = pageState.programTab || "overview";
+    state.year = pageState.year || 1;
+  }
   render();
   await loadApiData();
   render();
