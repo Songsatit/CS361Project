@@ -1249,6 +1249,122 @@ const state = {
 
 const API_BASE = "https://qowe6iixr6.execute-api.us-east-1.amazonaws.com";
 const CURRICULUM_ID = "BSC-CS-2566";
+const COURSE_CATALOG_API = "https://script.google.com/a/macros/dome.tu.ac.th/s/AKfycbw75ktHQ9wrWMNcMBq1rd0OnNCi3OOJwwNS0kTT5OQDYGiBA1Up7B-Ufbhtu603HZcZ/exec";
+const courseDetailRequests = new Map();
+
+function courseKey(value) {
+  return String(value ?? "").replace(/\s+/g, "");
+}
+
+function courseCodeFromApi(value) {
+  return courseKey(value?.course_code ?? value?.code ?? value?.courseCode);
+}
+
+async function loadCatalogResource(resource, code) {
+  const url = new URL(COURSE_CATALOG_API);
+  url.searchParams.set("resource", resource);
+  url.searchParams.set("course_code", code);
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`${resource} API returned ${response.status}`);
+  const payload = await response.json();
+  return payload?.data ?? null;
+}
+
+async function loadCourseDetail(code) {
+  const key = courseKey(code);
+  if (!key || courseDetailRequests.has(key)) {
+    return courseDetailRequests.get(key);
+  }
+
+  const request = Promise.all([
+    fetch(`${API_BASE}/api/courses/${encodeURIComponent(key)}`),
+    fetch(`${API_BASE}/api/courses/${encodeURIComponent(key)}/prerequisites`),
+    loadCatalogResource("tqf3_course_info", key).catch(() => null),
+    loadCatalogResource("course_plo_mappings", key).catch(() => null)
+  ])
+    .then(async ([detailResponse, prerequisiteResponse, tqf3, ploMappings]) => {
+      if (!detailResponse.ok) throw new Error(`Course detail API returned ${detailResponse.status}`);
+      const detailPayload = await detailResponse.json();
+      const prerequisitePayload = prerequisiteResponse.ok
+        ? await prerequisiteResponse.json()
+        : { data: { prerequisites: [] } };
+      const data = detailPayload?.data ?? {};
+      const detail = data.detail ?? {};
+      const raw = typeof detail.raw_json === "string"
+        ? JSON.parse(detail.raw_json)
+        : (detail.raw_json ?? {});
+      const prerequisites = prerequisitePayload?.data?.prerequisites ?? [];
+      const prerequisiteCodes = prerequisites
+        .map(courseCodeFromApi)
+        .filter(Boolean);
+      const existing = COURSES[key] ?? {};
+
+      COURSES[key] = {
+        ...existing,
+        name: data.title_th ?? existing.name ?? key,
+        nameEn: data.title_en ?? existing.nameEn ?? "",
+        credits: data.credits_total ?? existing.credits ?? 0,
+        desc: detail.description_th ?? raw.description_th ?? raw.description ?? existing.desc ?? "",
+        term: raw.term ?? raw.offering ?? existing.term ?? "ตามแผนการศึกษา",
+        prereq: prerequisiteCodes.length ? prerequisiteCodes : (existing.prereq ?? []),
+        apiCourseId: data.course_id ?? existing.apiCourseId,
+        apiDetail: detail,
+        tqf3,
+        ploMappings
+      };
+    })
+    .catch(error => {
+      console.warn(`Course detail unavailable for ${key}; using bundled fallback.`, error);
+    });
+
+  courseDetailRequests.set(key, request);
+  return request;
+}
+
+async function loadStudyPlans() {
+  const response = await fetch(
+    `${API_BASE}/api/study-plans?curriculumId=${encodeURIComponent(CURRICULUM_ID)}`
+  );
+  if (!response.ok) throw new Error(`Study plan API returned ${response.status}`);
+  const payload = await response.json();
+  const plans = payload?.data ?? [];
+
+  for (const program of PROGRAMS) {
+    if (!program.pathwayId) continue;
+    const pathwayPlans = plans.filter(plan => plan.pathway_id === program.pathwayId);
+    if (!pathwayPlans.length) continue;
+
+    const selected = pathwayPlans.find(plan => /PROJECT$/i.test(plan.study_plan_id)) ?? pathwayPlans[0];
+    const detailResponse = await fetch(
+      `${API_BASE}/api/study-plans/${encodeURIComponent(selected.study_plan_id)}`
+    );
+    if (!detailResponse.ok) continue;
+    const detailPayload = await detailResponse.json();
+    const items = detailPayload?.data?.items ?? [];
+    const grouped = new Map();
+
+    for (const item of items) {
+      const code = courseKey(item.course_code);
+      if (!code) continue;
+      const key = `${item.study_year}-${item.semester}`;
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          year: Number(item.study_year),
+          term: Number(item.semester),
+          courses: []
+        });
+      }
+      grouped.get(key).courses.push(code);
+    }
+
+    if (grouped.size) {
+      program.plan = [...grouped.values()].sort(
+        (a, b) => a.year - b.year || a.term - b.term
+      );
+      program.activeStudyPlanId = selected.study_plan_id;
+    }
+  }
+}
 
 async function loadApiData() {
   try {
@@ -1302,6 +1418,8 @@ async function loadApiData() {
           item.conditions = conditions;
         });
     }
+
+    await loadStudyPlans();
   } catch (error) {
     console.warn("Backend API unavailable; using bundled fallback data.", error);
   }
@@ -1359,6 +1477,22 @@ function chip(text, tone = "ink") {
     <span class="chip chip-${tone}">
       ${esc(text)}
     </span>
+  `;
+}
+
+function apiDataPanel(title, value) {
+  if (value == null || (Array.isArray(value) && !value.length)) return "";
+  let formatted;
+  try {
+    formatted = JSON.stringify(value, null, 2);
+  } catch {
+    formatted = String(value);
+  }
+  return `
+    <div class="panel" style="margin-top:20px">
+      <h3 class="panel-subhead">${esc(title)}</h3>
+      <pre style="white-space:pre-wrap;overflow:auto;font:12px/1.6 var(--font-mono, monospace)">${esc(formatted)}</pre>
+    </div>
   `;
 }
 
@@ -2561,6 +2695,9 @@ function renderCourse() {
 
       </div>
 
+      ${apiDataPanel("ข้อมูล TQF3 จาก Course API", c.tqf3)}
+      ${apiDataPanel("Course–PLO mappings จาก Course API", c.ploMappings)}
+
 
       <h3 class="panel-subhead">
         เส้นทางรายวิชา
@@ -3077,6 +3214,12 @@ function go(v, id, addHistory = true) {
   });
 
   render();
+
+  if (v === "course") {
+    loadCourseDetail(id).then(() => {
+      if (state.view === "course" && courseKey(state.courseCode) === courseKey(id)) render();
+    });
+  }
 }
 
 
