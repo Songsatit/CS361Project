@@ -1611,3 +1611,39 @@
   margin: 0;
   padding-left: 18px;
 }
+
+.api-collapsible-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  cursor: pointer;
+  list-style: none;
+  font-weight: 600;
+}
+
+.api-collapsible-summary::-webkit-details-marker {
+  display: none;
+}
+
+.api-collapsible-summary::before {
+  content: "+";
+  color: #c3002f;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.api-collapsible[open] .api-collapsible-summary::before {
+  content: "−";
+}
+
+.api-collapsible-hint {
+  margin-left: auto;
+  color: #999;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.api-collapsible > .api-value-content {
+  margin-top: 18px;
+}
