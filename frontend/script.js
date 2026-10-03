@@ -1480,18 +1480,32 @@ function chip(text, tone = "ink") {
   `;
 }
 
+function apiValueMarkup(value) {
+  if (value == null || value === "") return "—";
+  if (Array.isArray(value)) {
+    return value.length
+      ? `<ul class="api-value-list">${value.map(item => `<li>${apiValueMarkup(item)}</li>`).join("")}</ul>`
+      : "—";
+  }
+  if (typeof value === "object") {
+    return `<div class="api-value-object">${Object.entries(value)
+      .map(([key, item]) => `
+        <div class="api-value-row">
+          <div class="api-value-key">${esc(key.replaceAll("_", " "))}</div>
+          <div class="api-value-content">${apiValueMarkup(item)}</div>
+        </div>
+      `)
+      .join("")}</div>`;
+  }
+  return esc(String(value));
+}
+
 function apiDataPanel(title, value) {
   if (value == null || (Array.isArray(value) && !value.length)) return "";
-  let formatted;
-  try {
-    formatted = JSON.stringify(value, null, 2);
-  } catch {
-    formatted = String(value);
-  }
   return `
     <div class="panel" style="margin-top:20px">
       <h3 class="panel-subhead">${esc(title)}</h3>
-      <pre style="white-space:pre-wrap;overflow:auto;font:12px/1.6 var(--font-mono, monospace)">${esc(formatted)}</pre>
+      <div class="api-value-content">${apiValueMarkup(value)}</div>
     </div>
   `;
 }
