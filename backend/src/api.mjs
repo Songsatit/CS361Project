@@ -116,9 +116,11 @@ async function getCourse(event) {
        FROM course c
        LEFT JOIN curriculum_course cc ON cc.course_id = c.course_id
        LEFT JOIN curriculum cur ON cur.curriculum_id = cc.curriculum_id
-      WHERE c.course_id = ? OR c.course_code = ?
+      WHERE c.course_id = ?
+         OR c.course_code = ?
+         OR REPLACE(c.course_code, ' ', '') = REPLACE(?, ' ', '')
       ORDER BY cc.curriculum_id, cc.pathway_id`,
-    [courseId, courseId],
+    [courseId, courseId, courseId],
   );
   if (!courses.length) return response(404, { error: 'Course not found' });
 
@@ -177,8 +179,13 @@ async function listPrerequisites(event) {
   if (!courseId) return response(400, { error: 'courseId is required' });
 
   const matches = await queryRows(
-    'SELECT course_id FROM course WHERE course_id = ? OR course_code = ? LIMIT 1',
-    [courseId, courseId],
+    `SELECT course_id
+       FROM course
+      WHERE course_id = ?
+         OR course_code = ?
+         OR REPLACE(course_code, ' ', '') = REPLACE(?, ' ', '')
+      LIMIT 1`,
+    [courseId, courseId, courseId],
   );
   if (!matches.length) return response(404, { error: 'Course not found' });
   const data = await getPrerequisiteChain(matches[0].course_id);
