@@ -203,15 +203,27 @@ async function importCourseDetails(rows: CourseRow[]) {
       ],
     );
 
-    const prerequisiteRows = listFrom(
-      prerequisitePayload?.data ?? prerequisitePayload,
-      ['prerequisites', 'prerequisite_rules', 'prerequisite_courses', 'prerequisiteCourses', 'items', 'courses'],
-    );
+    const prerequisiteKeys = [
+      'prerequisites',
+      'prerequisite_rules',
+      'prerequisite_courses',
+      'prerequisiteCourses',
+      'items',
+      'courses',
+    ];
+    const prerequisiteRows = [
+      ...listFrom(prerequisitePayload?.data ?? prerequisitePayload, prerequisiteKeys),
+      ...listFrom(detail, prerequisiteKeys),
+    ];
+    const seenPrerequisites = new Set<string>();
     for (const prerequisite of prerequisiteRows) {
       const prerequisiteCode = pick(prerequisite, ['course_code', 'code', 'prerequisite_course_code']);
       const prerequisiteId = pick(prerequisite, ['course_id', 'id', 'prerequisite_course_id'])
         ?? (prerequisiteCode ? courseByCode.get(String(prerequisiteCode).replace(/\s+/g, '')) : undefined);
       if (!prerequisiteId || prerequisiteId === row.course_id) continue;
+      const prerequisiteKey = `${row.course_id}:${prerequisiteId}`;
+      if (seenPrerequisites.has(prerequisiteKey)) continue;
+      seenPrerequisites.add(prerequisiteKey);
       await db.execute(
         `INSERT IGNORE INTO prerequisite (course_id, prerequisite_course_id) VALUES (?, ?)`,
         [row.course_id, prerequisiteId],
