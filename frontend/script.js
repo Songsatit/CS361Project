@@ -1293,7 +1293,8 @@ async function loadCourseDetail(code) {
       const raw = typeof detail.raw_json === "string"
         ? JSON.parse(detail.raw_json)
         : (detail.raw_json ?? {});
-      const prerequisites = prerequisitePayload?.data?.prerequisites ?? [];
+      const prerequisites = (prerequisitePayload?.data?.prerequisites ?? [])
+        .filter(item => item.depth == null || item.depth === 1);
       const prerequisiteCodes = prerequisites
         .map(courseCodeFromApi)
         .filter(Boolean);
@@ -1400,6 +1401,31 @@ async function loadApiData() {
         apiCourseId: course.course_id,
         curriculumCourseId: course.curriculum_course_id
       };
+    }
+
+    // Keep the course cards in sync with the backend instead of showing
+    // prerequisite labels from the bundled fallback data.
+    const courseCodes = [...new Set(courses
+      .map(course => String(course.course_code ?? "").replace(/\s+/g, ""))
+      .filter(Boolean))];
+    for (let index = 0; index < courseCodes.length; index += 8) {
+      const batch = courseCodes.slice(index, index + 8);
+      await Promise.all(batch.map(async code => {
+        try {
+          const response = await fetch(
+            `${API_BASE}/api/courses/${encodeURIComponent(code)}/prerequisites`
+          );
+          if (!response.ok) return;
+          const payload = await response.json();
+          const prerequisites = (payload?.data?.prerequisites ?? [])
+            .filter(item => item.depth == null || item.depth === 1);
+          COURSES[code].prereq = prerequisites
+            .map(courseCodeFromApi)
+            .filter(Boolean);
+        } catch (error) {
+          console.warn(`Prerequisite API unavailable for ${code}.`, error);
+        }
+      }));
     }
 
     const conditionsResponse = await fetch(
