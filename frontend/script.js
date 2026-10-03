@@ -1297,6 +1297,9 @@ async function loadCourseDetail(code) {
       const prerequisiteCodes = prerequisites
         .map(courseCodeFromApi)
         .filter(Boolean);
+      const dependentCodes = (data.dependents ?? [])
+        .map(courseCodeFromApi)
+        .filter(Boolean);
       const existing = COURSES[key] ?? {};
 
       COURSES[key] = {
@@ -1307,6 +1310,7 @@ async function loadCourseDetail(code) {
         desc: detail.description_th ?? raw.description_th ?? raw.description ?? existing.desc ?? "",
         term: raw.term ?? raw.offering ?? existing.term ?? "ตามแผนการศึกษา",
         prereq: prerequisiteCodes.length ? prerequisiteCodes : (existing.prereq ?? []),
+        unlocks: dependentCodes.length ? dependentCodes : (existing.unlocks ?? []),
         apiCourseId: data.course_id ?? existing.apiCourseId,
         apiDetail: detail,
         tqf3,
@@ -1503,10 +1507,13 @@ function apiValueMarkup(value) {
 function apiDataPanel(title, value) {
   if (value == null || (Array.isArray(value) && !value.length)) return "";
   return `
-    <div class="panel" style="margin-top:20px">
-      <h3 class="panel-subhead">${esc(title)}</h3>
+    <details class="panel api-collapsible" style="margin-top:20px">
+      <summary class="api-collapsible-summary">
+        <span>${esc(title)}</span>
+        <span class="api-collapsible-hint">กดเพื่อดูข้อมูล</span>
+      </summary>
       <div class="api-value-content">${apiValueMarkup(value)}</div>
-    </div>
+    </details>
   `;
 }
 
@@ -2607,7 +2614,7 @@ function renderCourse() {
     c.prereq || [];
 
   const unlocks =
-    findUnlocks(code);
+    c.unlocks ?? findUnlocks(code);
 
 
   return `
