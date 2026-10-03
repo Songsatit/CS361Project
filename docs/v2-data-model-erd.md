@@ -20,6 +20,11 @@ erDiagram
     COURSE_CLASSIFICATION ||--o{ COURSE_SUBCATEGORY : has
     COURSE ||--o{ PREREQUISITE : has
     COURSE ||--o{ PREREQUISITE : is_required_by
+    COURSE ||--o| COURSE_DETAIL : describes
+    CURRICULUM ||--o{ STUDY_PLAN : has
+    PATHWAY ||--o{ STUDY_PLAN : scopes
+    STUDY_PLAN ||--o{ STUDY_PLAN_ITEM : contains
+    COURSE ||--o{ STUDY_PLAN_ITEM : includes
 
     FACULTY {
         string faculty_id PK
@@ -56,6 +61,14 @@ erDiagram
         string status
         boolean active
     }
+    COURSE_DETAIL {
+        string course_id PK, FK
+        text description_th
+        text description_en
+        json contact_hours_json
+        json raw_json
+        timestamp updated_at
+    }
     CURRICULUM_COURSE {
         string curriculum_course_id PK
         string curriculum_id FK
@@ -85,6 +98,24 @@ erDiagram
         string course_id PK, FK
         string prerequisite_course_id PK, FK
     }
+    STUDY_PLAN {
+        string study_plan_id PK
+        string curriculum_id FK
+        string pathway_id FK
+        string plan_name
+        boolean active
+        json raw_json
+    }
+    STUDY_PLAN_ITEM {
+        string study_plan_id PK, FK
+        int study_year PK
+        int semester PK
+        int item_order PK
+        string course_id FK
+        string requirement_text
+        decimal credits
+        json raw_json
+    }
 ```
 
 ## Design notes
@@ -97,6 +128,8 @@ erDiagram
 - `CURRICULUM_COURSE` เป็นตารางเชื่อมระหว่าง pathway กับรายวิชา
 - `COURSE_CLASSIFICATION` เก็บประเภทและหมวดหมู่ของรายวิชาตาม curriculum placement
 - `PREREQUISITE` รองรับความสัมพันธ์วิชาบังคับก่อนแบบหลายต่อหลาย
+- `COURSE_DETAIL` เก็บรายละเอียดเพิ่มเติมของรายวิชาที่มาจาก Course Catalog API
+- `STUDY_PLAN` และ `STUDY_PLAN_ITEM` เก็บแผนการเรียนแยกตาม pathway ปีการศึกษา และภาคการศึกษา
 - `CURRICULUM_GRADUATION_CONDITION` เก็บเงื่อนไขสำเร็จการศึกษาที่ Frontend ใช้แสดง
 - ข้อมูลจากทั้งสาม API ควรถูกแปลงเข้าสู่ Model นี้ก่อนส่งให้ Frontend
 

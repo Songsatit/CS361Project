@@ -124,7 +124,22 @@ async function getCourse(event) {
 
   await addClassifications(courses);
   const prerequisites = await getPrerequisiteChain(courses[0].course_id);
-  return response(200, { data: { ...courses[0], placements: courses, prerequisites } });
+  let detail = null;
+  try {
+    const details = await queryRows(
+      `SELECT description_th, description_en, contact_hours_json, raw_json
+         FROM course_detail
+        WHERE course_id = ?`,
+      [courses[0].course_id],
+    );
+    detail = details[0] ?? null;
+  } catch (error) {
+    // Keep the existing course endpoint usable until migration 002 is applied.
+    if (error?.code !== 'ER_NO_SUCH_TABLE') throw error;
+  }
+  return response(200, {
+    data: { ...courses[0], placements: courses, prerequisites, detail },
+  });
 }
 
 async function getPrerequisiteChain(courseId) {
@@ -183,6 +198,66 @@ async function listGraduationConditions(event) {
   return response(200, { data });
 }
 
+async function listStudyPlans(event) {
+  const query = event.queryStringParameters ?? {};
+  const conditions = [];
+  const params = [];
+  if (query.curriculumId) {
+    conditions.push('sp.curriculum_id = ?');
+    params.push(query.curriculumId);
+  }
+  if (query.pathwayId) {
+    conditions.push('sp.pathway_id = ?');
+    params.push(query.pathwayId);
+  }
+  if (query.active !== undefined) {
+    conditions.push('sp.active = ?');
+    params.push(query.active === 'false' ? 0 : 1);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const data = await queryRows(
+    `SELECT sp.study_plan_id, sp.curriculum_id, sp.pathway_id, sp.plan_name, sp.active
+       FROM study_plan sp
+       ${where}
+      ORDER BY sp.curriculum_id, sp.pathway_id, sp.study_plan_id`,
+    params,
+  );
+  return response(200, { data });
+}
+
+async function getStudyPlan(event) {
+  const studyPlanId = event.queryStringParameters?.studyPlanId ?? pathParameter(event, 'studyPlanId');
+  if (!studyPlanId) return response(400, { error: 'studyPlanId is required' });
+  const plans = await queryRows(
+    `SELECT study_plan_id, curriculum_id, pathway_id, plan_name, active
+       FROM study_plan
+      WHERE study_plan_id = ?`,
+    [studyPlanId],
+  );
+  if (!plans.length) return response(404, { error: 'Study plan not found' });
+  const query = event.queryStringParameters ?? {};
+  const conditions = ['spi.study_plan_id = ?'];
+  const params = [studyPlanId];
+  if (query.studyYear) {
+    conditions.push('spi.study_year = ?');
+    params.push(Number.parseInt(query.studyYear, 10));
+  }
+  if (query.semester) {
+    conditions.push('spi.semester = ?');
+    params.push(Number.parseInt(query.semester, 10));
+  }
+  const items = await queryRows(
+    `SELECT spi.study_year, spi.semester, spi.item_order, spi.course_id,
+            c.course_code, c.title_th, c.title_en, spi.requirement_text, spi.credits
+       FROM study_plan_item spi
+       LEFT JOIN course c ON c.course_id = spi.course_id
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY spi.study_year, spi.semester, spi.item_order`,
+    params,
+  );
+  return response(200, { data: { ...plans[0], items } });
+}
+
 async function listFaculties() {
   const data = await queryRows(
     `SELECT faculty_id, faculty_th, faculty_en
@@ -214,6 +289,8 @@ export const handler = async (event) => {
     if (route.endsWith('/prerequisites') && route.startsWith('GET /api/courses/')) return await listPrerequisites(event);
     if (route === 'GET /api/courses/{courseCode}' || route.startsWith('GET /api/courses/')) return await getCourse(event);
     if (route === 'GET /api/curricula/{curriculumId}/graduation-conditions') return await listGraduationConditions(event);
+    if (route === 'GET /api/study-plans') return await listStudyPlans(event);
+    if (route === 'GET /api/study-plans/{studyPlanId}') return await getStudyPlan(event);
     if (route === 'GET /api/faculties') return await listFaculties();
     if (route === 'GET /api/departments') return await listDepartments(event);
     return response(404, { error: 'Route not found' });

@@ -45,9 +45,11 @@ Script จะดึง Faculty, Department และ Course Catalog แล้ว
 | Method and path | Description |
 | --- | --- |
 | `GET /api/courses` | List course placements. Optional query parameters: `q`, `curriculumId`, `pathwayId`, `limit` (1–500, default 100), and `offset`. |
-| `GET /api/courses/{courseId}` | Return a course (by database ID or course code), curriculum placements, classifications, and prerequisites. |
+| `GET /api/courses/{courseId}` | Return a course (by database ID or course code), curriculum placements, classifications, prerequisites, and imported detail data. |
 | `GET /api/courses/{courseId}/prerequisites` | Return the prerequisite chain with depth and `completed: false` for the frontend checklist. |
 | `GET /api/curricula/{curriculumId}/graduation-conditions` | List graduation conditions in display order. |
+| `GET /api/study-plans` | List imported study plans. Optional query parameters: `curriculumId`, `pathwayId`, and `active`. |
+| `GET /api/study-plans/{studyPlanId}` | Return one study plan with ordered year/semester items. Optional query parameters: `studyYear` and `semester`. |
 | `GET /api/faculties` | List faculties. |
 | `GET /api/departments` | List departments. Optional `facultyId` filters by faculty. |
 
@@ -55,7 +57,7 @@ Successful responses use `{ "data": ... }`; list endpoints return an array in `d
 
 ### Deploy
 
-Install AWS SAM CLI and configure AWS credentials for the target account. The deployment needs an existing VPC, private subnets with a route to RDS, a Lambda security group, and an RDS security group rule allowing inbound MySQL (3306) from that Lambda security group. The Lambda must be able to reach RDS; public subnet placement alone does not provide that access. Database tables must match the entities in `../docs/v2-data-model-erd.md`, including `prerequisite`. Run `migrations/001_curriculum_graduation_conditions.sql` once against the target RDS before deploying. The included seed covers `BSC-CS-2566`; add verified conditions for other curricula before using that endpoint for them.
+Install AWS SAM CLI and configure AWS credentials for the target account. The deployment needs an existing VPC, private subnets with a route to RDS, a Lambda security group, and an RDS security group rule allowing inbound MySQL (3306) from that Lambda security group. The Lambda must be able to reach RDS; public subnet placement alone does not provide that access. Database tables must match the entities in `../docs/v2-data-model-erd.md`, including `prerequisite`. Run `migrations/001_curriculum_graduation_conditions.sql` and `migrations/002_course_catalog_details.sql` once against the target RDS before deploying. The included seed covers `BSC-CS-2566`; add verified conditions for other curricula before using that endpoint for them.
 
 From this directory, validate and deploy with the database and network values for your environment:
 
@@ -76,6 +78,8 @@ GET {ApiUrl}/api/courses?curriculumId=BSC-CS-2566&limit=100
 GET {ApiUrl}/api/courses/CS100
 GET {ApiUrl}/api/courses/CS100/prerequisites
 GET {ApiUrl}/api/curricula/BSC-CS-2566/graduation-conditions
+GET {ApiUrl}/api/study-plans?curriculumId=BSC-CS-2566&pathwayId=BSC-CS-2566-CIS
+GET {ApiUrl}/api/study-plans/{studyPlanId}
 ```
 
 Import `postman/CS361Project-API.postman_collection.json` into Postman and set `baseUrl`, `courseCode`, and `curriculumId` to exercise the endpoints. The collection includes basic status and response-shape checks.

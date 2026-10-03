@@ -31,6 +31,20 @@ type CourseRow = {
   active?: boolean;
 };
 
+type ApiCoursePayload = { data?: { courses?: CourseRow[] } | CourseRow[] };
+
+const listFrom = (value: any, keys: string[] = []) => {
+  if (Array.isArray(value)) return value;
+  for (const key of keys) {
+    if (Array.isArray(value?.[key])) return value[key];
+  }
+  if (Array.isArray(value?.data)) return value.data;
+  return [];
+};
+
+const pick = (value: any, keys: string[]) =>
+  keys.map((key) => value?.[key]).find((item) => item !== undefined && item !== null && item !== '');
+
 const required = (name: string) => {
   const value = process.env[name];
   if (!value) throw new Error(`Missing environment variable: ${name}`);
@@ -98,12 +112,13 @@ async function importDepartments() {
   console.log(`Imported departments: ${response.data.length}`);
 }
 
-async function importCourses() {
+async function importCourses(): Promise<CourseRow[]> {
   const baseUrl = required('COURSE_API_URL');
   const url = `${baseUrl}?resource=courses&limit=1000`;
-  const response = await getJson<{ data: { courses: CourseRow[] } }>(url);
+  const response = await getJson<ApiCoursePayload>(url);
+  const rows = listFrom(response.data, ['courses']) as CourseRow[];
 
-  for (const row of response.data.courses) {
+  for (const row of rows) {
     const curriculumId = row.curriculum.curriculum_id;
     const pathwayId = row.curriculum.pathway_id || null;
     const classification = row.classification;
@@ -155,13 +170,109 @@ async function importCourses() {
     }
   }
 
-  console.log(`Imported course rows: ${response.data.courses.length}`);
+  console.log(`Imported course rows: ${rows.length}`);
+  return rows;
+}
+
+async function importCourseDetails(rows: CourseRow[]) {
+  const baseUrl = required('COURSE_API_URL');
+  const courseByCode = new Map(rows.map((row) => [row.course_code.replace(/\s+/g, ''), row.course_id]));
+
+  for (const row of rows) {
+    const courseCode = encodeURIComponent(row.course_code);
+    const payload = await getJson<any>(`${baseUrl}?resource=course&course_code=${courseCode}`);
+    const detail = payload?.data ?? payload;
+    const descriptionTh = pick(detail, ['description_th', 'detail_th', 'description', 'course_description_th']);
+    const descriptionEn = pick(detail, ['description_en', 'detail_en', 'course_description_en']);
+    const contactHours = pick(detail, ['contact_hours', 'hours', 'contactHours']);
+
+    await db.execute(
+      `INSERT INTO course_detail (course_id, description_th, description_en, contact_hours_json, raw_json)
+       VALUES (?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE description_th = VALUES(description_th), description_en = VALUES(description_en),
+         contact_hours_json = VALUES(contact_hours_json), raw_json = VALUES(raw_json)`,
+      [
+        row.course_id,
+        descriptionTh ?? null,
+        descriptionEn ?? null,
+        contactHours == null ? null : JSON.stringify(contactHours),
+        JSON.stringify(detail),
+      ],
+    );
+
+    const prerequisiteRows = listFrom(detail, ['prerequisites', 'prerequisite_courses', 'prerequisiteCourses']);
+    for (const prerequisite of prerequisiteRows) {
+      const prerequisiteCode = pick(prerequisite, ['course_code', 'code', 'prerequisite_course_code']);
+      const prerequisiteId = pick(prerequisite, ['course_id', 'id', 'prerequisite_course_id'])
+        ?? (prerequisiteCode ? courseByCode.get(String(prerequisiteCode).replace(/\s+/g, '')) : undefined);
+      if (!prerequisiteId || prerequisiteId === row.course_id) continue;
+      await db.execute(
+        `INSERT IGNORE INTO prerequisite (course_id, prerequisite_course_id) VALUES (?, ?)`,
+        [row.course_id, prerequisiteId],
+      );
+    }
+  }
+  console.log(`Imported course details: ${rows.length}`);
+}
+
+async function importStudyPlans(rows: CourseRow[]) {
+  const baseUrl = required('COURSE_API_URL');
+  const contexts = [...new Map(rows.map((row) => [
+    `${row.curriculum.curriculum_id}|${row.curriculum.pathway_id ?? ''}`,
+    { curriculumId: row.curriculum.curriculum_id, pathwayId: row.curriculum.pathway_id ?? null },
+  ])).values()];
+
+  for (const context of contexts) {
+    const params = new URLSearchParams({ resource: 'study_plans', curriculum_id: context.curriculumId });
+    if (context.pathwayId) params.set('pathway_id', context.pathwayId);
+    const payload = await getJson<any>(`${baseUrl}?${params}`);
+    const plans = listFrom(payload?.data ?? payload, ['study_plans', 'plans']);
+
+    for (const plan of plans) {
+      const planId = pick(plan, ['study_plan_id', 'id', 'plan_id']);
+      if (!planId) continue;
+      await db.execute(
+        `INSERT INTO study_plan (study_plan_id, curriculum_id, pathway_id, plan_name, active, raw_json)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE curriculum_id = VALUES(curriculum_id), pathway_id = VALUES(pathway_id),
+           plan_name = VALUES(plan_name), active = VALUES(active), raw_json = VALUES(raw_json)`,
+        [planId, context.curriculumId, context.pathwayId, pick(plan, ['plan_name', 'name', 'title']) ?? null,
+          pick(plan, ['active']) ?? true, JSON.stringify(plan)],
+      );
+
+      const detailParams = new URLSearchParams({ resource: 'study_plan', study_plan_id: String(planId) });
+      const detailPayload = await getJson<any>(`${baseUrl}?${detailParams}`);
+      const detail = detailPayload?.data ?? detailPayload;
+      const items = listFrom(detail, ['items', 'courses', 'plan_items']);
+      for (let index = 0; index < items.length; index += 1) {
+        const item = items[index];
+        const year = Number(pick(item, ['study_year', 'year', 'studyYear']) ?? 0);
+        const semester = Number(pick(item, ['semester', 'term']) ?? 0);
+        if (!year || !semester) continue;
+        const code = pick(item, ['course_code', 'code']);
+        const courseId = pick(item, ['course_id', 'id'])
+          ?? (code ? rows.find((row) => row.course_code.replace(/\s+/g, '') === String(code).replace(/\s+/g, ''))?.course_id : null);
+        await db.execute(
+          `INSERT INTO study_plan_item (study_plan_id, study_year, semester, item_order, course_id, requirement_text, credits, raw_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE course_id = VALUES(course_id), requirement_text = VALUES(requirement_text),
+             credits = VALUES(credits), raw_json = VALUES(raw_json)`,
+          [planId, year, semester, index, courseId ?? null,
+            pick(item, ['requirement_text', 'requirement', 'description']) ?? null,
+            pick(item, ['credits', 'credit']) ?? null, JSON.stringify(item)],
+        );
+      }
+    }
+  }
+  console.log(`Imported study-plan contexts: ${contexts.length}`);
 }
 
 try {
   await importFaculties();
   await importDepartments();
-  await importCourses();
+  const courseRows = await importCourses();
+  await importCourseDetails(courseRows);
+  await importStudyPlans(courseRows);
 } finally {
   await db.end();
 }
