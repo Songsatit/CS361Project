@@ -180,7 +180,10 @@ async function importCourseDetails(rows: CourseRow[]) {
 
   for (const row of rows) {
     const courseCode = encodeURIComponent(row.course_code);
-    const payload = await getJson<any>(`${baseUrl}?resource=course&course_code=${courseCode}`);
+    const [payload, prerequisitePayload] = await Promise.all([
+      getJson<any>(`${baseUrl}?resource=course&course_code=${courseCode}`),
+      getJson<any>(`${baseUrl}?resource=prerequisites&course_code=${courseCode}`),
+    ]);
     const detail = payload?.data ?? payload;
     const descriptionTh = pick(detail, ['description_th', 'detail_th', 'description', 'course_description_th']);
     const descriptionEn = pick(detail, ['description_en', 'detail_en', 'course_description_en']);
@@ -200,7 +203,10 @@ async function importCourseDetails(rows: CourseRow[]) {
       ],
     );
 
-    const prerequisiteRows = listFrom(detail, ['prerequisites', 'prerequisite_courses', 'prerequisiteCourses']);
+    const prerequisiteRows = listFrom(
+      prerequisitePayload?.data ?? prerequisitePayload,
+      ['prerequisites', 'prerequisite_rules', 'prerequisite_courses', 'prerequisiteCourses', 'items', 'courses'],
+    );
     for (const prerequisite of prerequisiteRows) {
       const prerequisiteCode = pick(prerequisite, ['course_code', 'code', 'prerequisite_course_code']);
       const prerequisiteId = pick(prerequisite, ['course_id', 'id', 'prerequisite_course_id'])
