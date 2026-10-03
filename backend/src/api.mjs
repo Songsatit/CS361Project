@@ -126,6 +126,7 @@ async function getCourse(event) {
 
   await addClassifications(courses);
   const prerequisites = await getPrerequisiteChain(courses[0].course_id);
+  const dependents = await getDependentCourses(courses[0].course_id);
   let detail = null;
   try {
     const details = await queryRows(
@@ -140,7 +141,7 @@ async function getCourse(event) {
     if (error?.code !== 'ER_NO_SUCH_TABLE') throw error;
   }
   return response(200, {
-    data: { ...courses[0], placements: courses, prerequisites, detail },
+    data: { ...courses[0], placements: courses, prerequisites, dependents, detail },
   });
 }
 
@@ -172,6 +173,18 @@ async function getPrerequisiteChain(courseId) {
     frontier = nextFrontier;
   }
   return chain;
+}
+
+async function getDependentCourses(courseId) {
+  return queryRows(
+    `SELECT dependent.course_id, dependent.course_code, dependent.course_code_th,
+            dependent.title_th, dependent.title_en
+       FROM prerequisite p
+       JOIN course dependent ON dependent.course_id = p.course_id
+      WHERE p.prerequisite_course_id = ?
+      ORDER BY dependent.course_code`,
+    [courseId],
+  );
 }
 
 async function listPrerequisites(event) {
