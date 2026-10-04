@@ -1650,6 +1650,23 @@
 
 /* ---- mobile polish ---- */
 @media (max-width: 600px) {
+  .api-value-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .api-value-key,
+  .api-value-content {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+
+  .api-value-content {
+    font-size: 12.5px;
+  }
+
   .topbar {
     min-height: 58px;
     padding: 12px 14px;
@@ -1741,15 +1758,21 @@
   }
 
   .chain {
+    flex-direction: column;
     gap: 8px;
     padding: 4px 0 16px;
-    scroll-snap-type: x proximity;
+    overflow-x: visible;
   }
 
   .chain-lane,
   .chain-lane--current {
-    min-width: min(78vw, 260px);
-    scroll-snap-align: start;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .chain-arrow {
+    min-height: 20px;
+    transform: rotate(90deg);
   }
 
   .chain-node {
