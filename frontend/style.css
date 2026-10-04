@@ -1647,3 +1647,122 @@
 .api-collapsible > .api-value-content {
   margin-top: 18px;
 }
+
+/* ---- mobile polish ---- */
+@media (max-width: 600px) {
+  .topbar {
+    min-height: 58px;
+    padding: 12px 14px;
+  }
+
+  .brand {
+    font-size: 17px;
+  }
+
+  .main {
+    padding: 0 14px 44px;
+  }
+
+  .hero {
+    padding: 42px 0 28px;
+  }
+
+  .hero-title {
+    font-size: clamp(30px, 9vw, 42px);
+    line-height: 1.12;
+  }
+
+  .hero-sub {
+    font-size: 14px;
+    line-height: 1.65;
+  }
+
+  .section {
+    padding: 26px 0;
+  }
+
+  .section-head {
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .section-head h2,
+  .page-title {
+    font-size: 24px;
+    line-height: 1.25;
+  }
+
+  .page {
+    padding-top: 24px;
+  }
+
+  .page-sub {
+    font-size: 14px;
+    line-height: 1.6;
+    margin-bottom: 20px;
+  }
+
+  .filter-bar {
+    align-items: stretch;
+    gap: 8px;
+    margin-bottom: 18px;
+  }
+
+  .hero-search--compact,
+  .filter-bar .select,
+  .filter-bar .checkbox-pill {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .course-card {
+    min-height: 142px;
+    padding: 15px;
+  }
+
+  .course-card-name {
+    font-size: 14px;
+    line-height: 1.45;
+  }
+
+  .course-card-en {
+    line-height: 1.4;
+  }
+
+  .course-card-foot {
+    align-items: flex-end;
+    gap: 8px;
+  }
+
+  .course-card-prereq {
+    text-align: right;
+    line-height: 1.35;
+  }
+
+  .chain {
+    gap: 8px;
+    padding: 4px 0 16px;
+    scroll-snap-type: x proximity;
+  }
+
+  .chain-lane,
+  .chain-lane--current {
+    min-width: min(78vw, 260px);
+    scroll-snap-align: start;
+  }
+
+  .chain-node {
+    padding: 10px;
+  }
+
+  .chain-node-name {
+    line-height: 1.45;
+  }
+
+  .note-banner {
+    padding: 13px 14px;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+}
