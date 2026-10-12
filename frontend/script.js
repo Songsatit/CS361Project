@@ -2672,6 +2672,10 @@ function renderCourse() {
   const ps =
     programsContaining(code);
 
+  const sourceProgram = PROGRAMS.find(
+    program => program.id === state.programId
+  );
+
   const prereqs =
     c.prereq || [];
 
@@ -2687,10 +2691,16 @@ function renderCourse() {
       label: "หน้าแรก",
       view: "home"
     },
-    {
-      label: "ค้นหารายวิชา",
-      view: "courses"
-    },
+      sourceProgram
+        ? {
+            label: sourceProgram.code,
+            view: "program",
+            id: sourceProgram.id
+          }
+        : {
+            label: "ค้นหารายวิชา",
+            view: "courses"
+          },
     {
       label: code
     }
@@ -2778,8 +2788,8 @@ function renderCourse() {
 
       </div>
 
-      ${apiDataPanel("ข้อมูล TQF3 จาก Course API", c.tqf3)}
-      ${apiDataPanel("Course–PLO mappings จาก Course API", c.ploMappings)}
+      ${apiDataPanel("ข้อมูลเพิ่มเติมจาก API: TQF3 (กดเพื่อดู)", c.tqf3)}
+      ${apiDataPanel("ข้อมูลเพิ่มเติมจาก API: Course–PLO (กดเพื่อดู)", c.ploMappings)}
 
 
       <h3 class="panel-subhead">
