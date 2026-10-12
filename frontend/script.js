@@ -1339,36 +1339,56 @@ async function loadStudyPlans() {
     const pathwayPlans = plans.filter(plan => plan.pathway_id === program.pathwayId);
     if (!pathwayPlans.length) continue;
 
-    const selected = pathwayPlans.find(plan => /PROJECT$/i.test(plan.study_plan_id)) ?? pathwayPlans[0];
-    const detailResponse = await fetch(
-      `${API_BASE}/api/study-plans/${encodeURIComponent(selected.study_plan_id)}`
-    );
-    if (!detailResponse.ok) continue;
-    const detailPayload = await detailResponse.json();
-    const items = detailPayload?.data?.items ?? [];
-    const grouped = new Map();
+    const loadedPlans = [];
+    for (const plan of pathwayPlans) {
+      const detailResponse = await fetch(
+        `${API_BASE}/api/study-plans/${encodeURIComponent(plan.study_plan_id)}`
+      );
+      if (!detailResponse.ok) continue;
+      const detailPayload = await detailResponse.json();
+      const items = detailPayload?.data?.items ?? [];
+      const grouped = new Map();
 
-    for (const item of items) {
-      const code = courseKey(item.course_code);
-      if (!code) continue;
-      const key = `${item.study_year}-${item.semester}`;
-      if (!grouped.has(key)) {
-        grouped.set(key, {
-          year: Number(item.study_year),
-          term: Number(item.semester),
-          courses: []
+      for (const item of items) {
+        const code = courseKey(item.course_code);
+        if (!code) continue;
+        const key = `${item.study_year}-${item.semester}`;
+        if (!grouped.has(key)) {
+          grouped.set(key, {
+            year: Number(item.study_year),
+            term: Number(item.semester),
+            courses: []
+          });
+        }
+        grouped.get(key).courses.push(code);
+      }
+
+      if (grouped.size) {
+        loadedPlans.push({
+          id: plan.study_plan_id,
+          label: studyPlanLabel(plan.study_plan_id, plan.plan_name),
+          plan: [...grouped.values()].sort(
+            (a, b) => a.year - b.year || a.term - b.term
+          )
         });
       }
-      grouped.get(key).courses.push(code);
     }
 
-    if (grouped.size) {
-      program.plan = [...grouped.values()].sort(
-        (a, b) => a.year - b.year || a.term - b.term
-      );
-      program.activeStudyPlanId = selected.study_plan_id;
+    if (loadedPlans.length) {
+      const selected = loadedPlans.find(plan => /PROJECT$/i.test(plan.id)) ?? loadedPlans[0];
+      program.studyPlans = loadedPlans;
+      program.activeStudyPlanId = selected.id;
+      program.plan = selected.plan;
     }
   }
+}
+
+function studyPlanLabel(planId, planName) {
+  if (planName) return planName;
+  if (/COOP$/i.test(planId)) return "แผนสหกิจศึกษา";
+  if (/PROJECT$/i.test(planId)) return "แผนโครงงาน";
+  if (/MINOR|สายโท/i.test(planId)) return "แผนเลือกสายโท";
+  return planId;
 }
 
 async function loadApiData() {
@@ -2079,6 +2099,22 @@ function renderProgram() {
     content = `
       <div class="panel">
 
+        ${p.studyPlans?.length > 1 ? `
+          <div class="study-plan-picker">
+            <div class="study-plan-picker-label">เลือกแผนการเรียน</div>
+            <div class="study-plan-options">
+              ${p.studyPlans.map(plan => `
+                <button
+                  class="study-plan-option ${p.activeStudyPlanId === plan.id ? "study-plan-option--active" : ""}"
+                  data-study-plan="${esc(plan.id)}"
+                >
+                  ${esc(plan.label)}
+                </button>
+              `).join("")}
+            </div>
+          </div>
+        ` : ""}
+
         <div class="year-tabs">
 
           ${years
@@ -2636,6 +2672,10 @@ function renderCourse() {
   const ps =
     programsContaining(code);
 
+  const sourceProgram = PROGRAMS.find(
+    program => program.id === state.programId
+  );
+
   const prereqs =
     c.prereq || [];
 
@@ -2651,10 +2691,16 @@ function renderCourse() {
       label: "หน้าแรก",
       view: "home"
     },
-    {
-      label: "ค้นหารายวิชา",
-      view: "courses"
-    },
+      sourceProgram
+        ? {
+            label: sourceProgram.code,
+            view: "program",
+            id: sourceProgram.id
+          }
+        : {
+            label: "ค้นหารายวิชา",
+            view: "courses"
+          },
     {
       label: code
     }
@@ -2742,8 +2788,8 @@ function renderCourse() {
 
       </div>
 
-      ${apiDataPanel("ข้อมูล TQF3 จาก Course API", c.tqf3)}
-      ${apiDataPanel("Course–PLO mappings จาก Course API", c.ploMappings)}
+      ${apiDataPanel("ข้อมูลเพิ่มเติมจาก API: TQF3 (กดเพื่อดู)", c.tqf3)}
+      ${apiDataPanel("ข้อมูลเพิ่มเติมจาก API: Course–PLO (กดเพื่อดู)", c.ploMappings)}
 
 
       <h3 class="panel-subhead">
@@ -3607,6 +3653,22 @@ function bind() {
 
       };
 
+    });
+
+  document
+    .querySelectorAll("[data-study-plan]")
+    .forEach(button => {
+      button.onclick = () => {
+        const program = PROGRAMS.find(item => item.id === state.programId);
+        const selected = program?.studyPlans?.find(
+          plan => plan.id === button.dataset.studyPlan
+        );
+        if (!program || !selected) return;
+        program.activeStudyPlanId = selected.id;
+        program.plan = selected.plan;
+        state.year = 1;
+        render();
+      };
     });
 
 
