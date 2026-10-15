@@ -281,7 +281,45 @@ async function importStudyPlans(rows: CourseRow[]) {
       const detailParams = new URLSearchParams({ resource: 'study_plan', study_plan_id: String(planId) });
       const detailPayload = await getJson<any>(`${baseUrl}?${detailParams}`);
       const detail = detailPayload?.data ?? detailPayload;
-      const items = listFrom(detail, ['items', 'courses', 'plan_items']);
+      const studyPlan = detail?.study_plan ?? {};
+      const terms = Array.isArray(detail?.terms) ? detail.terms : [];
+      const items = terms.flatMap((term: any) => {
+        const courses = Array.isArray(term?.courses) ? term.courses : [];
+        const requirements = Array.isArray(term?.requirements) ? term.requirements : [];
+        return [
+          ...courses.map((course: any) => ({
+            ...course,
+            study_year: term.study_year,
+            semester: term.semester,
+            course_code: course?.course?.course_code ?? course?.course_code,
+            course_id: course?.course?.course_id ?? course?.course_id,
+            credits: course?.course?.credits_total ?? course?.credits,
+            requirement_text: course?.notes ?? course?.requirement_text,
+          })),
+          ...requirements.map((requirement: any) => ({
+            ...requirement,
+            study_year: term.study_year,
+            semester: term.semester,
+            requirement_text: [
+              requirement.course_group,
+              requirement.alternatives,
+              requirement.notes,
+            ].filter(Boolean).join(' — '),
+            credits: requirement.credits_required,
+          })),
+        ];
+      });
+
+      // Keep the human-readable name from the detail response when the list
+      // endpoint only returns a plan id and null plan_name.
+      const planName = pick(plan, ['plan_name', 'name', 'title', 'plan_name_th'])
+        ?? pick(studyPlan, ['plan_name_th', 'plan_name', 'name', 'title'])
+        ?? null;
+      await db.execute(
+        `UPDATE study_plan SET plan_name = ?, raw_json = ? WHERE study_plan_id = ?`,
+        [planName, JSON.stringify(studyPlan && Object.keys(studyPlan).length ? studyPlan : plan), planId],
+      );
+
       for (let index = 0; index < items.length; index += 1) {
         const item = items[index];
         const year = Number(pick(item, ['study_year', 'year', 'studyYear']) ?? 0);
