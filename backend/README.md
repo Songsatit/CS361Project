@@ -52,6 +52,7 @@ Script จะดึง Faculty, Department และ Course Catalog แล้ว
 | `GET /api/study-plans/{studyPlanId}` | Return one study plan with ordered year/semester items. Optional query parameters: `studyYear` and `semester`. |
 | `GET /api/faculties` | List faculties. |
 | `GET /api/departments` | List departments. Optional `facultyId` filters by faculty. |
+| `GET /api/audit-logs` | List recent audit logs. Optional `limit` (1–500, default 100). |
 
 Successful responses use `{ "data": ... }`; list endpoints return an array in `data`. A missing course returns 404. Unexpected database or schema errors return a generic 500 response and are logged in CloudWatch.
 

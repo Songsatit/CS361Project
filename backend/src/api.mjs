@@ -22,6 +22,31 @@ const queryRows = async (sql, params = []) => {
   return rows;
 };
 
+export async function writeAuditLog({
+  username,
+  role,
+  action,
+  entityType,
+  entityId,
+  oldValue = null,
+  newValue = null,
+}) {
+  await pool.execute(
+    `INSERT INTO audit_log
+      (actor_username, actor_role, action, entity_type, entity_id, old_value, new_value)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      username,
+      role,
+      action,
+      entityType,
+      entityId,
+      oldValue == null ? null : JSON.stringify(oldValue),
+      newValue == null ? null : JSON.stringify(newValue),
+    ],
+  );
+}
+
 function pathParameter(event, name) {
   return event.pathParameters?.[name] ?? event.pathParameters?.[name.toLowerCase()];
 }
@@ -299,6 +324,20 @@ async function listDepartments(event) {
   return response(200, { data });
 }
 
+async function listAuditLogs(event) {
+  const query = event.queryStringParameters ?? {};
+  const limit = Math.max(1, Math.min(Number.parseInt(query.limit ?? '100', 10) || 100, 500));
+  const data = await queryRows(
+    `SELECT audit_id, actor_username, actor_role, action,
+            entity_type, entity_id, old_value, new_value, created_at
+       FROM audit_log
+      ORDER BY created_at DESC, audit_id DESC
+      LIMIT ?`,
+    [limit],
+  );
+  return response(200, { data });
+}
+
 export const handler = async (event) => {
   try {
     const method = event.requestContext?.http?.method ?? event.httpMethod;
@@ -313,6 +352,7 @@ export const handler = async (event) => {
     if (route === 'GET /api/study-plans/{studyPlanId}') return await getStudyPlan(event);
     if (route === 'GET /api/faculties') return await listFaculties();
     if (route === 'GET /api/departments') return await listDepartments(event);
+    if (route === 'GET /api/audit-logs') return await listAuditLogs(event);
     return response(404, { error: 'Route not found' });
   } catch (error) {
     console.error('API request failed', error);
