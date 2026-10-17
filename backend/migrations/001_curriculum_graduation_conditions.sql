@@ -21,4 +21,4 @@ FROM (
   UNION ALL SELECT 6, 'ได้ค่าเฉลี่ยรวมทั้ง 8 รายวิชาไม่ต่ำกว่า 2.00 ได้แก่ คพ.100, คพ.101, คพ.102, คพ.111, คพ.232, คพ.240, คพ.251 และ คพ.261'
 ) AS conditions
 JOIN curriculum curr ON curr.curriculum_id = 'BSC-CS-2566'
-ON DUPLICATE KEY UPDATE condition_text = VALUES(condition_text);
+ON DUPLICATE KEY UPDATE condition_text = VALUES(condition_text);  
