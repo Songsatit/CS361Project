@@ -1266,6 +1266,9 @@ const state = {
 
   homeQuery: "",
   user: null,
+  studentProfile: null,
+  studentProfileLoading: false,
+  studentProfileError: "",
   loginOpen: false,
   loginError: ""
 };
@@ -1283,6 +1286,33 @@ const MOCK_USERS = {
   teacher: { password: "teacher123", role: "teacher", roleLabel: "อาจารย์", name: "ผู้ใช้งานอาจารย์" },
   staff: { password: "staff123", role: "staff", roleLabel: "เจ้าหน้าที่", name: "ผู้ใช้งานเจ้าหน้าที่" }
 };
+
+function canAccessCurriculumManagement(user = state.user) {
+  return ["teacher", "staff"].includes(user?.role);
+}
+
+function canAccessStudentProfile(user = state.user) {
+  return user?.role === "student";
+}
+
+async function loadStudentProfile() {
+  if (!canAccessStudentProfile() || !state.user?.username) return null;
+  if (state.studentProfile) return state.studentProfile;
+  state.studentProfileLoading = true;
+  state.studentProfileError = "";
+  try {
+    const response = await fetch(`${API_BASE}/api/profile/student?id=${encodeURIComponent(state.user.username)}`);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error ?? `Profile API returned ${response.status}`);
+    state.studentProfile = payload?.data ?? null;
+    return state.studentProfile;
+  } catch (error) {
+    state.studentProfileError = error.message || "โหลดข้อมูลส่วนตัวไม่สำเร็จ";
+    return null;
+  } finally {
+    state.studentProfileLoading = false;
+  }
+}
 
 function restoreMockUser() {
   try {
@@ -1354,7 +1384,7 @@ const workflowStatusLabels = {
 };
 
 function renderWorkflowPanel(program) {
-  if (!state.user) return "";
+  if (!canAccessCurriculumManagement()) return "";
   const workflow = workflowCache.get(program.curriculumId) ?? { status: "draft" };
   const canManage = ["teacher", "staff"].includes(state.user?.role);
   const status = workflow.status ?? "draft";
@@ -1378,7 +1408,7 @@ function renderWorkflowPanel(program) {
 }
 
 function renderWorkflowPage() {
-  if (!state.user) return renderLogin();
+  if (!canAccessCurriculumManagement()) return renderHome();
   const program = PROGRAMS.find(item => item.id === state.programId) || PROGRAMS[0];
   const workflow = workflowCache.get(program.curriculumId) ?? { status: "draft" };
   const status = workflow.status ?? "draft";
@@ -1455,6 +1485,40 @@ function renderWorkflowPage() {
               </table>
             </div>
           ` : `<p class="audit-empty">ยังไม่มีประวัติการเปลี่ยนแปลง</p>`}
+        </section>
+      ` : ""}
+    </div>
+  `;
+}
+
+function renderStudentProfile() {
+  if (!canAccessStudentProfile()) return renderHome();
+  const profile = state.studentProfile;
+  return `
+    <div class="page profile-page">
+      ${crumbs([{ label: "หน้าแรก", view: "home" }, { label: "ข้อมูลส่วนตัว" }])}
+      <div class="profile-page-head">
+        <span class="workflow-kicker">ข้อมูลจาก TU Student API</span>
+        <h1 class="page-title">ข้อมูลส่วนตัว</h1>
+        <p class="page-sub">ข้อมูลพื้นฐานของนักศึกษาจากระบบมหาวิทยาลัยธรรมศาสตร์</p>
+      </div>
+      ${state.studentProfileLoading ? `<section class="profile-card"><p>กำลังโหลดข้อมูล...</p></section>` : ""}
+      ${state.studentProfileError ? `<section class="profile-card"><p class="login-error">${esc(state.studentProfileError)}</p></section>` : ""}
+      ${profile ? `
+        <section class="profile-card">
+          <div class="profile-identity">
+            <div class="profile-avatar">${icon("user", 28)}</div>
+            <div><h2>${esc(profile.displayNameTh || "ไม่ระบุชื่อ")}</h2><p>${esc(profile.displayNameEn || "")}</p></div>
+          </div>
+          <div class="profile-grid">
+            ${[
+              ["รหัสนักศึกษา", profile.studentId],
+              ["สถานะ", profile.statusName],
+              ["ระดับการศึกษา", profile.levelName],
+              ["คณะ", profile.faculty],
+              ["สาขา", profile.department]
+            ].map(([label, value]) => `<div class="profile-field"><span>${label}</span><strong>${esc(value || "ไม่ระบุ")}</strong></div>`).join("")}
+          </div>
         </section>
       ` : ""}
     </div>
@@ -3430,8 +3494,11 @@ function shell(content) {
     ["courses", "ค้นหารายวิชา"],
     ["faq", "คำถามที่พบบ่อย"]
   ];
-  if (state.user) {
+  if (canAccessCurriculumManagement()) {
     nav.push(["workflow", "ตรวจสอบข้อมูลหลักสูตร", state.programId || PROGRAMS[0].id]);
+  }
+  if (canAccessStudentProfile()) {
+    nav.push(["profile", "ข้อมูลส่วนตัว"]);
   }
 
 
@@ -3595,6 +3662,7 @@ function render() {
     course: renderCourse,
     faq: renderFaq,
     login: renderLogin,
+    profile: renderStudentProfile,
     workflow: renderWorkflowPage
   };
 
@@ -3635,6 +3703,11 @@ function render() {
       });
     }
   }
+  if (state.view === "profile" && canAccessStudentProfile() && !state.studentProfile && !state.studentProfileLoading) {
+    loadStudentProfile().then(() => {
+      if (state.view === "profile") render();
+    });
+  }
 }
 
 
@@ -3643,9 +3716,14 @@ function render() {
    ========================================================= */
 
 function go(v, id, addHistory = true) {
-  if (v === "workflow" && !state.user) {
-    state.loginError = "หน้านี้สำหรับอาจารย์และเจ้าหน้าที่เท่านั้น กรุณาเข้าสู่ระบบ";
-    state.view = "login";
+  if (v === "workflow" && !canAccessCurriculumManagement()) {
+    state.loginError = "หน้านี้สำหรับอาจารย์และเจ้าหน้าที่เท่านั้น";
+    state.view = state.user ? "home" : "login";
+    render();
+    return;
+  }
+  if (v === "profile" && !canAccessStudentProfile()) {
+    state.view = state.user ? "home" : "login";
     render();
     return;
   }
@@ -3659,6 +3737,11 @@ function go(v, id, addHistory = true) {
 
   if (v === "course") {
     state.courseCode = id;
+  }
+
+  if (v === "profile") {
+    state.studentProfile = null;
+    state.studentProfileError = "";
   }
 
   state.navOpen = false;
@@ -3728,6 +3811,8 @@ function bind() {
         state.loginError = "";
       } else if (button.dataset.authAction === "logout") {
         mockLogout();
+        state.studentProfile = null;
+        state.studentProfileError = "";
       }
       render();
     };

@@ -76,8 +76,47 @@ async function tuLogin(event) {
   });
 }
 
+async function getStudentProfile(event) {
+  const studentId = String(event.queryStringParameters?.id ?? '').trim();
+  if (!studentId) return response(400, { error: 'student id is required' });
+  if (!process.env.TU_APPLICATION_KEY) {
+    console.error('TU_APPLICATION_KEY is not configured');
+    return response(503, { error: 'TU profile API is not configured' });
+  }
+
+  const profileResponse = await fetch(
+    `https://restapi.tu.ac.th/api/v2/profile/std/info/?id=${encodeURIComponent(studentId)}`,
+    {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Application-Key': process.env.TU_APPLICATION_KEY,
+      },
+    },
+  );
+  const payload = await profileResponse.json().catch(() => ({}));
+  if (!profileResponse.ok) {
+    return response(profileResponse.status, { error: payload.message ?? 'Unable to load student profile' });
+  }
+
+  return response(200, {
+    data: {
+      studentId: payload.studentid ?? studentId,
+      displayNameTh: payload.displayname_th ?? '',
+      displayNameEn: payload.displayname_en ?? '',
+      statusId: payload.statsid ?? null,
+      statusName: payload.statusname ?? '',
+      levelName: payload.level_name ?? '',
+      faculty: payload.faculty ?? '',
+      department: payload.department ?? '',
+    },
+  });
+}
+
 export const authHandler = async (event) => {
   try {
+    const method = event.requestContext?.http?.method ?? event.httpMethod;
+    if (method === 'GET') return await getStudentProfile(event);
     return await tuLogin(event);
   } catch (error) {
     console.error('TU authentication request failed', error);

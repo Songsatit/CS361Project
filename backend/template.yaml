@@ -155,6 +155,12 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/auth/login
             Method: POST
+        StudentProfile:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/profile/student
+            Method: GET
 
 Outputs:
   ApiUrl:
