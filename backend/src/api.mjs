@@ -579,12 +579,20 @@ async function createCurriculumChange(event) {
   }
   const operation = String(body.operation ?? 'update').toLowerCase();
   const curriculumId = String(body.curriculumId ?? '').trim();
-  const payload = body.payload ?? {};
+  const payload = { ...(body.payload ?? {}) };
   if (!['create', 'update'].includes(operation) || !curriculumId) {
     return response(400, { error: 'curriculumId and operation are required' });
   }
-  if (!Number.isInteger(Number(payload.academicYear))) {
+  const changeType = String(body.changeType ?? payload.changeType ?? 'academic_year');
+  payload.changeType = changeType;
+  if (changeType === 'academic_year' && !Number.isInteger(Number(payload.academicYear))) {
     return response(400, { error: 'payload.academicYear must be an integer' });
+  }
+  if (changeType === 'course_replace' && (!payload.curriculumCourseId || !payload.newCourseCode)) {
+    return response(400, { error: 'course_replace requires curriculumCourseId and newCourseCode' });
+  }
+  if (!['academic_year', 'course_replace'].includes(changeType)) {
+    return response(400, { error: 'Unsupported curriculum change type' });
   }
   if (operation === 'update') {
     const existing = await queryRows('SELECT curriculum_id FROM curriculum WHERE curriculum_id = ?', [curriculumId]);
@@ -594,13 +602,16 @@ async function createCurriculumChange(event) {
     `INSERT INTO curriculum_change_request
       (curriculum_id, operation, payload, requested_by, requested_role)
      VALUES (?, ?, ?, ?, ?)`,
-    [curriculumId, operation, JSON.stringify({ academicYear: Number(payload.academicYear) }), actor.username, actor.role],
+    [curriculumId, operation, JSON.stringify({
+      ...payload,
+      ...(changeType === 'academic_year' ? { academicYear: Number(payload.academicYear) } : {}),
+    }), actor.username, actor.role],
   );
   const data = {
     change_id: result.insertId,
     curriculum_id: curriculumId,
     operation,
-    payload: { academicYear: Number(payload.academicYear) },
+    payload,
     status: 'pending',
     requested_by: actor.username,
     requested_role: actor.role,
@@ -633,16 +644,29 @@ async function decideCurriculumChange(event) {
   if (change.status !== 'pending') return response(409, { error: 'Change request has already been reviewed' });
 
   if (action === 'approve') {
-    const academicYear = Number(change.payload?.academicYear);
-    if (change.operation === 'create') {
+    if (change.payload?.changeType === 'course_replace') {
+      const replacement = await queryRows(
+        `SELECT course_id FROM course
+          WHERE course_code = ? OR REPLACE(course_code, ' ', '') = REPLACE(?, ' ', '')
+          LIMIT 1`,
+        [change.payload.newCourseCode, change.payload.newCourseCode],
+      );
+      if (!replacement.length) return response(404, { error: 'Replacement course not found' });
+      await pool.execute(
+        `UPDATE curriculum_course
+            SET course_id = ?
+          WHERE curriculum_course_id = ? AND curriculum_id = ?`,
+        [replacement[0].course_id, change.payload.curriculumCourseId, change.curriculum_id],
+      );
+    } else if (change.operation === 'create') {
       await pool.execute(
         'INSERT INTO curriculum (curriculum_id, academic_year) VALUES (?, ?)',
-        [change.curriculum_id, academicYear],
+        [change.curriculum_id, Number(change.payload?.academicYear)],
       );
     } else {
       await pool.execute(
         'UPDATE curriculum SET academic_year = ? WHERE curriculum_id = ?',
-        [academicYear, change.curriculum_id],
+        [Number(change.payload?.academicYear), change.curriculum_id],
       );
     }
   }

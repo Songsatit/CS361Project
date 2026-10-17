@@ -1499,10 +1499,22 @@ function renderWorkflowPage() {
       ${state.user.role === "curriculum_admin" ? `
         <section class="role-capability-card curriculum-edit-card">
           <h2>เสนอแก้ไขข้อมูลหลักสูตร</h2>
-          <p>การแก้ไขจะถูกบันทึกเป็นฉบับร่างและยังไม่กระทบข้อมูลหลักจนกว่าจะอนุมัติ</p>
+          <p>เลือกประเภทการแก้ไข ระบบจะบันทึกเป็นฉบับร่างและยังไม่กระทบข้อมูลหลักจนกว่าจะอนุมัติ</p>
           <form id="curriculumChangeForm" class="curriculum-change-form">
-            <label>ปีหลักสูตร
-              <input name="academicYear" type="number" min="2500" max="2600" value="${esc(program.academicYear ?? "")}" required>
+            <label>ประเภทการแก้ไข
+              <select name="changeType" id="changeType">
+                <option value="academic_year">เปลี่ยนปีหลักสูตร</option>
+                <option value="course_replace">เปลี่ยนรายวิชา</option>
+              </select>
+            </label>
+            <label data-change-field="academic_year">ปีหลักสูตรใหม่
+              <input name="academicYear" type="number" min="2500" max="2600" value="${esc(program.academicYear ?? (program.curriculumId.match(/(25\\d{2})/) || ["", "2566"])[1])}">
+            </label>
+            <label data-change-field="course_replace" hidden>รหัส Curriculum Course เดิม
+              <input name="curriculumCourseId" placeholder="เช่น BSC-CS-2566-CIS-CS361">
+            </label>
+            <label data-change-field="course_replace" hidden>รหัสวิชาใหม่
+              <input name="newCourseCode" placeholder="เช่น CS 331">
             </label>
             <button class="workflow-action workflow-action--primary" type="submit">บันทึกฉบับร่าง</button>
           </form>
@@ -1515,7 +1527,7 @@ function renderWorkflowPage() {
           ${state.curriculumChanges.length ? `<div class="audit-log-table-wrap"><table class="audit-log-table">
             <thead><tr><th>หลักสูตร</th><th>การแก้ไข</th><th>สถานะ</th><th>การดำเนินการ</th></tr></thead>
             <tbody>${state.curriculumChanges.map(change => `
-              <tr><td>${esc(change.curriculum_id)}</td><td>ปี พ.ศ. ${esc(change.payload?.academicYear)}</td><td>${esc(change.status)}</td><td>
+              <tr><td>${esc(change.curriculum_id)}</td><td>${change.payload?.changeType === "course_replace" ? `เปลี่ยน ${esc(change.payload.curriculumCourseId)} เป็น ${esc(change.payload.newCourseCode)}` : `ปี พ.ศ. ${esc(change.payload?.academicYear)}`}</td><td>${esc(change.status)}</td><td>
                 ${change.status === "pending" ? `<button class="link-btn" data-change-action="approve" data-change-id="${esc(change.change_id)}">อนุมัติ</button><button class="link-btn" data-change-action="reject" data-change-id="${esc(change.change_id)}">ปฏิเสธ</button>` : "-"}
               </td></tr>`).join("")}</tbody>
           </table></div>` : `<p class="audit-empty">ยังไม่มีรายการแก้ไข</p>`}
@@ -3984,22 +3996,36 @@ function bind() {
       event.preventDefault();
       const program = PROGRAMS.find(item => item.id === state.programId);
       const formData = new FormData(curriculumChangeForm);
+      const changeType = String(formData.get("changeType"));
+      const payload = changeType === "course_replace"
+        ? { changeType, curriculumCourseId: String(formData.get("curriculumCourseId") ?? "").trim(), newCourseCode: String(formData.get("newCourseCode") ?? "").trim() }
+        : { changeType, academicYear: Number(formData.get("academicYear")) };
       const response = await fetch(`${API_BASE}/api/curriculum-changes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           curriculumId: program?.curriculumId,
           operation: "update",
-          payload: { academicYear: Number(formData.get("academicYear")) },
+          changeType,
+          payload,
           username: state.user.username,
           role: state.user.role
         })
       });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) return alert(payload.error ?? "บันทึกฉบับร่างไม่สำเร็จ");
+      const resultPayload = await response.json().catch(() => ({}));
+      if (!response.ok) return alert(resultPayload.error ?? "บันทึกฉบับร่างไม่สำเร็จ");
       state.curriculumChangesLoaded = false;
       loadCurriculumChanges(program?.curriculumId).then(() => render());
     };
+    const changeType = curriculumChangeForm.querySelector("[name=changeType]");
+    const updateChangeFields = () => {
+      curriculumChangeForm.querySelectorAll("[data-change-field]").forEach(field => {
+        field.hidden = field.dataset.changeField !== changeType.value;
+        field.querySelectorAll("input").forEach(input => { input.required = !field.hidden; });
+      });
+    };
+    changeType.onchange = updateChangeFields;
+    updateChangeFields();
   }
 
   document.querySelectorAll("[data-change-action]").forEach(button => {
