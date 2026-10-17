@@ -598,14 +598,27 @@ async function createCurriculumChange(event) {
     const existing = await queryRows('SELECT curriculum_id FROM curriculum WHERE curriculum_id = ?', [curriculumId]);
     if (!existing.length) return response(404, { error: 'Curriculum not found' });
   }
+  const currentWorkflow = await queryRows(
+    'SELECT status FROM curriculum_workflow WHERE curriculum_id = ?',
+    [curriculumId],
+  );
+  const previousWorkflowStatus = currentWorkflow[0]?.status ?? 'draft';
   const [result] = await pool.execute(
     `INSERT INTO curriculum_change_request
       (curriculum_id, operation, payload, requested_by, requested_role)
      VALUES (?, ?, ?, ?, ?)`,
     [curriculumId, operation, JSON.stringify({
       ...payload,
+      previousWorkflowStatus,
       ...(changeType === 'academic_year' ? { academicYear: Number(payload.academicYear) } : {}),
     }), actor.username, actor.role],
+  );
+  await pool.execute(
+    `INSERT INTO curriculum_workflow (curriculum_id, status, updated_by, updated_role)
+     VALUES (?, 'review', ?, ?)
+     ON DUPLICATE KEY UPDATE status = 'review', updated_by = VALUES(updated_by),
+       updated_role = VALUES(updated_role), updated_at = CURRENT_TIMESTAMP`,
+    [curriculumId, actor.username, actor.role],
   );
   const data = {
     change_id: result.insertId,
@@ -675,6 +688,16 @@ async function decideCurriculumChange(event) {
         SET status = ?, reviewed_by = ?, reviewed_role = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP
       WHERE change_id = ?`,
     [action === 'approve' ? 'approved' : 'rejected', actor.username, actor.role, body.note ?? null, changeId],
+  );
+  const nextWorkflowStatus = action === 'approve'
+    ? 'approved'
+    : (change.payload?.previousWorkflowStatus ?? 'draft');
+  await pool.execute(
+    `INSERT INTO curriculum_workflow (curriculum_id, status, updated_by, updated_role)
+     VALUES (?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE status = VALUES(status), updated_by = VALUES(updated_by),
+       updated_role = VALUES(updated_role), updated_at = CURRENT_TIMESTAMP`,
+    [change.curriculum_id, nextWorkflowStatus, actor.username, actor.role],
   );
   await writeAuditLog({
     username: actor.username,
