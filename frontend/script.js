@@ -3520,24 +3520,6 @@ function shell(content) {
 
     </header>
 
-    ${state.loginOpen ? `
-      <div class="login-backdrop" data-auth-action="close">
-        <section class="login-modal" role="dialog" aria-modal="true" aria-labelledby="loginTitle" data-login-modal>
-          <button class="login-close" type="button" data-auth-action="close" aria-label="ปิด">×</button>
-          <h2 id="loginTitle">เข้าสู่ระบบ</h2>
-          <p class="login-subtitle">สำหรับอาจารย์และเจ้าหน้าที่ (Mock Login)</p>
-          <form id="mockLoginForm">
-            <label>Username<input name="username" autocomplete="username" required placeholder="teacher หรือ staff" /></label>
-            <label>Password<input name="password" type="password" autocomplete="current-password" required placeholder="รหัสผ่าน" /></label>
-            ${state.loginError ? `<p class="login-error">${esc(state.loginError)}</p>` : ""}
-            <button class="login-submit" type="submit">เข้าสู่ระบบ</button>
-          </form>
-          <p class="login-hint">Guest สามารถดูหลักสูตรและรายวิชาได้โดยไม่ต้องเข้าสู่ระบบ</p>
-        </section>
-      </div>
-    ` : ""}
-
-
     <main class="main">
       ${content}
     </main>
@@ -3582,12 +3564,12 @@ function renderLogin() {
       <div class="login-page-card">
         <div class="login-page-icon">${icon("shield-check", 28)}</div>
         <h1 class="page-title">เข้าสู่ระบบ</h1>
-        <p class="page-sub">สำหรับอาจารย์และเจ้าหน้าที่ใน V3</p>
+        <p class="page-sub">เข้าสู่ระบบด้วยบัญชี TU หรือบัญชีที่ระบบกำหนด</p>
 
-        <form id="mockLoginForm" class="login-page-form">
+        <form id="loginForm" class="login-page-form">
           <label>
             Username
-            <input name="username" autocomplete="username" required placeholder="teacher หรือ staff" />
+            <input name="username" autocomplete="username" required placeholder="Username TU" />
           </label>
           <label>
             Password
@@ -3596,27 +3578,6 @@ function renderLogin() {
           ${state.loginError ? `<p class="login-error">${esc(state.loginError)}</p>` : ""}
           <button class="login-submit" type="submit">เข้าสู่ระบบ</button>
         </form>
-
-        <div class="login-divider"><span>หรือ</span></div>
-
-        <form id="tuLoginForm" class="login-page-form">
-          <h2 class="login-section-title">นักศึกษา/บุคลากร มธ.</h2>
-          <label>
-            TU Username
-            <input name="username" autocomplete="username" required placeholder="รหัส TU" />
-          </label>
-          <label>
-            TU Password
-            <input name="password" type="password" autocomplete="current-password" required />
-          </label>
-          <button class="login-submit login-submit--secondary" type="submit">เข้าสู่ระบบด้วย TU API</button>
-        </form>
-
-        <div class="login-demo-accounts">
-          <strong>บัญชี Demo</strong>
-          <span>อาจารย์: teacher / teacher123</span>
-          <span>เจ้าหน้าที่: staff / staff123</span>
-        </div>
 
         <button class="login-guest" data-go="home">เข้าใช้งานแบบ Guest โดยไม่ต้อง Login</button>
       </div>
@@ -3772,29 +3733,23 @@ function bind() {
     };
   });
 
-  const loginForm = document.getElementById("mockLoginForm");
+  const loginForm = document.getElementById("loginForm");
   if (loginForm) {
-    loginForm.onsubmit = event => {
+    loginForm.onsubmit = async event => {
       event.preventDefault();
       const formData = new FormData(loginForm);
-      const valid = mockLogin(String(formData.get("username") ?? ""), String(formData.get("password") ?? ""));
-      if (!valid) {
-        state.loginError = "Username หรือ Password ไม่ถูกต้อง";
-        render();
+      const username = String(formData.get("username") ?? "");
+      const password = String(formData.get("password") ?? "");
+      const button = loginForm.querySelector("button[type=submit]");
+
+      if (MOCK_USERS[username.trim().toLowerCase()]?.password === password) {
+        mockLogin(username, password);
+        state.loginOpen = false;
+        state.loginError = "";
+        go("home");
         return;
       }
-      state.loginOpen = false;
-      state.loginError = "";
-      go("home");
-    };
-  }
 
-  const tuLoginForm = document.getElementById("tuLoginForm");
-  if (tuLoginForm) {
-    tuLoginForm.onsubmit = async event => {
-      event.preventDefault();
-      const formData = new FormData(tuLoginForm);
-      const button = tuLoginForm.querySelector("button[type=submit]");
       button.disabled = true;
       state.loginError = "";
       try {
@@ -3802,14 +3757,15 @@ function bind() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            username: String(formData.get("username") ?? ""),
-            password: String(formData.get("password") ?? "")
+            username,
+            password
           })
         });
         const payload = await response.json().catch(() => ({}));
-        if (!response.ok || !payload.user) throw new Error(payload.error ?? "TU Login ไม่สำเร็จ");
+        if (!response.ok || !payload.user) throw new Error(payload.error ?? "Username หรือ Password ไม่ถูกต้อง");
         state.user = payload.user;
         localStorage.setItem("cs361-v3-user", JSON.stringify(state.user));
+        state.loginOpen = false;
         state.loginError = "";
         go("home");
       } catch (error) {
