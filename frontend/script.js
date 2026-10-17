@@ -1236,7 +1236,7 @@ const FAQS = [
   {
     category: "ระบบ",
     q: "สามารถตรวจสอบสถานะการสำเร็จการศึกษาของนักศึกษาได้หรือไม่?",
-    a: "ใน V1 ระบบนี้เน้นข้อมูลหลักสูตรและการค้นหาข้อมูลสาธารณะ ส่วนการตรวจสอบสถานะรายบุคคลด้วยข้อมูลจริงจากสำนักทะเบียนจะเป็นระยะถัดไป"
+    a: "ขณะนี้ระบบให้บริการข้อมูลหลักสูตรและการค้นหาข้อมูลสาธารณะ ส่วนการตรวจสอบสถานะรายบุคคลจากสำนักทะเบียนยังไม่เปิดให้บริการ"
   }
 
 ];
@@ -1304,25 +1304,18 @@ async function loadStudentProfile() {
   state.studentProfileLoading = true;
   state.studentProfileError = "";
   try {
-    // TU Authentication response already contains the student's basic profile.
-    // Use it when Student Info API access is not enabled for the current key.
-    if (state.user.displayNameTh || state.user.email || state.user.faculty || state.user.department) {
-      state.studentProfile = {
-        studentId: state.user.username,
-        displayNameTh: state.user.displayNameTh,
-        displayNameEn: state.user.displayNameEn,
-        statusName: state.user.tuStatus,
-        statusId: state.user.statusId,
-        faculty: state.user.faculty,
-        department: state.user.department,
-        email: state.user.email,
-      };
-      return state.studentProfile;
-    }
-    const response = await fetch(`${API_BASE}/api/profile/student?id=${encodeURIComponent(state.user.username)}`);
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error ?? `Profile API returned ${response.status}`);
-    state.studentProfile = payload?.data ?? null;
+    // Use the verified TU Authentication response. The separate Student Info
+    // API is not enabled for the current Application-Key and must not block UI.
+    state.studentProfile = {
+      studentId: state.user.username,
+      displayNameTh: state.user.displayNameTh ?? "",
+      displayNameEn: state.user.displayNameEn ?? "",
+      statusName: state.user.tuStatus ?? "",
+      statusId: state.user.statusId ?? null,
+      faculty: state.user.faculty ?? "",
+      department: state.user.department ?? "",
+      email: state.user.email ?? "",
+    };
     return state.studentProfile;
   } catch (error) {
     state.studentProfileError = error.message || "โหลดข้อมูลส่วนตัวไม่สำเร็จ";
@@ -1416,7 +1409,7 @@ function renderWorkflowPanel(program) {
   return `
     <section class="workflow-panel" aria-label="สถานะการตรวจสอบหลักสูตร">
       <div>
-        <span class="workflow-kicker">V3 การตรวจสอบข้อมูลหลักสูตร</span>
+        <span class="workflow-kicker">การตรวจสอบข้อมูลหลักสูตร</span>
         <strong>สถานะหลักสูตร: ${esc(workflowStatusLabels[status] ?? status)}</strong>
         <small>${workflow.updated_by ? `แก้ไขล่าสุดโดย ${esc(workflow.updated_by)}` : "ยังไม่มีการส่งตรวจสอบ"}</small>
       </div>
@@ -1444,7 +1437,7 @@ function renderWorkflowPage() {
 
       <div class="workflow-page-head">
         <div>
-          <span class="workflow-kicker">V3 การตรวจสอบข้อมูลหลักสูตร</span>
+          <span class="workflow-kicker">การตรวจสอบข้อมูลหลักสูตร</span>
           <h1 class="page-title">ตรวจสอบหลักสูตร</h1>
           <p class="page-sub">${esc(program.code)} · ${esc(program.nameEn)}</p>
         </div>
@@ -2703,8 +2696,7 @@ function renderProgram() {
 
         <div class="note-banner">
 
-          การตรวจสอบสถานะรายบุคคลด้วยข้อมูลจริง
-          จากสำนักทะเบียนจะเปิดให้ใช้งานในระยะถัดไป
+          ข้อมูลหลักสูตรและแผนการเรียนสำหรับการวางแผนการศึกษาของนักศึกษา
 
         </div>
 
@@ -3628,10 +3620,8 @@ function shell(content) {
 
       <div class="footer-note">
 
-        ข้อมูลในหน้านี้เปิดให้เข้าถึงแบบสาธารณะ
-        ไม่ต้องเข้าสู่ระบบ ·
-        ระยะถัดไปจะเปิดให้ตรวจสอบสถานะรายบุคคล
-        ด้วยข้อมูลจากสำนักทะเบียน
+        ข้อมูลหลักสูตรเปิดให้เข้าถึงแบบสาธารณะ
+        ส่วนข้อมูลส่วนตัวและการตรวจสอบตามสิทธิ์ต้องเข้าสู่ระบบ
 
       </div>
 
