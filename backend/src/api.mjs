@@ -76,6 +76,15 @@ async function tuLogin(event) {
   });
 }
 
+export const authHandler = async (event) => {
+  try {
+    return await tuLogin(event);
+  } catch (error) {
+    console.error('TU authentication request failed', error);
+    return response(502, { error: 'Unable to reach TU Authentication API' });
+  }
+};
+
 export async function writeAuditLog({
   username,
   role,

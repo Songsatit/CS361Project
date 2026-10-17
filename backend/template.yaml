@@ -39,10 +39,6 @@ Globals:
     Runtime: nodejs22.x
     Timeout: 28
     MemorySize: 256
-    VpcConfig:
-      SubnetIds: !Ref VpcSubnetIds
-      SecurityGroupIds:
-        - !Ref LambdaSecurityGroupId
     Environment:
       Variables:
         DB_HOST: !Ref DbHost
@@ -74,13 +70,11 @@ Resources:
       Role: !Ref LambdaExecutionRoleArn
       CodeUri: .
       Handler: src/api.handler
+      VpcConfig:
+        SubnetIds: !Ref VpcSubnetIds
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroupId
       Events:
-        TuLogin:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/auth/login
-            Method: POST
         ListCourses:
           Type: HttpApi
           Properties:
@@ -146,6 +140,20 @@ Resources:
           Properties:
             ApiId: !Ref CurriculumApi
             Path: /api/curricula/{curriculumId}/workflow
+            Method: POST
+
+  AuthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Role: !Ref LambdaExecutionRoleArn
+      CodeUri: .
+      Handler: src/api.authHandler
+      Events:
+        TuLogin:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/auth/login
             Method: POST
 
 Outputs:
