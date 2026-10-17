@@ -540,12 +540,138 @@ async function updateCurriculumWorkflow(event) {
   return response(200, { data: newValue });
 }
 
+function parseChangePayload(row) {
+  if (!row) return row;
+  return { ...row, payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload };
+}
+
+async function listCurriculumChanges(event) {
+  const query = event.queryStringParameters ?? {};
+  const conditions = [];
+  const params = [];
+  if (query.curriculumId) {
+    conditions.push('curriculum_id = ?');
+    params.push(query.curriculumId);
+  }
+  if (query.status) {
+    conditions.push('status = ?');
+    params.push(query.status);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const rows = await queryRows(
+    `SELECT change_id, curriculum_id, operation, payload, status,
+            requested_by, requested_role, reviewed_by, reviewed_role,
+            review_note, created_at, reviewed_at
+       FROM curriculum_change_request
+       ${where}
+      ORDER BY created_at DESC, change_id DESC`,
+    params,
+  );
+  return response(200, { data: rows.map(parseChangePayload) });
+}
+
+async function createCurriculumChange(event) {
+  const body = requestBody(event);
+  if (!body) return response(400, { error: 'Request body must be valid JSON' });
+  const actor = actorFromRequest(event, body);
+  if (actor.role !== 'curriculum_admin') {
+    return response(403, { error: 'Only curriculum admin can create curriculum changes' });
+  }
+  const operation = String(body.operation ?? 'update').toLowerCase();
+  const curriculumId = String(body.curriculumId ?? '').trim();
+  const payload = body.payload ?? {};
+  if (!['create', 'update'].includes(operation) || !curriculumId) {
+    return response(400, { error: 'curriculumId and operation are required' });
+  }
+  if (!Number.isInteger(Number(payload.academicYear))) {
+    return response(400, { error: 'payload.academicYear must be an integer' });
+  }
+  if (operation === 'update') {
+    const existing = await queryRows('SELECT curriculum_id FROM curriculum WHERE curriculum_id = ?', [curriculumId]);
+    if (!existing.length) return response(404, { error: 'Curriculum not found' });
+  }
+  const [result] = await pool.execute(
+    `INSERT INTO curriculum_change_request
+      (curriculum_id, operation, payload, requested_by, requested_role)
+     VALUES (?, ?, ?, ?, ?)`,
+    [curriculumId, operation, JSON.stringify({ academicYear: Number(payload.academicYear) }), actor.username, actor.role],
+  );
+  const data = {
+    change_id: result.insertId,
+    curriculum_id: curriculumId,
+    operation,
+    payload: { academicYear: Number(payload.academicYear) },
+    status: 'pending',
+    requested_by: actor.username,
+    requested_role: actor.role,
+  };
+  await writeAuditLog({
+    username: actor.username,
+    role: actor.role,
+    action: 'curriculum_change_requested',
+    entityType: 'curriculum',
+    entityId: curriculumId,
+    oldValue: null,
+    newValue: data,
+  });
+  return response(201, { data });
+}
+
+async function decideCurriculumChange(event) {
+  const changeId = pathParameter(event, 'changeId');
+  const body = requestBody(event);
+  if (!changeId || !body) return response(400, { error: 'changeId and valid JSON body are required' });
+  const actor = actorFromRequest(event, body);
+  if (!['staff', 'curriculum_admin'].includes(actor.role)) {
+    return response(403, { error: 'Only staff or curriculum admin can review changes' });
+  }
+  const action = String(body.action ?? '').toLowerCase();
+  if (!['approve', 'reject'].includes(action)) return response(400, { error: 'action must be approve or reject' });
+  const rows = await queryRows('SELECT * FROM curriculum_change_request WHERE change_id = ?', [changeId]);
+  const change = parseChangePayload(rows[0]);
+  if (!change) return response(404, { error: 'Change request not found' });
+  if (change.status !== 'pending') return response(409, { error: 'Change request has already been reviewed' });
+
+  if (action === 'approve') {
+    const academicYear = Number(change.payload?.academicYear);
+    if (change.operation === 'create') {
+      await pool.execute(
+        'INSERT INTO curriculum (curriculum_id, academic_year) VALUES (?, ?)',
+        [change.curriculum_id, academicYear],
+      );
+    } else {
+      await pool.execute(
+        'UPDATE curriculum SET academic_year = ? WHERE curriculum_id = ?',
+        [academicYear, change.curriculum_id],
+      );
+    }
+  }
+  await pool.execute(
+    `UPDATE curriculum_change_request
+        SET status = ?, reviewed_by = ?, reviewed_role = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP
+      WHERE change_id = ?`,
+    [action === 'approve' ? 'approved' : 'rejected', actor.username, actor.role, body.note ?? null, changeId],
+  );
+  await writeAuditLog({
+    username: actor.username,
+    role: actor.role,
+    action: `curriculum_change_${action}`,
+    entityType: 'curriculum',
+    entityId: change.curriculum_id,
+    oldValue: change,
+    newValue: { ...change, status: action === 'approve' ? 'approved' : 'rejected', reviewed_by: actor.username },
+  });
+  return response(200, { data: { ...change, status: action === 'approve' ? 'approved' : 'rejected', reviewed_by: actor.username } });
+}
+
 export const handler = async (event) => {
   try {
     const method = event.requestContext?.http?.method ?? event.httpMethod;
     const route = event.routeKey ?? `${method} ${event.rawPath ?? event.path ?? ''}`;
 
     if (route === 'POST /api/auth/login') return await tuLogin(event);
+    if (route === 'POST /api/curriculum-changes') return await createCurriculumChange(event);
+    if (route === 'POST /api/curriculum-changes/{changeId}/decision') return await decideCurriculumChange(event);
     if (route === 'POST /api/curricula/{curriculumId}/workflow') return await updateCurriculumWorkflow(event);
     if (method !== 'GET') return response(405, { error: 'Method not allowed' });
     if (route === 'GET /api/courses') return await listCourses(event);
@@ -558,6 +684,7 @@ export const handler = async (event) => {
     if (route === 'GET /api/faculties') return await listFaculties();
     if (route === 'GET /api/departments') return await listDepartments(event);
     if (route === 'GET /api/audit-logs') return await listAuditLogs(event);
+    if (route === 'GET /api/curriculum-changes') return await listCurriculumChanges(event);
     return response(404, { error: 'Route not found' });
   } catch (error) {
     console.error('API request failed', error);

@@ -141,6 +141,24 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/curricula/{curriculumId}/workflow
             Method: POST
+        ListCurriculumChanges:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/curriculum-changes
+            Method: GET
+        CreateCurriculumChange:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/curriculum-changes
+            Method: POST
+        DecideCurriculumChange:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/curriculum-changes/{changeId}/decision
+            Method: POST
 
   AuthFunction:
     Type: AWS::Serverless::Function

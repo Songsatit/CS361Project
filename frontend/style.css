@@ -156,6 +156,44 @@
   color: var(--accent);
 }
 
+.curriculum-change-form {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.curriculum-change-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+.curriculum-change-form input {
+  width: 150px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+}
+
+.curriculum-change-list {
+  margin-top: 18px;
+}
+
+@media (max-width: 600px) {
+  .curriculum-change-form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .curriculum-change-form input {
+    box-sizing: border-box;
+    width: 100%;
+  }
+}
+
 .login-backdrop {
   position: fixed;
   inset: 0;

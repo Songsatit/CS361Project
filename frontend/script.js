@@ -1270,6 +1270,8 @@ const state = {
   studentProfileLoading: false,
   studentProfileAttempted: false,
   studentProfileError: "",
+  curriculumChanges: [],
+  curriculumChangesLoaded: false,
   accountMenuOpen: false,
   loginOpen: false,
   loginError: ""
@@ -1394,6 +1396,22 @@ async function loadAuditLogs() {
   return request;
 }
 
+async function loadCurriculumChanges(curriculumId) {
+  if (!curriculumId || state.curriculumChangesLoaded) return state.curriculumChanges;
+  try {
+    const response = await fetch(`${API_BASE}/api/curriculum-changes?curriculumId=${encodeURIComponent(curriculumId)}`);
+    if (!response.ok) throw new Error(`Curriculum changes API returned ${response.status}`);
+    const payload = await response.json();
+    state.curriculumChanges = payload?.data ?? [];
+  } catch (error) {
+    console.warn("Curriculum changes unavailable.", error);
+    state.curriculumChanges = [];
+  } finally {
+    state.curriculumChangesLoaded = true;
+  }
+  return state.curriculumChanges;
+}
+
 const workflowStatusLabels = {
   draft: "ฉบับร่าง",
   review: "รอตรวจสอบ",
@@ -1477,6 +1495,32 @@ function renderWorkflowPage() {
           </div>
         `).join("")}
       </section>
+
+      ${state.user.role === "curriculum_admin" ? `
+        <section class="role-capability-card curriculum-edit-card">
+          <h2>เสนอแก้ไขข้อมูลหลักสูตร</h2>
+          <p>การแก้ไขจะถูกบันทึกเป็นฉบับร่างและยังไม่กระทบข้อมูลหลักจนกว่าจะอนุมัติ</p>
+          <form id="curriculumChangeForm" class="curriculum-change-form">
+            <label>ปีหลักสูตร
+              <input name="academicYear" type="number" min="2500" max="2600" value="${esc(program.academicYear ?? "")}" required>
+            </label>
+            <button class="workflow-action workflow-action--primary" type="submit">บันทึกฉบับร่าง</button>
+          </form>
+        </section>
+      ` : ""}
+
+      ${canAudit ? `
+        <section class="audit-log-card curriculum-change-list">
+          <div class="audit-log-head"><h2>รายการแก้ไขที่รอตรวจสอบ</h2><span>${state.curriculumChanges.filter(item => item.status === "pending").length} รายการ</span></div>
+          ${state.curriculumChanges.length ? `<div class="audit-log-table-wrap"><table class="audit-log-table">
+            <thead><tr><th>หลักสูตร</th><th>การแก้ไข</th><th>สถานะ</th><th>การดำเนินการ</th></tr></thead>
+            <tbody>${state.curriculumChanges.map(change => `
+              <tr><td>${esc(change.curriculum_id)}</td><td>ปี พ.ศ. ${esc(change.payload?.academicYear)}</td><td>${esc(change.status)}</td><td>
+                ${change.status === "pending" ? `<button class="link-btn" data-change-action="approve" data-change-id="${esc(change.change_id)}">อนุมัติ</button><button class="link-btn" data-change-action="reject" data-change-id="${esc(change.change_id)}">ปฏิเสธ</button>` : "-"}
+              </td></tr>`).join("")}</tbody>
+          </table></div>` : `<p class="audit-empty">ยังไม่มีรายการแก้ไข</p>`}
+        </section>
+      ` : ""}
 
       <section class="role-capability-card">
         <h2>${roleTitle}</h2>
@@ -3733,6 +3777,11 @@ function render() {
         if (state.view === "workflow" && canViewAuditLogs()) render();
       });
     }
+    if (state.view === "workflow" && !state.curriculumChangesLoaded) {
+      loadCurriculumChanges(program.curriculumId).then(() => {
+        if (state.view === "workflow") render();
+      });
+    }
   }
   if (state.view === "profile" && canAccessStudentProfile() && !state.studentProfile && !state.studentProfileLoading) {
     loadStudentProfile().then(() => {
@@ -3926,6 +3975,45 @@ function bind() {
         button.disabled = false;
         alert("เปลี่ยนสถานะหลักสูตรไม่สำเร็จ");
       }
+    };
+  });
+
+  const curriculumChangeForm = document.getElementById("curriculumChangeForm");
+  if (curriculumChangeForm) {
+    curriculumChangeForm.onsubmit = async event => {
+      event.preventDefault();
+      const program = PROGRAMS.find(item => item.id === state.programId);
+      const formData = new FormData(curriculumChangeForm);
+      const response = await fetch(`${API_BASE}/api/curriculum-changes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          curriculumId: program?.curriculumId,
+          operation: "update",
+          payload: { academicYear: Number(formData.get("academicYear")) },
+          username: state.user.username,
+          role: state.user.role
+        })
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) return alert(payload.error ?? "บันทึกฉบับร่างไม่สำเร็จ");
+      state.curriculumChangesLoaded = false;
+      loadCurriculumChanges(program?.curriculumId).then(() => render());
+    };
+  }
+
+  document.querySelectorAll("[data-change-action]").forEach(button => {
+    button.onclick = async () => {
+      const response = await fetch(`${API_BASE}/api/curriculum-changes/${encodeURIComponent(button.dataset.changeId)}/decision`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: button.dataset.changeAction, username: state.user.username, role: state.user.role })
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) return alert(payload.error ?? "ดำเนินการกับรายการแก้ไขไม่สำเร็จ");
+      state.curriculumChangesLoaded = false;
+      const program = PROGRAMS.find(item => item.id === state.programId);
+      loadCurriculumChanges(program?.curriculumId).then(() => render());
     };
   });
 
