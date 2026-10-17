@@ -113,6 +113,12 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/departments
             Method: GET
+        ListAuditLogs:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/audit-logs
+            Method: GET
 
 Outputs:
   ApiUrl:
