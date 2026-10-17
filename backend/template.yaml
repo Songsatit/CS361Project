@@ -54,6 +54,7 @@ Resources:
           - "*"
         AllowMethods:
           - GET
+          - POST
           - OPTIONS
         AllowHeaders:
           - content-type
@@ -119,6 +120,18 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/audit-logs
             Method: GET
+        GetCurriculumWorkflow:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/curricula/{curriculumId}/workflow
+            Method: GET
+        UpdateCurriculumWorkflow:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/curricula/{curriculumId}/workflow
+            Method: POST
 
 Outputs:
   ApiUrl:

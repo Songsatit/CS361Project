@@ -338,16 +338,109 @@ async function listAuditLogs(event) {
   return response(200, { data });
 }
 
+function requestBody(event) {
+  if (!event.body) return {};
+  const text = event.isBase64Encoded
+    ? Buffer.from(event.body, 'base64').toString('utf8')
+    : event.body;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function actorFromRequest(event, body = {}) {
+  const headers = event.headers ?? {};
+  const normalized = Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]),
+  );
+  return {
+    username: String(body.username ?? normalized['x-user'] ?? 'demo-user').slice(0, 100),
+    role: String(body.role ?? normalized['x-role'] ?? 'teacher').slice(0, 30),
+  };
+}
+
+async function getCurriculumWorkflow(event) {
+  const curriculumId = pathParameter(event, 'curriculumId');
+  if (!curriculumId) return response(400, { error: 'curriculumId is required' });
+  const rows = await queryRows(
+    `SELECT curriculum_id, status, updated_by, updated_role, updated_at
+       FROM curriculum_workflow
+      WHERE curriculum_id = ?`,
+    [curriculumId],
+  );
+  return response(200, { data: rows[0] ?? { curriculum_id: curriculumId, status: 'draft' } });
+}
+
+async function updateCurriculumWorkflow(event) {
+  const curriculumId = pathParameter(event, 'curriculumId');
+  const body = requestBody(event);
+  if (!curriculumId) return response(400, { error: 'curriculumId is required' });
+  if (!body) return response(400, { error: 'Request body must be valid JSON' });
+
+  const action = String(body.action ?? '').toLowerCase();
+  const nextStatus = {
+    submit: 'review',
+    review: 'review',
+    approve: 'approved',
+    reject: 'rejected',
+    reset: 'draft',
+  }[action];
+  if (!nextStatus) {
+    return response(400, { error: 'action must be submit, approve, reject, or reset' });
+  }
+
+  const actor = actorFromRequest(event, body);
+  if (!['teacher', 'staff'].includes(actor.role)) {
+    return response(403, { error: 'Only teacher or staff can update curriculum workflow' });
+  }
+
+  const current = await queryRows(
+    `SELECT curriculum_id, status, updated_by, updated_role, updated_at
+       FROM curriculum_workflow
+      WHERE curriculum_id = ?`,
+    [curriculumId],
+  );
+  const oldValue = current[0] ?? { curriculum_id: curriculumId, status: 'draft' };
+  await pool.execute(
+    `INSERT INTO curriculum_workflow
+      (curriculum_id, status, updated_by, updated_role)
+     VALUES (?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE status = VALUES(status), updated_by = VALUES(updated_by),
+       updated_role = VALUES(updated_role), updated_at = CURRENT_TIMESTAMP`,
+    [curriculumId, nextStatus, actor.username, actor.role],
+  );
+  const newValue = {
+    curriculum_id: curriculumId,
+    status: nextStatus,
+    updated_by: actor.username,
+    updated_role: actor.role,
+  };
+  await writeAuditLog({
+    username: actor.username,
+    role: actor.role,
+    action: `workflow_${action}`,
+    entityType: 'curriculum',
+    entityId: curriculumId,
+    oldValue,
+    newValue,
+  });
+  return response(200, { data: newValue });
+}
+
 export const handler = async (event) => {
   try {
     const method = event.requestContext?.http?.method ?? event.httpMethod;
     const route = event.routeKey ?? `${method} ${event.rawPath ?? event.path ?? ''}`;
 
+    if (route === 'POST /api/curricula/{curriculumId}/workflow') return await updateCurriculumWorkflow(event);
     if (method !== 'GET') return response(405, { error: 'Method not allowed' });
     if (route === 'GET /api/courses') return await listCourses(event);
     if (route.endsWith('/prerequisites') && route.startsWith('GET /api/courses/')) return await listPrerequisites(event);
     if (route === 'GET /api/courses/{courseCode}' || route.startsWith('GET /api/courses/')) return await getCourse(event);
     if (route === 'GET /api/curricula/{curriculumId}/graduation-conditions') return await listGraduationConditions(event);
+    if (route === 'GET /api/curricula/{curriculumId}/workflow') return await getCurriculumWorkflow(event);
     if (route === 'GET /api/study-plans') return await listStudyPlans(event);
     if (route === 'GET /api/study-plans/{studyPlanId}') return await getStudyPlan(event);
     if (route === 'GET /api/faculties') return await listFaculties();

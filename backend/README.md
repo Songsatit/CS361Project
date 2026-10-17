@@ -53,6 +53,10 @@ Script จะดึง Faculty, Department และ Course Catalog แล้ว
 | `GET /api/faculties` | List faculties. |
 | `GET /api/departments` | List departments. Optional `facultyId` filters by faculty. |
 | `GET /api/audit-logs` | List recent audit logs. Optional `limit` (1–500, default 100). |
+| `GET /api/curricula/{curriculumId}/workflow` | Read the curriculum workflow status. |
+| `POST /api/curricula/{curriculumId}/workflow` | Demo teacher/staff workflow action (`submit`, `approve`, `reject`, `reset`) and write an audit log. |
+
+The workflow endpoint currently uses the V3 mock identity (`username` and `role` in the JSON body, or `x-user`/`x-role` headers). It is for the demo only; production should validate the TU Auth token in the backend before allowing mutations.
 
 Successful responses use `{ "data": ... }`; list endpoints return an array in `data`. A missing course returns 404. Unexpected database or schema errors return a generic 500 response and are logged in CloudWatch.
 
