@@ -230,6 +230,35 @@
   font: inherit;
 }
 
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0;
+  color: #999;
+  font-size: 13px;
+}
+
+.login-divider::before,
+.login-divider::after {
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+  content: "";
+}
+
+.login-section-title {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 16px;
+}
+
+.login-submit--secondary {
+  color: #c9003d;
+  background: #fff;
+  border: 1px solid #c9003d;
+}
+
 .login-demo-accounts {
   display: grid;
   gap: 4px;
@@ -1114,6 +1143,258 @@
   font-size: 12px;
   color: var(--text-faint);
   flex-shrink: 0;
+}
+
+/* ---- curriculum workflow ---- */
+.workflow-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin: 18px 0;
+  padding: 16px 20px;
+  border: 1px solid #f0d7df;
+  border-left: 4px solid #c9003d;
+  border-radius: 14px;
+  background: #fffafa;
+}
+
+.workflow-panel > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.workflow-kicker {
+  color: #c9003d;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.workflow-panel strong {
+  color: #252525;
+  font-size: 16px;
+}
+
+.workflow-panel small,
+.workflow-readonly {
+  color: #777;
+  font-size: 13px;
+}
+
+.workflow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.workflow-action {
+  border: 1px solid #c9003d;
+  border-radius: 999px;
+  padding: 8px 14px;
+  color: #c9003d;
+  background: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+
+.workflow-action--primary {
+  color: #fff;
+  background: #c9003d;
+}
+
+.workflow-action--danger {
+  border-color: #a33a3a;
+  color: #a33a3a;
+}
+
+.workflow-action--muted {
+  border-color: #bbb;
+  color: #666;
+}
+
+.workflow-action:disabled {
+  cursor: wait;
+  opacity: .6;
+}
+
+.workflow-page-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+  margin: 28px 0 20px;
+}
+
+.workflow-back {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 9px 15px;
+  color: var(--text);
+  background: #fff;
+  cursor: pointer;
+  font: inherit;
+}
+
+.workflow-detail-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 28px;
+  border: 1px solid #f0d7df;
+  border-radius: 18px;
+  background: #fffafa;
+}
+
+.workflow-current-status {
+  display: grid;
+  gap: 6px;
+}
+
+.workflow-current-status > span {
+  color: #777;
+  font-size: 13px;
+}
+
+.workflow-current-status strong {
+  color: #c9003d;
+  font-size: 28px;
+}
+
+.workflow-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.workflow-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: #777;
+  background: #fff;
+}
+
+.workflow-step span {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 50%;
+  background: #f4f4f4;
+}
+
+.workflow-step--active {
+  border-color: #c9003d;
+  color: #c9003d;
+}
+
+.workflow-step--active span {
+  color: #fff;
+  background: #c9003d;
+}
+
+.workflow-step--rejected {
+  border-color: #a33a3a;
+  color: #a33a3a;
+}
+
+.role-capability-card,
+.audit-log-card {
+  margin-top: 20px;
+  padding: 22px 26px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fff;
+}
+
+.role-capability-card h2,
+.audit-log-card h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+
+.role-capability-card ul {
+  margin: 0;
+  padding-left: 20px;
+  color: #555;
+  line-height: 1.8;
+}
+
+.audit-log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.audit-log-head span {
+  color: #c9003d;
+  font-size: 13px;
+}
+
+.audit-log-table-wrap {
+  overflow-x: auto;
+}
+
+.audit-log-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.audit-log-table th,
+.audit-log-table td {
+  padding: 11px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.audit-log-table th {
+  color: #777;
+  font-weight: 600;
+}
+
+.audit-log-table small {
+  display: block;
+  color: #999;
+}
+
+.audit-empty {
+  color: #777;
+  font-size: 14px;
+}
+
+@media (max-width: 640px) {
+  .workflow-page-head,
+  .workflow-detail-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .workflow-steps {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .workflow-panel {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .workflow-actions {
+    justify-content: flex-start;
+  }
 }
 
 /* ---- graduation conditions ---- */

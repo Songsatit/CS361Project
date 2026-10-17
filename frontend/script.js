@@ -1274,6 +1274,10 @@ const API_BASE = "https://qowe6iixr6.execute-api.us-east-1.amazonaws.com";
 const CURRICULUM_ID = "BSC-CS-2566";
 const COURSE_CATALOG_API = "https://script.google.com/a/macros/dome.tu.ac.th/s/AKfycbw75ktHQ9wrWMNcMBq1rd0OnNCi3OOJwwNS0kTT5OQDYGiBA1Up7B-Ufbhtu603HZcZ/exec";
 const courseDetailRequests = new Map();
+const workflowRequests = new Map();
+const workflowCache = new Map();
+const auditLogRequests = new Map();
+const auditLogCache = new Map();
 
 const MOCK_USERS = {
   teacher: { password: "teacher123", role: "teacher", roleLabel: "อาจารย์", name: "ผู้ใช้งานอาจารย์" },
@@ -1300,6 +1304,161 @@ function mockLogin(username, password) {
 function mockLogout() {
   state.user = null;
   localStorage.removeItem("cs361-v3-user");
+}
+
+async function loadCurriculumWorkflow(curriculumId) {
+  if (!curriculumId) return null;
+  if (workflowRequests.has(curriculumId)) return workflowRequests.get(curriculumId);
+  const request = fetch(`${API_BASE}/api/curricula/${encodeURIComponent(curriculumId)}/workflow`)
+    .then(async response => {
+      if (!response.ok) throw new Error(`Workflow API returned ${response.status}`);
+      const payload = await response.json();
+      const workflow = payload?.data ?? { curriculum_id: curriculumId, status: "draft" };
+      workflowCache.set(curriculumId, workflow);
+      return workflow;
+    })
+    .catch(error => {
+      console.warn(`Workflow unavailable for ${curriculumId}.`, error);
+      const fallback = { curriculum_id: curriculumId, status: "draft" };
+      workflowCache.set(curriculumId, fallback);
+      return fallback;
+    });
+  workflowRequests.set(curriculumId, request);
+  return request;
+}
+
+async function loadAuditLogs() {
+  if (auditLogRequests.has("recent")) return auditLogRequests.get("recent");
+  const request = fetch(`${API_BASE}/api/audit-logs?limit=50`)
+    .then(async response => {
+      if (!response.ok) throw new Error(`Audit API returned ${response.status}`);
+      const payload = await response.json();
+      const logs = payload?.data ?? [];
+      auditLogCache.set("recent", logs);
+      return logs;
+    })
+    .catch(error => {
+      console.warn("Audit Log unavailable.", error);
+      auditLogCache.set("recent", []);
+      return [];
+    });
+  auditLogRequests.set("recent", request);
+  return request;
+}
+
+const workflowStatusLabels = {
+  draft: "ฉบับร่าง",
+  review: "รอตรวจสอบ",
+  approved: "อนุมัติแล้ว",
+  rejected: "ถูกตีกลับ"
+};
+
+function renderWorkflowPanel(program) {
+  if (!state.user) return "";
+  const workflow = workflowCache.get(program.curriculumId) ?? { status: "draft" };
+  const canManage = ["teacher", "staff"].includes(state.user?.role);
+  const status = workflow.status ?? "draft";
+  const actionButtons = `
+    <button class="workflow-action ${canManage ? "workflow-action--primary" : ""}"
+      data-go="workflow" data-id="${esc(program.id)}">
+      ${canManage ? "ตรวจสอบข้อมูลหลักสูตร" : "ดูสถานะข้อมูลหลักสูตร"}
+    </button>
+  `;
+
+  return `
+    <section class="workflow-panel" aria-label="สถานะการตรวจสอบหลักสูตร">
+      <div>
+        <span class="workflow-kicker">V3 การตรวจสอบข้อมูลหลักสูตร</span>
+        <strong>สถานะหลักสูตร: ${esc(workflowStatusLabels[status] ?? status)}</strong>
+        <small>${workflow.updated_by ? `แก้ไขล่าสุดโดย ${esc(workflow.updated_by)}` : "ยังไม่มีการส่งตรวจสอบ"}</small>
+      </div>
+      ${actionButtons}
+    </section>
+  `;
+}
+
+function renderWorkflowPage() {
+  if (!state.user) return renderLogin();
+  const program = PROGRAMS.find(item => item.id === state.programId) || PROGRAMS[0];
+  const workflow = workflowCache.get(program.curriculumId) ?? { status: "draft" };
+  const status = workflow.status ?? "draft";
+  const isStaff = state.user.role === "staff";
+  const auditLogs = auditLogCache.get("recent") ?? [];
+
+  return `
+    <div class="page workflow-page">
+      ${crumbs([
+        { label: "หน้าแรก", view: "home" },
+        { label: "หลักสูตรทั้งหมด", view: "programs" },
+        { label: program.code, view: "program" },
+        { label: "ตรวจสอบข้อมูลหลักสูตร" }
+      ])}
+
+      <div class="workflow-page-head">
+        <div>
+          <span class="workflow-kicker">V3 การตรวจสอบข้อมูลหลักสูตร</span>
+          <h1 class="page-title">ตรวจสอบหลักสูตร</h1>
+          <p class="page-sub">${esc(program.code)} · ${esc(program.nameEn)}</p>
+        </div>
+        <button class="workflow-back" data-go="program" data-id="${esc(program.id)}">กลับไปหน้าหลักสูตร</button>
+      </div>
+
+      <section class="workflow-detail-card">
+        <div class="workflow-current-status">
+          <span>สถานะปัจจุบัน</span>
+          <strong>${esc(workflowStatusLabels[status] ?? status)}</strong>
+          <small>${workflow.updated_by ? `แก้ไขล่าสุดโดย ${esc(workflow.updated_by)}` : "ยังไม่มีการส่งตรวจสอบ"}</small>
+        </div>
+        <p class="workflow-readonly">
+          ${isStaff
+            ? "เจ้าหน้าที่มีสิทธิ์ตรวจสอบประวัติการเปลี่ยนแปลงข้อมูล"
+            : "อาจารย์มีสิทธิ์ตรวจสอบความถูกต้องของข้อมูลหลักสูตร"}
+        </p>
+      </section>
+
+      <section class="workflow-steps">
+        ${["draft", "review", "approved"].map(step => `
+          <div class="workflow-step ${step === status ? "workflow-step--active" : ""} ${status === "rejected" && step === "review" ? "workflow-step--rejected" : ""}">
+            <span>${step === "draft" ? "1" : step === "review" ? "2" : "3"}</span>
+            <strong>${esc(workflowStatusLabels[step])}</strong>
+          </div>
+        `).join("")}
+      </section>
+
+      <section class="role-capability-card">
+        <h2>${isStaff ? "สิทธิ์เจ้าหน้าที่" : "สิทธิ์อาจารย์"}</h2>
+        <ul>
+          <li>ดูหลักสูตร แผนการเรียน รายวิชา และเงื่อนไขการสำเร็จการศึกษา</li>
+          <li>ตรวจสอบสถานะของหลักสูตรและข้อมูลที่เผยแพร่</li>
+          ${isStaff ? "<li>ดูประวัติการเปลี่ยนแปลงข้อมูลจาก Audit Log</li>" : "<li>ตรวจสอบความถูกต้องของข้อมูลก่อนแจ้งเจ้าหน้าที่ฝ่ายวิชาการ</li>"}
+        </ul>
+      </section>
+
+      ${isStaff ? `
+        <section class="audit-log-card">
+          <div class="audit-log-head">
+            <h2>ประวัติการเปลี่ยนแปลง</h2>
+            <span>${auditLogs.length} รายการ</span>
+          </div>
+          ${auditLogs.length ? `
+            <div class="audit-log-table-wrap">
+              <table class="audit-log-table">
+                <thead><tr><th>ผู้ใช้งาน</th><th>การกระทำ</th><th>ข้อมูล</th><th>เวลา</th></tr></thead>
+                <tbody>${auditLogs.map(log => `
+                  <tr>
+                    <td>${esc(log.actor_username)}<small>${esc(log.actor_role)}</small></td>
+                    <td>${esc(log.action)}</td>
+                    <td>${esc(log.entity_id)}</td>
+                    <td>${esc(new Date(log.created_at).toLocaleString("th-TH"))}</td>
+                  </tr>
+                `).join("")}</tbody>
+              </table>
+            </div>
+          ` : `<p class="audit-empty">ยังไม่มีประวัติการเปลี่ยนแปลง</p>`}
+        </section>
+      ` : ""}
+    </div>
+  `;
 }
 
 function courseKey(value) {
@@ -2540,6 +2699,8 @@ function renderProgram() {
       </div>
 
 
+      ${renderWorkflowPanel(p)}
+
       ${content}
 
     </div>
@@ -3256,6 +3417,10 @@ function shell(content) {
       (
         id === "courses" &&
         state.view === "course"
+      ) ||
+      (
+        id === "workflow" &&
+        state.view === "workflow"
       );
 
 
@@ -3265,6 +3430,9 @@ function shell(content) {
     ["courses", "ค้นหารายวิชา"],
     ["faq", "คำถามที่พบบ่อย"]
   ];
+  if (state.user) {
+    nav.push(["workflow", "ตรวจสอบข้อมูลหลักสูตร", state.programId || PROGRAMS[0].id]);
+  }
 
 
   return `
@@ -3288,13 +3456,13 @@ function shell(content) {
 
         ${nav
       .map(
-        ([id, label]) => `
+        ([id, label, navItemId]) => `
               <button
                 class="topnav-item ${active(id)
             ? "topnav-item--active"
             : ""
           }"
-                data-go="${id}"
+                data-go="${id}" ${navItemId ? `data-id="${esc(navItemId)}"` : ""}
               >
                 ${label}
               </button>
@@ -3333,10 +3501,11 @@ function shell(content) {
 
               ${nav
         .map(
-          ([id, label]) => `
+          ([id, label, navItemId]) => `
                     <button
                       class="mobile-nav-item"
                       data-go="${id}"
+                      ${navItemId ? `data-id="${esc(navItemId)}"` : ""}
                     >
                       ${label}
                     </button>
@@ -3428,6 +3597,21 @@ function renderLogin() {
           <button class="login-submit" type="submit">เข้าสู่ระบบ</button>
         </form>
 
+        <div class="login-divider"><span>หรือ</span></div>
+
+        <form id="tuLoginForm" class="login-page-form">
+          <h2 class="login-section-title">นักศึกษา/บุคลากร มธ.</h2>
+          <label>
+            TU Username
+            <input name="username" autocomplete="username" required placeholder="รหัส TU" />
+          </label>
+          <label>
+            TU Password
+            <input name="password" type="password" autocomplete="current-password" required />
+          </label>
+          <button class="login-submit login-submit--secondary" type="submit">เข้าสู่ระบบด้วย TU API</button>
+        </form>
+
         <div class="login-demo-accounts">
           <strong>บัญชี Demo</strong>
           <span>อาจารย์: teacher / teacher123</span>
@@ -3449,7 +3633,8 @@ function render() {
     courses: renderCourses,
     course: renderCourse,
     faq: renderFaq,
-    login: renderLogin
+    login: renderLogin,
+    workflow: renderWorkflowPage
   };
 
 
@@ -3475,6 +3660,20 @@ function render() {
 
 
   bind();
+
+  if (state.view === "program" || state.view === "workflow") {
+    const program = PROGRAMS.find(item => item.id === state.programId) || PROGRAMS[0];
+    if (program?.curriculumId && !workflowCache.has(program.curriculumId)) {
+      loadCurriculumWorkflow(program.curriculumId).then(() => {
+        if ((state.view === "program" || state.view === "workflow") && state.programId === program.id) render();
+      });
+    }
+    if (state.view === "workflow" && state.user?.role === "staff" && !auditLogCache.has("recent")) {
+      loadAuditLogs().then(() => {
+        if (state.view === "workflow" && state.user?.role === "staff") render();
+      });
+    }
+  }
 }
 
 
@@ -3483,11 +3682,18 @@ function render() {
    ========================================================= */
 
 function go(v, id, addHistory = true) {
+  if (v === "workflow" && !state.user) {
+    state.loginError = "หน้านี้สำหรับอาจารย์และเจ้าหน้าที่เท่านั้น กรุณาเข้าสู่ระบบ";
+    state.view = "login";
+    render();
+    return;
+  }
+
   state.view = v;
 
-  if (v === "program") {
+  if (v === "program" || v === "workflow") {
     state.programId = id;
-    state.programTab = "overview";
+    if (v === "program") state.programTab = "overview";
   }
 
   if (v === "course") {
@@ -3582,6 +3788,68 @@ function bind() {
       go("home");
     };
   }
+
+  const tuLoginForm = document.getElementById("tuLoginForm");
+  if (tuLoginForm) {
+    tuLoginForm.onsubmit = async event => {
+      event.preventDefault();
+      const formData = new FormData(tuLoginForm);
+      const button = tuLoginForm.querySelector("button[type=submit]");
+      button.disabled = true;
+      state.loginError = "";
+      try {
+        const response = await fetch(`${API_BASE}/api/auth/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: String(formData.get("username") ?? ""),
+            password: String(formData.get("password") ?? "")
+          })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload.user) throw new Error(payload.error ?? "TU Login ไม่สำเร็จ");
+        state.user = payload.user;
+        localStorage.setItem("cs361-v3-user", JSON.stringify(state.user));
+        state.loginError = "";
+        go("home");
+      } catch (error) {
+        state.loginError = error.message || "TU Login ไม่สำเร็จ";
+        render();
+      } finally {
+        button.disabled = false;
+      }
+    };
+  }
+
+  document.querySelectorAll("[data-workflow-action]").forEach(button => {
+    button.onclick = async () => {
+      const program = PROGRAMS.find(item => item.id === state.programId);
+      if (!program?.curriculumId || !state.user) return;
+      button.disabled = true;
+      try {
+        const response = await fetch(
+          `${API_BASE}/api/curricula/${encodeURIComponent(program.curriculumId)}/workflow`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: button.dataset.workflowAction,
+              username: state.user.username,
+              role: state.user.role
+            })
+          }
+        );
+        if (!response.ok) throw new Error(`Workflow update failed: ${response.status}`);
+        const payload = await response.json();
+        workflowCache.set(program.curriculumId, payload?.data ?? { status: "draft" });
+        render();
+      } catch (error) {
+        console.error(error);
+        button.disabled = false;
+        alert("เปลี่ยนสถานะหลักสูตรไม่สำเร็จ");
+      }
+    };
+  });
 
 
   /* -------------------------

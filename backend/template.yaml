@@ -26,6 +26,13 @@ Parameters:
   LambdaExecutionRoleArn:
     Type: String
     Description: Existing IAM execution role ARN for Lambda
+  TuApplicationKey:
+    Type: String
+    NoEcho: true
+    Description: TU API Application-Key for Authentication Service
+  TuAuthUrl:
+    Type: String
+    Default: https://restapi.tu.ac.th/api/v1/auth/Ad/verify2
 
 Globals:
   Function:
@@ -43,6 +50,8 @@ Globals:
         DB_NAME: !Ref DbName
         DB_USER: !Ref DbUser
         DB_PASSWORD: !Ref DbPassword
+        TU_APPLICATION_KEY: !Ref TuApplicationKey
+        TU_AUTH_URL: !Ref TuAuthUrl
 
 Resources:
   CurriculumApi:
@@ -66,6 +75,12 @@ Resources:
       CodeUri: .
       Handler: src/api.handler
       Events:
+        TuLogin:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/auth/login
+            Method: POST
         ListCourses:
           Type: HttpApi
           Properties:

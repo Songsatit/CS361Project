@@ -22,6 +22,60 @@ const queryRows = async (sql, params = []) => {
   return rows;
 };
 
+async function tuLogin(event) {
+  let body;
+  try {
+    body = JSON.parse(event.body ?? '{}');
+  } catch {
+    return response(400, { error: 'Request body must be valid JSON' });
+  }
+
+  const username = String(body.username ?? '').trim();
+  const password = String(body.password ?? '');
+  if (!username || !password) {
+    return response(400, { error: 'username and password are required' });
+  }
+  if (!process.env.TU_APPLICATION_KEY) {
+    console.error('TU_APPLICATION_KEY is not configured');
+    return response(503, { error: 'TU authentication is not configured' });
+  }
+
+  const authResponse = await fetch(
+    process.env.TU_AUTH_URL ?? 'https://restapi.tu.ac.th/api/v1/auth/Ad/verify2',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Application-Key': process.env.TU_APPLICATION_KEY,
+      },
+      body: JSON.stringify({ UserName: username, PassWord: password }),
+    },
+  );
+  const payload = await authResponse.json().catch(() => ({}));
+  if (!authResponse.ok || payload.status !== true) {
+    return response(authResponse.status === 401 || authResponse.status === 403 ? authResponse.status : 401, {
+      error: payload.message ?? 'TU authentication failed',
+    });
+  }
+
+  return response(200, {
+    user: {
+      username: payload.username ?? username,
+      displayNameTh: payload.displayname_th ?? '',
+      displayNameEn: payload.displayname_en ?? '',
+      email: payload.email ?? '',
+      type: payload.type ?? 'student',
+      role: payload.type === 'student' ? 'student' : 'employee',
+      roleLabel: payload.type === 'student' ? 'นักศึกษา' : 'บุคลากร',
+      tuStatus: payload.tu_status ?? null,
+      statusId: payload.statusid ?? null,
+      department: payload.department ?? null,
+      faculty: payload.faculty ?? null,
+      organization: payload.organization ?? null,
+    },
+  });
+}
+
 export async function writeAuditLog({
   username,
   role,
@@ -434,6 +488,7 @@ export const handler = async (event) => {
     const method = event.requestContext?.http?.method ?? event.httpMethod;
     const route = event.routeKey ?? `${method} ${event.rawPath ?? event.path ?? ''}`;
 
+    if (route === 'POST /api/auth/login') return await tuLogin(event);
     if (route === 'POST /api/curricula/{curriculumId}/workflow') return await updateCurriculumWorkflow(event);
     if (method !== 'GET') return response(405, { error: 'Method not allowed' });
     if (route === 'GET /api/courses') return await listCourses(event);
