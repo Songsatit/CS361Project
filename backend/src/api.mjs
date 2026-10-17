@@ -13,7 +13,10 @@ const pool = mysql.createPool({
 
 const response = (statusCode, body) => ({
   statusCode,
-  headers: { 'content-type': 'application/json; charset=utf-8' },
+  headers: {
+    'content-type': 'application/json; charset=utf-8',
+    'Access-Control-Allow-Origin': '*',
+  },
   body: JSON.stringify(body),
 });
 
@@ -77,7 +80,10 @@ async function tuLogin(event) {
 }
 
 async function getStudentProfile(event) {
-  const studentId = String(event.queryStringParameters?.id ?? '').trim();
+  const query = event.queryStringParameters ?? Object.fromEntries(
+    new URLSearchParams(event.rawQueryString ?? ''),
+  );
+  const studentId = String(query.id ?? '').trim();
   if (!studentId) return response(400, { error: 'student id is required' });
   if (!process.env.TU_APPLICATION_KEY) {
     console.error('TU_APPLICATION_KEY is not configured');

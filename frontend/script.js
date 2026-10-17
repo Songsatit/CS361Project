@@ -1268,6 +1268,7 @@ const state = {
   user: null,
   studentProfile: null,
   studentProfileLoading: false,
+  studentProfileAttempted: false,
   studentProfileError: "",
   loginOpen: false,
   loginError: ""
@@ -1298,6 +1299,8 @@ function canAccessStudentProfile(user = state.user) {
 async function loadStudentProfile() {
   if (!canAccessStudentProfile() || !state.user?.username) return null;
   if (state.studentProfile) return state.studentProfile;
+  if (state.studentProfileAttempted) return null;
+  state.studentProfileAttempted = true;
   state.studentProfileLoading = true;
   state.studentProfileError = "";
   try {
@@ -3741,6 +3744,7 @@ function go(v, id, addHistory = true) {
 
   if (v === "profile") {
     state.studentProfile = null;
+    state.studentProfileAttempted = false;
     state.studentProfileError = "";
   }
 
@@ -3812,6 +3816,7 @@ function bind() {
       } else if (button.dataset.authAction === "logout") {
         mockLogout();
         state.studentProfile = null;
+        state.studentProfileAttempted = false;
         state.studentProfileError = "";
       }
       render();
