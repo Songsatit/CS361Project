@@ -105,16 +105,19 @@ async function getStudentProfile(event) {
     return response(profileResponse.status, { error: payload.message ?? 'Unable to load student profile' });
   }
 
+  const profile = payload.data ?? payload;
+
   return response(200, {
     data: {
-      studentId: payload.studentid ?? studentId,
-      displayNameTh: payload.displayname_th ?? '',
-      displayNameEn: payload.displayname_en ?? '',
-      statusId: payload.statsid ?? null,
-      statusName: payload.statusname ?? '',
-      levelName: payload.level_name ?? '',
-      faculty: payload.faculty ?? '',
-      department: payload.department ?? '',
+      studentId: profile.userName ?? profile.username ?? profile.studentid ?? studentId,
+      displayNameTh: profile.displayname_th ?? '',
+      displayNameEn: profile.displayname_en ?? '',
+      statusId: profile.statusid ?? profile.statsid ?? null,
+      statusName: profile.statusname ?? '',
+      levelName: profile.level_name ?? '',
+      faculty: profile.faculty ?? '',
+      department: profile.department ?? '',
+      email: profile.email ?? '',
     },
   });
 }
