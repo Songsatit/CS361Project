@@ -567,6 +567,10 @@
   min-width: 0;
 }
 
+.curriculum-selector--year-only {
+  grid-template-columns: minmax(280px, 1fr);
+}
+
 .curriculum-selector-icon {
   display: grid;
   place-items: center;
@@ -677,6 +681,49 @@
   margin: 5px 0 0;
   color: var(--text-faint);
   font-size: 13px;
+}
+
+.study-plan-picker {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  background: #fffaf5;
+  border: 1px solid #f0dfcf;
+  border-radius: 12px;
+}
+
+.study-plan-picker-field {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.study-plan-picker label {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.study-plan-picker .curriculum-selector-icon {
+  width: 36px;
+  height: 36px;
+  flex-basis: 36px;
+  font-size: 18px;
+}
+
+@media (max-width: 600px) {
+  .study-plan-picker {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
 }
 
 .term-course-row--requirement {

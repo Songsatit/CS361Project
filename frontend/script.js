@@ -856,6 +856,7 @@ const PROGRAMS = [
     code: "วท.บ. วิทยาการคอมพิวเตอร์และสารสนเทศ",
     nameEn: "Computer and Information Science",
     revisionYear: 2566,
+    curriculumId: "BSC-CS-2566",
     pathwayId: "BSC-CS-2566-CIS",
     faculty: "คณะวิทยาศาสตร์และเทคโนโลยี",
     duration: "หลักสูตร 4 ปี",
@@ -1013,6 +1014,7 @@ const PROGRAMS = [
     code: "วท.บ. คอมพิวเตอร์เครือข่ายและความปลอดภัยทางไซเบอร์",
     nameEn: "Bachelor of Science Program in Computer Networks and Cybersecurity",
     revisionYear: 2568,
+    curriculumId: "BSC-CNC-2568",
     faculty: "คณะวิทยาศาสตร์และเทคโนโลยี",
     duration: "หลักสูตร 4 ปี",
     totalCredits: 126,
@@ -1164,10 +1166,28 @@ if (computerScienceProgram) {
     id: "acs",
     code: "วท.บ. คอมพิวเตอร์ประยุกต์",
     nameEn: "Applied Computer Science",
+    curriculumId: "BSC-CS-2566",
     pathwayId: "BSC-CS-2566-ACS",
     summary:
       "หลักสูตรคอมพิวเตอร์ประยุกต์ ฉบับ พ.ศ. 2566 มุ่งเน้นการประยุกต์ใช้ความรู้ด้านคอมพิวเตอร์และเทคโนโลยีดิจิทัลในการพัฒนาระบบและแก้ปัญหาในบริบทจริง"
   });
+
+  PROGRAMS.push(
+    {
+      ...computerScienceProgram,
+      id: "cis-2568",
+      revisionYear: 2568,
+      curriculumId: "BSC-CS-2568",
+      pathwayId: "BSC-CS-2568-CIS"
+    },
+    {
+      ...PROGRAMS.find(item => item.id === "acs"),
+      id: "acs-2568",
+      revisionYear: 2568,
+      curriculumId: "BSC-CS-2568",
+      pathwayId: "BSC-CS-2568-ACS"
+    }
+  );
 }
 
 
@@ -1328,7 +1348,7 @@ async function loadCourseDetail(code) {
 
 async function loadStudyPlans() {
   const response = await fetch(
-    `${API_BASE}/api/study-plans?curriculumId=${encodeURIComponent(CURRICULUM_ID)}`
+    `${API_BASE}/api/study-plans?active=true`
   );
   if (!response.ok) throw new Error(`Study plan API returned ${response.status}`);
   const payload = await response.json();
@@ -1398,15 +1418,15 @@ function studyPlanLabel(planId, planName) {
 }
 
 function studyPlanMajorLabel(program) {
-  if (program.id === "acs") return "วิชาเอกคอมพิวเตอร์ประยุกต์";
-  if (program.id === "cis") return "วิชาเอกคอมพิวเตอร์และวิทยาการสารสนเทศ";
+  if (program.pathwayId?.endsWith("-ACS")) return "วิชาเอกคอมพิวเตอร์ประยุกต์";
+  if (program.pathwayId?.endsWith("-CIS")) return "วิชาเอกคอมพิวเตอร์และวิทยาการสารสนเทศ";
   return program.code;
 }
 
 async function loadApiData() {
   try {
     const coursesResponse = await fetch(
-      `${API_BASE}/api/courses?curriculumId=${encodeURIComponent(CURRICULUM_ID)}&limit=500`
+      `${API_BASE}/api/courses?limit=500`
     );
 
     if (!coursesResponse.ok) {
@@ -1460,26 +1480,25 @@ async function loadApiData() {
       }));
     }
 
-    const conditionsResponse = await fetch(
-      `${API_BASE}/api/curricula/${encodeURIComponent(CURRICULUM_ID)}/graduation-conditions`
-    );
-
-    if (!conditionsResponse.ok) {
-      throw new Error(`Graduation conditions API returned ${conditionsResponse.status}`);
-    }
-
-    const conditionsPayload = await conditionsResponse.json();
-    const conditions = (conditionsPayload?.data ?? [])
-      .map(condition => condition.condition_text)
-      .filter(Boolean);
-
-    if (conditions.length) {
+    const curriculumIds = [...new Set(
+      PROGRAMS.map(program => program.curriculumId).filter(Boolean)
+    )];
+    await Promise.all(curriculumIds.map(async curriculumId => {
+      const conditionsResponse = await fetch(
+        `${API_BASE}/api/curricula/${encodeURIComponent(curriculumId)}/graduation-conditions`
+      );
+      if (!conditionsResponse.ok) return;
+      const conditionsPayload = await conditionsResponse.json();
+      const conditions = (conditionsPayload?.data ?? [])
+        .map(condition => condition.condition_text)
+        .filter(Boolean);
+      if (!conditions.length) return;
       PROGRAMS
-        .filter(item => item.revisionYear === 2566)
-        .forEach(item => {
-          item.conditions = conditions;
+        .filter(program => program.curriculumId === curriculumId)
+        .forEach(program => {
+          program.conditions = conditions;
         });
-    }
+    }));
 
     await loadStudyPlans();
   } catch (error) {
@@ -1625,14 +1644,17 @@ function crumbs(items) {
    ========================================================= */
 
 function programCard(p) {
+  const versions = programVersions(p);
+  const latest = versions[versions.length - 1] ?? p;
+
   return `
     <button
       class="program-card"
       data-go="program"
-      data-id="${p.id}"
+      data-id="${latest.id}"
     >
 
-      ${seal(p.revisionYear)}
+      ${seal(latest.revisionYear)}
 
       <div class="program-card-body">
 
@@ -1641,23 +1663,27 @@ function programCard(p) {
         </div>
 
         <h3>
-          ${esc(p.code)}
+          ${esc(latest.code)}
         </h3>
 
         <div class="program-card-en">
-          ${esc(p.nameEn)}
+          ${esc(latest.nameEn)}
         </div>
 
         <div class="program-card-stats">
 
           <span>
             ${icon("graduation-cap", 14)}
-            ${esc(p.duration)}
+            ${esc(latest.duration)}
           </span>
 
           <span>
-            ${courseCode(p.totalCredits + " นก.")}
+            ${courseCode(latest.totalCredits + " นก.")}
           </span>
+
+          ${versions.length > 1 ? `
+            <span class="program-card-years">พ.ศ. ${versions.map(version => version.revisionYear).join(" / ")}</span>
+          ` : ""}
 
         </div>
 
@@ -1667,6 +1693,27 @@ function programCard(p) {
 
     </button>
   `;
+}
+
+function programFamilyKey(program) {
+  if (program.pathwayId?.endsWith("-ACS")) return "acs";
+  if (program.pathwayId?.endsWith("-CIS")) return "cis";
+  return program.id;
+}
+
+function programVersions(program) {
+  return PROGRAMS
+    .filter(item => programFamilyKey(item) === programFamilyKey(program))
+    .sort((a, b) => a.revisionYear - b.revisionYear);
+}
+
+function programFamilies() {
+  const groups = new Map();
+  PROGRAMS.forEach(program => {
+    const key = programFamilyKey(program);
+    if (!groups.has(key)) groups.set(key, program);
+  });
+  return [...groups.values()];
 }
 
 
@@ -1857,7 +1904,7 @@ function renderHome() {
 
         <div class="program-grid">
 
-          ${PROGRAMS
+          ${programFamilies()
       .map(programCard)
       .join("")}
 
@@ -1953,7 +2000,7 @@ function renderPrograms() {
 
       <div class="program-grid program-grid--wide">
 
-        ${PROGRAMS
+        ${programFamilies()
       .map(programCard)
       .join("")}
 
@@ -2005,7 +2052,8 @@ function renderProgram() {
     programId: p.id
   }));
 
-  const curriculumYears = [p.revisionYear];
+  const versions = programVersions(p);
+  const curriculumYears = versions.map(version => version.revisionYear);
 
   const activePlanId = p.activeStudyPlanId || `${p.id}-default`;
   const planCourses = (p.plan ?? []).flatMap(term => term.courses ?? []);
@@ -2132,6 +2180,52 @@ function renderProgram() {
         <div class="study-plan-heading">
           <h2>${esc(studyPlanMajorLabel(p))} — ${esc(p.studyPlans?.find(plan => plan.id === activePlanId)?.label ?? "แผนหลัก")}</h2>
           <p>แผนการศึกษาจากหลักสูตรปรับปรุง พ.ศ. ${esc(p.revisionYear)}</p>
+        </div>
+
+        <div class="study-plan-picker" aria-label="เลือกแผนการเรียนและปีหลักสูตร">
+          <div class="study-plan-picker-field">
+            <span class="curriculum-selector-icon">▣</span>
+            <label for="studyPlanSelect">
+              แผนการเรียนที่เลือก
+              <select id="studyPlanSelect" class="curriculum-select" data-study-plan-select>
+                ${studyPlanChoices.map(choice => `
+                  <option value="${esc(choice.id)}" ${choice.id === activePlanId ? "selected" : ""}>
+                    ${esc(choice.label)}
+                  </option>
+                `).join("")}
+              </select>
+            </label>
+          </div>
+          <div class="study-plan-picker-field">
+            <span class="curriculum-selector-icon">◷</span>
+            <label for="curriculumYearSelect">
+              ปีหลักสูตร
+              <select id="curriculumYearSelect" class="curriculum-select" data-curriculum-year ${curriculumYears.length === 1 ? "disabled" : ""}>
+                ${curriculumYears.map(year => `
+                  <option value="${year}" ${year === p.revisionYear ? "selected" : ""}>${year}</option>
+                `).join("")}
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div class="study-plan-stats">
+          <div class="study-plan-stat">
+            <span class="study-plan-stat-icon">▤</span>
+            <span><small>รายวิชา/ข้อกำหนด</small><strong>${planCourses.length} รายการ</strong></span>
+          </div>
+          <div class="study-plan-stat">
+            <span class="study-plan-stat-icon">▦</span>
+            <span><small>จำนวนปี</small><strong>${years.length} ปี</strong></span>
+          </div>
+          <div class="study-plan-stat">
+            <span class="study-plan-stat-icon">▥</span>
+            <span><small>จำนวนภาคการศึกษา</small><strong>${p.plan.length} ภาค</strong></span>
+          </div>
+          <div class="study-plan-stat">
+            <span class="study-plan-stat-icon">▣</span>
+            <span><small>จำนวนหน่วยกิตทั้งหมด</small><strong>${planCredits} หน่วยกิต</strong></span>
+          </div>
         </div>
 
         <div class="year-tabs">
@@ -2364,55 +2458,6 @@ function renderProgram() {
     }
   ])}
 
-
-      <div class="curriculum-selector" aria-label="เลือกแผนหลักสูตร">
-        <div class="curriculum-selector-item">
-          <span class="curriculum-selector-icon">▣</span>
-          <label for="studyPlanSelect">
-            แผนการเรียน
-            <select id="studyPlanSelect" class="curriculum-select" data-study-plan-select>
-              ${studyPlanChoices.map(choice => `
-                <option value="${esc(choice.id)}" ${choice.id === activePlanId ? "selected" : ""}>
-                  ${esc(choice.label)}
-                </option>
-              `).join("")}
-            </select>
-          </label>
-        </div>
-
-        <div class="curriculum-selector-item">
-          <span class="curriculum-selector-icon">◷</span>
-          <label for="curriculumYearSelect">
-            ปีหลักสูตร
-            <select id="curriculumYearSelect" class="curriculum-select" data-curriculum-year ${curriculumYears.length === 1 ? "disabled" : ""}>
-              ${curriculumYears.map(year => `
-                <option value="${year}" ${year === p.revisionYear ? "selected" : ""}>${year}</option>
-              `).join("")}
-            </select>
-          </label>
-        </div>
-      </div>
-
-      ${state.programTab === "plan" ? `
-        <div class="study-plan-stats">
-          <div class="study-plan-stat">
-            <span class="study-plan-stat-icon">▤</span>
-            <span><small>รายวิชา/ข้อกำหนด</small><strong>${planCourses.length} รายการ</strong></span>
-          </div>
-          <div class="study-plan-stat">
-            <span class="study-plan-stat-icon">▦</span>
-            <span><small>จำนวนปี</small><strong>${years.length} ปี</strong></span>
-          </div>
-          <div class="study-plan-stat">
-            <span class="study-plan-stat-icon">▥</span>
-            <span><small>จำนวนภาคการศึกษา</small><strong>${p.plan.length} ภาค</strong></span>
-          </div>
-          <div class="study-plan-stat">
-            <span class="study-plan-stat-icon">▣</span>
-            <span><small>จำนวนหน่วยกิตทั้งหมด</small><strong>${planCredits} หน่วยกิต</strong></span>
-          </div>
-        </div>
-      ` : ""}
 
       <div class="program-header">
 
@@ -3764,7 +3809,6 @@ function bind() {
         if (!program || !selected) return;
         program.activeStudyPlanId = selected.id;
         program.plan = selected.plan;
-        state.year = 1;
         syncHistoryState();
         render();
       };
@@ -3803,7 +3847,6 @@ function bind() {
       if (!choice && select.value.endsWith("-default")) {
         state.programId = program.id;
         state.programTab = "plan";
-        state.year = 1;
         syncHistoryState();
         render();
         return;
@@ -3814,7 +3857,6 @@ function bind() {
       program.activeStudyPlanId = choice.id;
       program.plan = choice.plan;
       state.programTab = "plan";
-      state.year = 1;
       syncHistoryState();
       render();
     };
@@ -3822,13 +3864,13 @@ function bind() {
 
   document.querySelectorAll("[data-curriculum-year]").forEach(select => {
     select.onchange = () => {
-      const nextProgram = PROGRAMS.find(
+      const currentProgram = PROGRAMS.find(program => program.id === state.programId) || PROGRAMS[0];
+      const nextProgram = programVersions(currentProgram).find(
         program => String(program.revisionYear) === select.value
       );
       if (!nextProgram) return;
       state.programId = nextProgram.id;
       state.programTab = "plan";
-      state.year = 1;
       syncHistoryState();
       render();
     };
