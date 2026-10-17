@@ -1304,6 +1304,21 @@ async function loadStudentProfile() {
   state.studentProfileLoading = true;
   state.studentProfileError = "";
   try {
+    // TU Authentication response already contains the student's basic profile.
+    // Use it when Student Info API access is not enabled for the current key.
+    if (state.user.displayNameTh || state.user.email || state.user.faculty || state.user.department) {
+      state.studentProfile = {
+        studentId: state.user.username,
+        displayNameTh: state.user.displayNameTh,
+        displayNameEn: state.user.displayNameEn,
+        statusName: state.user.tuStatus,
+        statusId: state.user.statusId,
+        faculty: state.user.faculty,
+        department: state.user.department,
+        email: state.user.email,
+      };
+      return state.studentProfile;
+    }
     const response = await fetch(`${API_BASE}/api/profile/student?id=${encodeURIComponent(state.user.username)}`);
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error ?? `Profile API returned ${response.status}`);
@@ -1501,9 +1516,9 @@ function renderStudentProfile() {
     <div class="page profile-page">
       ${crumbs([{ label: "หน้าแรก", view: "home" }, { label: "ข้อมูลส่วนตัว" }])}
       <div class="profile-page-head">
-        <span class="workflow-kicker">ข้อมูลจาก TU Student API</span>
+        <span class="workflow-kicker">ข้อมูลจาก TU Authentication API</span>
         <h1 class="page-title">ข้อมูลส่วนตัว</h1>
-        <p class="page-sub">ข้อมูลพื้นฐานของนักศึกษาจากระบบมหาวิทยาลัยธรรมศาสตร์</p>
+        <p class="page-sub">ข้อมูลพื้นฐานจากบัญชีมหาวิทยาลัยธรรมศาสตร์ที่ใช้เข้าสู่ระบบ</p>
       </div>
       ${state.studentProfileLoading ? `<section class="profile-card"><p>กำลังโหลดข้อมูล...</p></section>` : ""}
       ${state.studentProfileError ? `<section class="profile-card"><p class="login-error">${esc(state.studentProfileError)}</p></section>` : ""}
@@ -1519,7 +1534,8 @@ function renderStudentProfile() {
               ["สถานะ", profile.statusName],
               ["ระดับการศึกษา", profile.levelName],
               ["คณะ", profile.faculty],
-              ["สาขา", profile.department]
+              ["สาขา", profile.department],
+              ["อีเมล", profile.email]
             ].map(([label, value]) => `<div class="profile-field"><span>${label}</span><strong>${esc(value || "ไม่ระบุ")}</strong></div>`).join("")}
           </div>
         </section>
