@@ -1455,6 +1455,7 @@ function renderWorkflowPage() {
       ? "สิทธิ์เจ้าหน้าที่"
       : "สิทธิ์อาจารย์ผู้สอน";
   const auditLogs = auditLogCache.get("recent") ?? [];
+  const pendingChanges = state.curriculumChanges.filter(item => item.status === "pending");
 
   return `
     <div class="page workflow-page">
@@ -1523,14 +1524,14 @@ function renderWorkflowPage() {
 
       ${canAudit ? `
         <section class="audit-log-card curriculum-change-list">
-          <div class="audit-log-head"><h2>รายการแก้ไขที่รอตรวจสอบ</h2><span>${state.curriculumChanges.filter(item => item.status === "pending").length} รายการ</span></div>
-          ${state.curriculumChanges.length ? `<div class="audit-log-table-wrap"><table class="audit-log-table">
+          <div class="audit-log-head"><h2>รายการแก้ไขที่รอตรวจสอบ</h2><span>${pendingChanges.length} รายการ</span></div>
+          ${pendingChanges.length ? `<div class="audit-log-table-wrap"><table class="audit-log-table">
             <thead><tr><th>หลักสูตร</th><th>การแก้ไข</th><th>สถานะ</th><th>การดำเนินการ</th></tr></thead>
-            <tbody>${state.curriculumChanges.map(change => `
+            <tbody>${pendingChanges.map(change => `
               <tr><td>${esc(change.curriculum_id)}</td><td>${change.payload?.changeType === "course_replace" ? `เปลี่ยน ${esc(change.payload.curriculumCourseId)} เป็น ${esc(change.payload.newCourseCode)}` : `ปี พ.ศ. ${esc(change.payload?.academicYear)}`}</td><td>${esc(change.status)}</td><td>
-                ${change.status === "pending" ? `<button class="link-btn" data-change-action="approve" data-change-id="${esc(change.change_id)}">อนุมัติ</button><button class="link-btn" data-change-action="reject" data-change-id="${esc(change.change_id)}">ปฏิเสธ</button>` : "-"}
+                <button class="link-btn" data-change-action="approve" data-change-id="${esc(change.change_id)}">อนุมัติ</button><button class="link-btn" data-change-action="reject" data-change-id="${esc(change.change_id)}">ปฏิเสธ</button>
               </td></tr>`).join("")}</tbody>
-          </table></div>` : `<p class="audit-empty">ยังไม่มีรายการแก้ไข</p>`}
+          </table></div>` : `<p class="audit-empty">ยังไม่มีรายการแก้ไขที่รอตรวจสอบ</p>`}
         </section>
       ` : ""}
 
