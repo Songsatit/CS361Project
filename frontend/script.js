@@ -1264,13 +1264,43 @@ const state = {
   faqQuery: "",
   openFaq: null,
 
-  homeQuery: ""
+  homeQuery: "",
+  user: null,
+  loginOpen: false,
+  loginError: ""
 };
 
 const API_BASE = "https://qowe6iixr6.execute-api.us-east-1.amazonaws.com";
 const CURRICULUM_ID = "BSC-CS-2566";
 const COURSE_CATALOG_API = "https://script.google.com/a/macros/dome.tu.ac.th/s/AKfycbw75ktHQ9wrWMNcMBq1rd0OnNCi3OOJwwNS0kTT5OQDYGiBA1Up7B-Ufbhtu603HZcZ/exec";
 const courseDetailRequests = new Map();
+
+const MOCK_USERS = {
+  teacher: { password: "teacher123", role: "teacher", roleLabel: "อาจารย์", name: "ผู้ใช้งานอาจารย์" },
+  staff: { password: "staff123", role: "staff", roleLabel: "เจ้าหน้าที่", name: "ผู้ใช้งานเจ้าหน้าที่" }
+};
+
+function restoreMockUser() {
+  try {
+    const saved = localStorage.getItem("cs361-v3-user");
+    state.user = saved ? JSON.parse(saved) : null;
+  } catch {
+    state.user = null;
+  }
+}
+
+function mockLogin(username, password) {
+  const account = MOCK_USERS[username.trim().toLowerCase()];
+  if (!account || account.password !== password) return false;
+  state.user = { username: username.trim().toLowerCase(), role: account.role, roleLabel: account.roleLabel, name: account.name };
+  localStorage.setItem("cs361-v3-user", JSON.stringify(state.user));
+  return true;
+}
+
+function mockLogout() {
+  state.user = null;
+  localStorage.removeItem("cs361-v3-user");
+}
 
 function courseKey(value) {
   return String(value ?? "").replace(/\s+/g, "");
@@ -3274,6 +3304,14 @@ function shell(content) {
 
       </nav>
 
+      <div class="auth-area">
+        ${state.user
+      ? `<button class="auth-user" data-auth-action="logout" title="ออกจากระบบ">
+            ${esc(state.user.roleLabel)} · ออกจากระบบ
+          </button>`
+      : `<button class="auth-btn" data-go="login">เข้าสู่ระบบ</button>`}
+      </div>
+
 
       <button
         class="menu-btn"
@@ -3312,6 +3350,23 @@ function shell(content) {
     }
 
     </header>
+
+    ${state.loginOpen ? `
+      <div class="login-backdrop" data-auth-action="close">
+        <section class="login-modal" role="dialog" aria-modal="true" aria-labelledby="loginTitle" data-login-modal>
+          <button class="login-close" type="button" data-auth-action="close" aria-label="ปิด">×</button>
+          <h2 id="loginTitle">เข้าสู่ระบบ</h2>
+          <p class="login-subtitle">สำหรับอาจารย์และเจ้าหน้าที่ (Mock Login)</p>
+          <form id="mockLoginForm">
+            <label>Username<input name="username" autocomplete="username" required placeholder="teacher หรือ staff" /></label>
+            <label>Password<input name="password" type="password" autocomplete="current-password" required placeholder="รหัสผ่าน" /></label>
+            ${state.loginError ? `<p class="login-error">${esc(state.loginError)}</p>` : ""}
+            <button class="login-submit" type="submit">เข้าสู่ระบบ</button>
+          </form>
+          <p class="login-hint">Guest สามารถดูหลักสูตรและรายวิชาได้โดยไม่ต้องเข้าสู่ระบบ</p>
+        </section>
+      </div>
+    ` : ""}
 
 
     <main class="main">
@@ -3352,6 +3407,39 @@ function shell(content) {
    RENDER
    ========================================================= */
 
+function renderLogin() {
+  return `
+    <div class="page login-page">
+      <div class="login-page-card">
+        <div class="login-page-icon">${icon("shield-check", 28)}</div>
+        <h1 class="page-title">เข้าสู่ระบบ</h1>
+        <p class="page-sub">สำหรับอาจารย์และเจ้าหน้าที่ใน V3</p>
+
+        <form id="mockLoginForm" class="login-page-form">
+          <label>
+            Username
+            <input name="username" autocomplete="username" required placeholder="teacher หรือ staff" />
+          </label>
+          <label>
+            Password
+            <input name="password" type="password" autocomplete="current-password" required placeholder="รหัสผ่าน" />
+          </label>
+          ${state.loginError ? `<p class="login-error">${esc(state.loginError)}</p>` : ""}
+          <button class="login-submit" type="submit">เข้าสู่ระบบ</button>
+        </form>
+
+        <div class="login-demo-accounts">
+          <strong>บัญชี Demo</strong>
+          <span>อาจารย์: teacher / teacher123</span>
+          <span>เจ้าหน้าที่: staff / staff123</span>
+        </div>
+
+        <button class="login-guest" data-go="home">เข้าใช้งานแบบ Guest โดยไม่ต้อง Login</button>
+      </div>
+    </div>
+  `;
+}
+
 function render() {
 
   const pages = {
@@ -3360,7 +3448,8 @@ function render() {
     program: renderProgram,
     courses: renderCourses,
     course: renderCourse,
-    faq: renderFaq
+    faq: renderFaq,
+    login: renderLogin
   };
 
 
@@ -3460,6 +3549,39 @@ function syncHistoryState() {
    ========================================================= */
 
 function bind() {
+
+  document.querySelectorAll("[data-auth-action]").forEach(button => {
+    button.onclick = event => {
+      if (button.dataset.authAction === "close" && event.target.closest("[data-login-modal]") && event.target !== button) return;
+      if (button.dataset.authAction === "open") {
+        state.loginOpen = true;
+        state.loginError = "";
+      } else if (button.dataset.authAction === "close") {
+        state.loginOpen = false;
+        state.loginError = "";
+      } else if (button.dataset.authAction === "logout") {
+        mockLogout();
+      }
+      render();
+    };
+  });
+
+  const loginForm = document.getElementById("mockLoginForm");
+  if (loginForm) {
+    loginForm.onsubmit = event => {
+      event.preventDefault();
+      const formData = new FormData(loginForm);
+      const valid = mockLogin(String(formData.get("username") ?? ""), String(formData.get("password") ?? ""));
+      if (!valid) {
+        state.loginError = "Username หรือ Password ไม่ถูกต้อง";
+        render();
+        return;
+      }
+      state.loginOpen = false;
+      state.loginError = "";
+      go("home");
+    };
+  }
 
 
   /* -------------------------
@@ -3917,6 +4039,7 @@ window.addEventListener("popstate", event => {
 });
 
 async function bootstrap() {
+  restoreMockUser();
   const pageState = history.state;
   if (pageState?.view) {
     state.view = pageState.view;
