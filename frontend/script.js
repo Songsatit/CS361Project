@@ -1270,6 +1270,7 @@ const state = {
   studentProfileLoading: false,
   studentProfileAttempted: false,
   studentProfileError: "",
+  accountMenuOpen: false,
   loginOpen: false,
   loginError: ""
 };
@@ -3552,9 +3553,19 @@ function shell(content) {
 
       <div class="auth-area">
         ${state.user
-      ? `<button class="auth-user" data-auth-action="logout" title="ออกจากระบบ">
-            ${esc(state.user.roleLabel)} · ออกจากระบบ
-          </button>`
+      ? `<div class="account-menu-wrap">
+          <button class="auth-user" data-auth-action="toggle-account" aria-expanded="${state.accountMenuOpen}" title="เมนูบัญชี">
+            ${esc(state.user.roleLabel)}
+            ${icon("chevron-down", 16)}
+          </button>
+          ${state.accountMenuOpen ? `<div class="account-menu" role="menu">
+            ${canAccessStudentProfile() ? `<button data-go="profile" role="menuitem">ข้อมูลส่วนตัว</button>` : ""}
+            <button data-go="programs" role="menuitem">หลักสูตร</button>
+            <button data-go="courses" role="menuitem">ค้นหารายวิชา</button>
+            ${canAccessCurriculumManagement() ? `<button data-go="workflow" data-id="${esc(state.programId || PROGRAMS[0].id)}" role="menuitem">ตรวจสอบข้อมูลหลักสูตร</button>` : ""}
+            <button data-auth-action="logout" role="menuitem" class="account-menu-logout">ออกจากระบบ</button>
+          </div>` : ""}
+        </div>`
       : `<button class="auth-btn" data-go="login">เข้าสู่ระบบ</button>`}
       </div>
 
@@ -3755,6 +3766,7 @@ function go(v, id, addHistory = true) {
   }
 
   state.navOpen = false;
+  state.accountMenuOpen = false;
 
   // เก็บหน้าปัจจุบันไว้ใน Browser History
   if (addHistory) {
@@ -3824,6 +3836,9 @@ function bind() {
         state.studentProfile = null;
         state.studentProfileAttempted = false;
         state.studentProfileError = "";
+        state.accountMenuOpen = false;
+      } else if (button.dataset.authAction === "toggle-account") {
+        state.accountMenuOpen = !state.accountMenuOpen;
       }
       render();
     };
