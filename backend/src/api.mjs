@@ -68,8 +68,8 @@ async function tuLogin(event) {
       displayNameEn: payload.displayname_en ?? '',
       email: payload.email ?? '',
       type: payload.type ?? 'student',
-      role: payload.type === 'student' ? 'student' : 'employee',
-      roleLabel: payload.type === 'student' ? 'นักศึกษา' : 'บุคลากร',
+      role: payload.type === 'student' ? 'student' : 'staff',
+      roleLabel: payload.type === 'student' ? 'นักศึกษา' : 'เจ้าหน้าที่',
       tuStatus: payload.tu_status ?? null,
       statusId: payload.statusid ?? null,
       department: payload.department ?? null,
@@ -468,7 +468,7 @@ function actorFromRequest(event, body = {}) {
   );
   return {
     username: String(body.username ?? normalized['x-user'] ?? 'demo-user').slice(0, 100),
-    role: String(body.role ?? normalized['x-role'] ?? 'teacher').slice(0, 30),
+    role: String(body.role ?? normalized['x-role'] ?? 'instructor').slice(0, 30),
   };
 }
 
@@ -503,8 +503,8 @@ async function updateCurriculumWorkflow(event) {
   }
 
   const actor = actorFromRequest(event, body);
-  if (!['teacher', 'staff'].includes(actor.role)) {
-    return response(403, { error: 'Only teacher or staff can update curriculum workflow' });
+  if (!['instructor', 'staff', 'curriculum_admin'].includes(actor.role)) {
+    return response(403, { error: 'Only instructor, staff, or curriculum admin can update curriculum workflow' });
   }
 
   const current = await queryRows(

@@ -1285,12 +1285,18 @@ const auditLogRequests = new Map();
 const auditLogCache = new Map();
 
 const MOCK_USERS = {
-  teacher: { password: "teacher123", role: "teacher", roleLabel: "อาจารย์", name: "ผู้ใช้งานอาจารย์" },
-  staff: { password: "staff123", role: "staff", roleLabel: "เจ้าหน้าที่", name: "ผู้ใช้งานเจ้าหน้าที่" }
+  teacher: { password: "teacher123", role: "instructor", roleLabel: "อาจารย์ผู้สอน", name: "ผู้ใช้งานอาจารย์" },
+  instructor: { password: "instructor123", role: "instructor", roleLabel: "อาจารย์ผู้สอน", name: "ผู้ใช้งานอาจารย์" },
+  staff: { password: "staff123", role: "staff", roleLabel: "เจ้าหน้าที่", name: "ผู้ใช้งานเจ้าหน้าที่" },
+  curriculumadmin: { password: "admin123", role: "curriculum_admin", roleLabel: "ผู้ดูแลข้อมูลหลักสูตร", name: "ผู้ดูแลข้อมูลหลักสูตร" }
 };
 
 function canAccessCurriculumManagement(user = state.user) {
-  return ["teacher", "staff"].includes(user?.role);
+  return ["instructor", "staff", "curriculum_admin"].includes(user?.role);
+}
+
+function canViewAuditLogs(user = state.user) {
+  return ["staff", "curriculum_admin"].includes(user?.role);
 }
 
 function canAccessStudentProfile(user = state.user) {
@@ -1398,7 +1404,7 @@ const workflowStatusLabels = {
 function renderWorkflowPanel(program) {
   if (!canAccessCurriculumManagement()) return "";
   const workflow = workflowCache.get(program.curriculumId) ?? { status: "draft" };
-  const canManage = ["teacher", "staff"].includes(state.user?.role);
+  const canManage = ["instructor", "staff", "curriculum_admin"].includes(state.user?.role);
   const status = workflow.status ?? "draft";
   const actionButtons = `
     <button class="workflow-action ${canManage ? "workflow-action--primary" : ""}"
@@ -1424,7 +1430,12 @@ function renderWorkflowPage() {
   const program = PROGRAMS.find(item => item.id === state.programId) || PROGRAMS[0];
   const workflow = workflowCache.get(program.curriculumId) ?? { status: "draft" };
   const status = workflow.status ?? "draft";
-  const isStaff = state.user.role === "staff";
+  const canAudit = canViewAuditLogs();
+  const roleTitle = state.user.role === "curriculum_admin"
+    ? "สิทธิ์ผู้ดูแลข้อมูลหลักสูตร"
+    : canAudit
+      ? "สิทธิ์เจ้าหน้าที่"
+      : "สิทธิ์อาจารย์ผู้สอน";
   const auditLogs = auditLogCache.get("recent") ?? [];
 
   return `
@@ -1452,7 +1463,7 @@ function renderWorkflowPage() {
           <small>${workflow.updated_by ? `แก้ไขล่าสุดโดย ${esc(workflow.updated_by)}` : "ยังไม่มีการส่งตรวจสอบ"}</small>
         </div>
         <p class="workflow-readonly">
-          ${isStaff
+          ${canAudit
             ? "เจ้าหน้าที่มีสิทธิ์ตรวจสอบประวัติการเปลี่ยนแปลงข้อมูล"
             : "อาจารย์มีสิทธิ์ตรวจสอบความถูกต้องของข้อมูลหลักสูตร"}
         </p>
@@ -1468,15 +1479,15 @@ function renderWorkflowPage() {
       </section>
 
       <section class="role-capability-card">
-        <h2>${isStaff ? "สิทธิ์เจ้าหน้าที่" : "สิทธิ์อาจารย์"}</h2>
+        <h2>${roleTitle}</h2>
         <ul>
           <li>ดูหลักสูตร แผนการเรียน รายวิชา และเงื่อนไขการสำเร็จการศึกษา</li>
           <li>ตรวจสอบสถานะของหลักสูตรและข้อมูลที่เผยแพร่</li>
-          ${isStaff ? "<li>ดูประวัติการเปลี่ยนแปลงข้อมูลจาก Audit Log</li>" : "<li>ตรวจสอบความถูกต้องของข้อมูลก่อนแจ้งเจ้าหน้าที่ฝ่ายวิชาการ</li>"}
+          ${canAudit ? "<li>ดูประวัติการเปลี่ยนแปลงข้อมูลจาก Audit Log</li>" : "<li>ตรวจสอบความถูกต้องของข้อมูลก่อนแจ้งเจ้าหน้าที่ฝ่ายวิชาการ</li>"}
         </ul>
       </section>
 
-      ${isStaff ? `
+      ${canAudit ? `
         <section class="audit-log-card">
           <div class="audit-log-head">
             <h2>ประวัติการเปลี่ยนแปลง</h2>
@@ -3717,9 +3728,9 @@ function render() {
         if ((state.view === "program" || state.view === "workflow") && state.programId === program.id) render();
       });
     }
-    if (state.view === "workflow" && state.user?.role === "staff" && !auditLogCache.has("recent")) {
+    if (state.view === "workflow" && canViewAuditLogs() && !auditLogCache.has("recent")) {
       loadAuditLogs().then(() => {
-        if (state.view === "workflow" && state.user?.role === "staff") render();
+        if (state.view === "workflow" && canViewAuditLogs()) render();
       });
     }
   }
