@@ -1274,7 +1274,9 @@ const state = {
   curriculumChangesLoaded: false,
   accountMenuOpen: false,
   loginOpen: false,
-  loginError: ""
+  loginError: "",
+  apiStatus: "loading",
+  apiError: ""
 };
 
 const API_BASE = "https://qowe6iixr6.execute-api.us-east-1.amazonaws.com";
@@ -1758,14 +1760,21 @@ function studyPlanMajorLabel(program) {
 }
 
 async function loadApiData() {
+  state.apiStatus = "loading";
+  state.apiError = "";
   try {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 10000);
     const coursesResponse = await fetch(
-      `${API_BASE}/api/courses?limit=500`
+      `${API_BASE}/api/courses?limit=500`,
+      { signal: controller.signal }
     );
+    window.clearTimeout(timeout);
 
     if (!coursesResponse.ok) {
       throw new Error(`Course API returned ${coursesResponse.status}`);
     }
+    state.apiStatus = "ok";
 
     const coursesPayload = await coursesResponse.json();
     const courses = coursesPayload?.data ?? [];
@@ -1836,6 +1845,10 @@ async function loadApiData() {
 
     await loadStudyPlans();
   } catch (error) {
+    state.apiStatus = "unavailable";
+    state.apiError = error?.name === "AbortError"
+      ? "API ใช้เวลาตอบกลับนานเกินไป"
+      : (error?.message || "ไม่สามารถเชื่อมต่อ API ได้");
     console.warn("Backend API unavailable; using bundled fallback data.", error);
   }
 }
@@ -3681,6 +3694,21 @@ function shell(content) {
       ${content}
     </main>
 
+    ${state.apiStatus === "unavailable" ? `
+      <div class="api-alert-backdrop" data-api-alert>
+        <section class="api-alert" role="alertdialog" aria-modal="true" aria-labelledby="api-alert-title">
+          <div class="api-alert-icon">${icon("triangle-alert", 28)}</div>
+          <h2 id="api-alert-title">เชื่อมต่อระบบข้อมูลไม่ได้</h2>
+          <p>ขณะนี้ REST API ไม่ตอบสนอง อาจเป็นเพราะ AWS Learner Lab ยังไม่ได้เปิดหรือ API หยุดทำงาน</p>
+          <p class="api-alert-detail">${esc(state.apiError)}</p>
+          <div class="api-alert-actions">
+            <button class="api-alert-retry" data-api-action="retry">ลองเชื่อมต่ออีกครั้ง</button>
+            <button class="api-alert-close" data-api-action="close">ดูข้อมูลสำรองต่อ</button>
+          </div>
+        </section>
+      </div>
+    ` : ""}
+
 
     <footer class="footer">
 
@@ -3894,6 +3922,22 @@ function syncHistoryState() {
    ========================================================= */
 
 function bind() {
+
+  document.querySelectorAll("[data-api-action]").forEach(button => {
+    button.onclick = async () => {
+      if (button.dataset.apiAction === "close") {
+        state.apiStatus = "fallback";
+        render();
+        return;
+      }
+      if (button.dataset.apiAction === "retry") {
+        state.apiStatus = "loading";
+        render();
+        await loadApiData();
+        render();
+      }
+    };
+  });
 
   document.querySelectorAll("[data-auth-action]").forEach(button => {
     button.onclick = event => {
