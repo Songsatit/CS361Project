@@ -75,7 +75,7 @@ sam build
 sam deploy --guided
 ```
 
-Provide `DbHost`, `DbName`, `DbUser`, `DbPassword`, `DbPort`, `VpcSubnetIds`, and `LambdaSecurityGroupId` when prompted. `DbPassword` is marked `NoEcho`. Do not put database credentials in source control or the SAM template. The stack output `ApiUrl` is the base URL to configure in the frontend.
+Provide `DbHost`, `DbInstanceIdentifier`, `DbName`, `DbUser`, `DbPassword`, `DbPort`, `VpcSubnetIds`, `LambdaSecurityGroupId`, and `RdsProxySecurityGroupId` when prompted. `DbPassword` is marked `NoEcho`. The deployment creates an RDS Proxy and points Lambda to its endpoint; the proxy security group must allow inbound TCP 3306 from the Lambda security group, and the RDS security group must allow TCP 3306 from the proxy security group. Use at least two subnets in different Availability Zones. Do not put database credentials in source control or the SAM template. The stack outputs `ApiUrl` and `RdsProxyEndpoint`.
 
 Example calls after deployment:
 

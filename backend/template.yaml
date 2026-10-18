@@ -1,11 +1,14 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: CS361 curriculum read API backed by Amazon RDS MySQL
+Description: CS361 curriculum read API backed by Amazon RDS MySQL through RDS Proxy
 
 Parameters:
   DbHost:
     Type: String
-    Description: RDS endpoint hostname (without port)
+    Description: RDS instance endpoint hostname (used by the proxy target)
+  DbInstanceIdentifier:
+    Type: String
+    Description: Existing RDS DB instance identifier to attach to the proxy
   DbName:
     Type: String
     Default: curriculum
@@ -23,6 +26,9 @@ Parameters:
   LambdaSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
     Description: Security group attached to Lambda; allow it in the RDS security group on port 3306
+  RdsProxySecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group for RDS Proxy; allow inbound MySQL from the Lambda security group
   LambdaExecutionRoleArn:
     Type: String
     Description: Existing IAM execution role ARN for Lambda
@@ -41,7 +47,7 @@ Globals:
     MemorySize: 256
     Environment:
       Variables:
-        DB_HOST: !Ref DbHost
+        DB_HOST: !GetAtt CurriculumDbProxy.Endpoint
         DB_PORT: !Ref DbPort
         DB_NAME: !Ref DbName
         DB_USER: !Ref DbUser
@@ -50,6 +56,58 @@ Globals:
         TU_AUTH_URL: !Ref TuAuthUrl
 
 Resources:
+  CurriculumDbSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Credentials used by the CS361 RDS Proxy
+      SecretString: !Sub '{"username":"${DbUser}","password":"${DbPassword}"}'
+
+  CurriculumDbProxyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: rds.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ReadCurriculumDbSecret
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref CurriculumDbSecret
+
+  CurriculumDbProxy:
+    Type: AWS::RDS::DBProxy
+    Properties:
+      DBProxyName: cs361-curriculum-proxy
+      EngineFamily: MYSQL
+      Auth:
+        - AuthScheme: SECRETS
+          IAMAuth: DISABLED
+          SecretArn: !Ref CurriculumDbSecret
+      RoleArn: !GetAtt CurriculumDbProxyRole.Arn
+      VpcSubnetIds: !Ref VpcSubnetIds
+      VpcSecurityGroupIds:
+        - !Ref RdsProxySecurityGroupId
+      RequireTLS: false
+
+  CurriculumDbProxyTargetGroup:
+    Type: AWS::RDS::DBProxyTargetGroup
+    Properties:
+      DBProxyName: !Ref CurriculumDbProxy
+      TargetGroupName: default
+      DBInstanceIdentifiers:
+        - !Ref DbInstanceIdentifier
+      ConnectionPoolConfigurationInfo:
+        MaxConnectionsPercent: 90
+        MaxIdleConnectionsPercent: 50
+
   CurriculumApi:
     Type: AWS::Serverless::HttpApi
     Properties:
@@ -184,3 +242,6 @@ Outputs:
   ApiUrl:
     Description: Base URL for the deployed HTTP API
     Value: !Sub "https://${CurriculumApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}"
+  RdsProxyEndpoint:
+    Description: RDS Proxy endpoint used by Lambda
+    Value: !GetAtt CurriculumDbProxy.Endpoint
