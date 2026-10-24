@@ -748,6 +748,20 @@ async function decideDraftChangeRequest(event) {
           courseId = courseRows[0]?.course_id ?? null;
         }
         const value = item.new_value ?? {};
+        if (courseId) {
+          await connection.execute(
+            `INSERT IGNORE INTO curriculum_course
+              (curriculum_course_id, curriculum_id, pathway_id, course_id, course_group, requirement_type)
+             VALUES (?, ?, NULL, ?, ?, ?)` ,
+            [
+              `${curriculumId}-${item.id}`.slice(0, 100),
+              curriculumId,
+              courseId,
+              value.courseGroup ?? null,
+              value.requirementType ?? 'required',
+            ],
+          );
+        }
         await connection.execute(
           `INSERT IGNORE INTO study_plan_item
             (study_plan_id, study_year, semester, item_order, course_id, requirement_text, credits)
@@ -927,6 +941,55 @@ async function setCurriculumVisibility(event) {
     newValue: updated,
   });
   return response(200, { data: updated });
+}
+
+async function deleteCurriculum(event) {
+  const curriculumId = pathParameter(event, 'curriculumId');
+  const actor = actorFromRequest(event, requestBody(event) ?? {});
+  if (!curriculumId) return response(400, { error: 'curriculumId is required' });
+  if (!['staff', 'curriculum_admin'].includes(actor.role)) return response(403, { error: 'Only staff or curriculum admin can delete curricula' });
+  if (new Set(['BSC-CS-2566', 'BSC-CNC-2568']).has(curriculumId)) {
+    return response(409, { error: 'Core curricula cannot be deleted' });
+  }
+
+  const current = await queryRows('SELECT curriculum_id, academic_year, active FROM curriculum WHERE curriculum_id = ?', [curriculumId]);
+  if (!current.length) return response(404, { error: 'Curriculum not found' });
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const placements = await queryRows('SELECT curriculum_course_id FROM curriculum_course WHERE curriculum_id = ?', [curriculumId]);
+    const placementIds = placements.map(item => item.curriculum_course_id).filter(Boolean);
+    if (placementIds.length) {
+      const marks = placementIds.map(() => '?').join(',');
+      await connection.execute(`DELETE FROM course_subcategory WHERE curriculum_course_id IN (${marks})`, placementIds);
+      await connection.execute(`DELETE FROM course_classification WHERE curriculum_course_id IN (${marks})`, placementIds);
+    }
+    await connection.execute('DELETE FROM curriculum_course WHERE curriculum_id = ?', [curriculumId]);
+    await connection.execute('DELETE FROM curriculum_graduation_condition WHERE curriculum_id = ?', [curriculumId]);
+    await connection.execute('DELETE FROM curriculum_department WHERE curriculum_id = ?', [curriculumId]);
+    await connection.execute('UPDATE curriculum_change_request SET curriculum_id = NULL WHERE curriculum_id = ?', [curriculumId]);
+    await connection.execute('UPDATE change_requests SET curriculum_id = NULL WHERE curriculum_id = ?', [curriculumId]);
+    await connection.execute('UPDATE change_requests SET source_curriculum_id = NULL WHERE source_curriculum_id = ?', [curriculumId]);
+    await connection.execute('DELETE FROM curriculum WHERE curriculum_id = ?', [curriculumId]);
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+
+  await writeAuditLog({
+    username: actor.username,
+    role: actor.role,
+    action: 'curriculum_deleted',
+    entityType: 'curriculum',
+    entityId: curriculumId,
+    oldValue: current[0],
+    newValue: { curriculum_id: curriculumId, deleted: true },
+  });
+  return response(200, { data: { curriculum_id: curriculumId, deleted: true } });
 }
 
 async function updateCurriculumWorkflow(event) {
@@ -1227,6 +1290,7 @@ export const handler = async (event) => {
     if (route === 'POST /api/curriculum-changes') return await createCurriculumChange(event);
     if (route === 'POST /api/curriculum-changes/{changeId}/decision') return await decideCurriculumChange(event);
     if (route === 'PATCH /api/curricula/{curriculumId}/visibility') return await setCurriculumVisibility(event);
+    if (route === 'DELETE /api/curricula/{curriculumId}') return await deleteCurriculum(event);
     if (route === 'POST /api/curricula/{curriculumId}/workflow') return await updateCurriculumWorkflow(event);
     if (method !== 'GET') return response(405, { error: 'Method not allowed' });
     if (route === 'GET /api/courses') return await listCourses(event);

@@ -1437,6 +1437,9 @@ function renderCurriculumManagement() {
           const isCore = coreCurriculumIds.has(program.curriculumId);
           const visibilityAction = isActive ? (isCore ? "hide" : "delete") : "show";
           const visibilityLabel = isActive ? (isCore ? "ซ่อนหลักสูตร" : "ลบหลักสูตร") : "แสดงหลักสูตร";
+          const extraDeleteButton = !isActive && !isCore
+            ? `<button class="workflow-action workflow-action--danger" type="button" data-curriculum-visibility="delete" data-curriculum-id="${esc(program.curriculumId)}">ลบถาวร</button>`
+            : "";
           return `
             <article class="management-program-card">
               <div class="management-program-main">
@@ -1446,7 +1449,7 @@ function renderCurriculumManagement() {
                 <div class="management-program-meta"><span>${esc(program.curriculumId)}</span><span>วิชา ${courses.size} รายการ</span><span>${isActive ? "เผยแพร่" : "ซ่อนอยู่"}</span></div>
                 ${warnings.length ? `<p class="management-warning">มี ${warnings.length} รายการอยู่ในสถานะ ${warnings.some(item => item.status === "pending") ? "รอตรวจสอบ" : "ฉบับร่าง"}</p>` : ""}
               </div>
-              <div class="management-program-actions"><button class="workflow-action workflow-action--primary" type="button" data-go="curriculum-editor" data-id="${esc(program.id)}">แก้ไข</button><button class="workflow-action ${isActive ? "workflow-action--danger" : "workflow-action--primary"}" type="button" data-curriculum-visibility="${visibilityAction}" data-curriculum-id="${esc(program.curriculumId)}">${visibilityLabel}</button></div>
+              <div class="management-program-actions"><button class="workflow-action workflow-action--primary" type="button" data-go="curriculum-editor" data-id="${esc(program.id)}">แก้ไข</button><button class="workflow-action ${isActive ? "workflow-action--danger" : "workflow-action--primary"}" type="button" data-curriculum-visibility="${visibilityAction}" data-curriculum-id="${esc(program.curriculumId)}">${visibilityLabel}</button>${extraDeleteButton}</div>
             </article>
           `;
         }).join("")}
@@ -3593,13 +3596,14 @@ function bind() {
       if (!curriculumId || !confirm(`${actionText}หลักสูตร ${curriculumId} ${show ? "ให้ผู้ใช้ทั่วไปเห็นอีกครั้ง" : deleting ? "ออกจากระบบหรือไม่ (ข้อมูลจะถูกเก็บไว้ตรวจสอบย้อนหลัง)" : "จากผู้ใช้ทั่วไปหรือไม่"}`)) return;
       button.disabled = true;
       try {
-        const response = await fetch(`${API_BASE}/api/curricula/${encodeURIComponent(curriculumId)}/visibility`, {
-          method: "PATCH",
+        const response = await fetch(
+          deleting
+            ? `${API_BASE}/api/curricula/${encodeURIComponent(curriculumId)}`
+            : `${API_BASE}/api/curricula/${encodeURIComponent(curriculumId)}/visibility`,
+          {
+          method: deleting ? "DELETE" : "PATCH",
           headers: draftApiHeaders(),
-          body: JSON.stringify({
-            active: show,
-            operation: deleting ? "delete" : show ? "show" : "hide"
-          })
+          ...(deleting ? {} : { body: JSON.stringify({ active: show, operation: show ? "show" : "hide" }) })
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload.error ?? `${show ? "แสดง" : "ซ่อน"}หลักสูตรไม่สำเร็จ`);
