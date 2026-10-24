@@ -416,6 +416,8 @@ const state = {
   managementCurricula: [],
   managementCurriculaLoaded: false,
   selectedChangeRequest: null,
+  editingDraftRequestId: null,
+  pendingDraftToEdit: null,
   changeRequestFilter: "all",
   changeRequestLoading: false,
   changeRequestError: "",
