@@ -743,6 +743,29 @@ async function loadApiData() {
     const coursesPayload = await coursesResponse.json();
     const courses = coursesPayload?.data ?? [];
 
+    try {
+      const curriculaResponse = await fetch(`${API_BASE}/api/curricula`);
+      if (curriculaResponse.ok) {
+        const curriculaPayload = await curriculaResponse.json();
+        for (const curriculum of curriculaPayload?.data ?? []) {
+          if (PROGRAMS.some(program => program.curriculumId === curriculum.curriculum_id)) continue;
+          PROGRAMS.push({
+            id: `api-${curriculum.curriculum_id}`,
+            curriculumId: curriculum.curriculum_id,
+            code: curriculum.curriculum_id,
+            nameEn: curriculum.curriculum_id,
+            revisionYear: Number(curriculum.academic_year),
+            plan: [],
+            studyPlans: []
+          });
+        }
+      } else {
+        console.warn(`Curriculum list API returned ${curriculaResponse.status}; using bundled curriculum list.`);
+      }
+    } catch (error) {
+      console.warn("Curriculum list API unavailable; using bundled curriculum list.", error);
+    }
+
     for (const course of courses) {
       const code = String(course.course_code ?? "").replace(/\s+/g, "");
       if (!code) continue;
