@@ -191,7 +191,7 @@ async function listCourses(event) {
             cc.requirement_type
        FROM curriculum_course cc
        JOIN course c ON c.course_id = cc.course_id
-       JOIN curriculum cur ON cur.curriculum_id = cc.curriculum_id
+       JOIN curriculum cur ON cur.curriculum_id = cc.curriculum_id AND cur.active = 1
        ${where}
       ORDER BY c.course_code, cc.curriculum_id, cc.pathway_id
       LIMIT ? OFFSET ?`,
@@ -374,6 +374,7 @@ async function listStudyPlans(event) {
   const data = await queryRows(
     `SELECT sp.study_plan_id, sp.curriculum_id, sp.pathway_id, sp.plan_name, sp.active
        FROM study_plan sp
+       JOIN curriculum cur ON cur.curriculum_id = sp.curriculum_id AND cur.active = 1
        ${where}
       ORDER BY sp.curriculum_id, sp.pathway_id, sp.study_plan_id`,
     params,
@@ -385,9 +386,10 @@ async function getStudyPlan(event) {
   const studyPlanId = event.queryStringParameters?.studyPlanId ?? pathParameter(event, 'studyPlanId');
   if (!studyPlanId) return response(400, { error: 'studyPlanId is required' });
   const plans = await queryRows(
-    `SELECT study_plan_id, curriculum_id, pathway_id, plan_name, active
-       FROM study_plan
-      WHERE study_plan_id = ?`,
+    `SELECT sp.study_plan_id, sp.curriculum_id, sp.pathway_id, sp.plan_name, sp.active
+       FROM study_plan sp
+       JOIN curriculum cur ON cur.curriculum_id = sp.curriculum_id AND cur.active = 1
+      WHERE sp.study_plan_id = ?`,
     [studyPlanId],
   );
   if (!plans.length) return response(404, { error: 'Study plan not found' });
@@ -838,6 +840,34 @@ async function getCurriculumWorkflow(event) {
   return response(200, { data: rows[0] ?? { curriculum_id: curriculumId, status: 'draft' } });
 }
 
+async function setCurriculumVisibility(event) {
+  const curriculumId = pathParameter(event, 'curriculumId');
+  const body = requestBody(event);
+  if (!curriculumId || !body) return response(400, { error: 'curriculumId and valid JSON body are required' });
+  const actor = actorFromRequest(event, body);
+  if (!['staff', 'curriculum_admin'].includes(actor.role)) return response(403, { error: 'Only staff or curriculum admin can change curriculum visibility' });
+  if (typeof body.active !== 'boolean') return response(400, { error: 'active must be boolean' });
+  const current = await queryRows('SELECT curriculum_id, academic_year, active FROM curriculum WHERE curriculum_id = ?', [curriculumId]);
+  if (!current.length) return response(404, { error: 'Curriculum not found' });
+  await pool.execute(
+    `UPDATE curriculum
+        SET active = ?, archived_at = ?, archived_by = ?
+      WHERE curriculum_id = ?`,
+    [body.active ? 1 : 0, body.active ? null : new Date(), body.active ? null : actor.username, curriculumId],
+  );
+  const updated = { ...current[0], active: body.active ? 1 : 0, archived_by: body.active ? null : actor.username };
+  await writeAuditLog({
+    username: actor.username,
+    role: actor.role,
+    action: body.active ? 'curriculum_shown' : 'curriculum_hidden',
+    entityType: 'curriculum',
+    entityId: curriculumId,
+    oldValue: current[0],
+    newValue: updated,
+  });
+  return response(200, { data: updated });
+}
+
 async function updateCurriculumWorkflow(event) {
   const curriculumId = pathParameter(event, 'curriculumId');
   const body = requestBody(event);
@@ -1135,6 +1165,7 @@ export const handler = async (event) => {
     if (route === 'POST /api/change-requests/{requestId}/decision') return await decideDraftChangeRequest(event);
     if (route === 'POST /api/curriculum-changes') return await createCurriculumChange(event);
     if (route === 'POST /api/curriculum-changes/{changeId}/decision') return await decideCurriculumChange(event);
+    if (route === 'PATCH /api/curricula/{curriculumId}/visibility') return await setCurriculumVisibility(event);
     if (route === 'POST /api/curricula/{curriculumId}/workflow') return await updateCurriculumWorkflow(event);
     if (method !== 'GET') return response(405, { error: 'Method not allowed' });
     if (route === 'GET /api/courses') return await listCourses(event);

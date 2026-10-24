@@ -1,0 +1,6 @@
+USE curriculum;
+
+ALTER TABLE curriculum
+  ADD COLUMN active TINYINT(1) NOT NULL DEFAULT 1,
+  ADD COLUMN archived_at TIMESTAMP NULL,
+  ADD COLUMN archived_by VARCHAR(100) NULL;
