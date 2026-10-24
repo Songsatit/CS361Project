@@ -736,7 +736,7 @@ async function decideDraftChangeRequest(event) {
   await writeAuditLog({
     username: actor.username,
     role: actor.role,
-    action: `change_request_${action}d`,
+    action: action === 'approve' ? 'change_request_approved' : 'change_request_rejected',
     entityType: 'change_request',
     entityId: String(requestId),
     oldValue: request,
