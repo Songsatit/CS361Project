@@ -1380,7 +1380,7 @@ function renderCurriculumManagement() {
                 <div class="management-program-meta"><span>${esc(program.curriculumId)}</span><span>วิชา ${courses.size} รายการ</span><span>เวอร์ชัน active</span></div>
                 ${warnings.length ? `<p class="management-warning">มี ${warnings.length} รายการอยู่ในสถานะ ${warnings.some(item => item.status === "pending") ? "รอตรวจสอบ" : "ฉบับร่าง"}</p>` : ""}
               </div>
-              <button class="workflow-action workflow-action--primary" type="button" data-go="curriculum-editor" data-id="${esc(program.id)}">แก้ไข</button>
+              <div class="management-program-actions"><button class="workflow-action workflow-action--primary" type="button" data-go="curriculum-editor" data-id="${esc(program.id)}">แก้ไข</button><button class="workflow-action workflow-action--danger" type="button" data-curriculum-visibility="hide" data-curriculum-id="${esc(program.curriculumId)}">ซ่อนหลักสูตร</button></div>
             </article>
           `;
         }).join("")}
@@ -3512,6 +3512,29 @@ function syncHistoryState() {
    ========================================================= */
 
 function bind() {
+
+  document.querySelectorAll("[data-curriculum-visibility]").forEach(button => {
+    button.onclick = async () => {
+      const curriculumId = button.dataset.curriculumId;
+      if (!curriculumId || !confirm(`ซ่อนหลักสูตร ${curriculumId} จากผู้ใช้ทั่วไปหรือไม่`)) return;
+      button.disabled = true;
+      try {
+        const response = await fetch(`${API_BASE}/api/curricula/${encodeURIComponent(curriculumId)}/visibility`, {
+          method: "PATCH",
+          headers: draftApiHeaders(),
+          body: JSON.stringify({ active: button.dataset.curriculumVisibility !== "hide" })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? "ซ่อนหลักสูตรไม่สำเร็จ");
+        alert("ซ่อนหลักสูตรแล้ว");
+        await loadApiData();
+        render();
+      } catch (error) {
+        alert(error.message ?? "ซ่อนหลักสูตรไม่สำเร็จ");
+        button.disabled = false;
+      }
+    };
+  });
 
   document.querySelectorAll("[data-request-filter]").forEach(button => {
     button.onclick = () => {
