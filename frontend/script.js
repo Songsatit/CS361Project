@@ -788,8 +788,8 @@ async function loadApiData() {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 10000);
     const coursesResponse = await fetch(
-      `${API_BASE}/api/courses?limit=500`,
-      { signal: controller.signal }
+      `${API_BASE}/api/courses?limit=500${canManageCurricula() ? "&includeUnplaced=1" : ""}`,
+      { signal: controller.signal, headers: canManageCurricula() ? draftApiHeaders() : undefined }
     );
     window.clearTimeout(timeout);
 
@@ -841,7 +841,8 @@ async function loadApiData() {
           "วิชาเฉพาะ",
         prereq: COURSES[code]?.prereq ?? [],
         apiCourseId: course.course_id,
-        curriculumCourseId: course.curriculum_course_id
+        curriculumCourseId: course.curriculum_course_id,
+        createdCourse: course.curriculum_id == null
       };
     }
 
@@ -1758,7 +1759,7 @@ function renderCourseEditor() {
   if (!code) {
     const query = norm(state.courseEditorQuery ?? "");
     const entries = Object.entries(COURSES).filter(([itemCode, item]) => norm(`${itemCode} ${item.name} ${item.nameEn ?? ""}`).includes(query)).slice(0, 30);
-    return `<div class="page course-editor-page">${crumbs([{ label: "หน้าแรก", view: "home" }, { label: "แก้ไขรายวิชา" }])}<div class="editor-topbar"><div><span class="workflow-kicker">COURSE MANAGEMENT</span><h1 class="page-title">แก้ไขรายวิชา</h1><p class="page-sub">แก้เฉพาะข้อมูลรายวิชา ไม่กระทบแผนการเรียนทั้งหลักสูตร</p></div><div class="editor-topbar-actions"><button type="button" class="workflow-action workflow-action--primary" data-create-course-standalone>+ สร้างรายวิชาใหม่</button><button type="button" class="workflow-action workflow-action--muted" data-go="curriculum-management">กลับไปจัดการหลักสูตร</button></div></div><section class="course-picker-card"><label>ค้นหารายวิชา<input type="search" data-course-editor-search value="${esc(state.courseEditorQuery ?? "")}" placeholder="พิมพ์รหัสหรือชื่อวิชา"></label><div class="course-picker-list">${entries.length ? entries.map(([itemCode, item]) => `<button type="button" class="course-picker-row" data-course-editor-open="${esc(itemCode)}"><span><strong>${esc(itemCode)}</strong><span>${esc(item.name ?? "-")}</span><small>${esc(item.nameEn ?? "")} · ${esc(item.credits ?? 0)} หน่วยกิต</small></span><span>แก้ไข</span></button>`).join("") : `<p class="audit-empty">ไม่พบรายวิชา</p>`}</div></section></div>`;
+    return `<div class="page course-editor-page">${crumbs([{ label: "หน้าแรก", view: "home" }, { label: "แก้ไขรายวิชา" }])}<div class="editor-topbar"><div><span class="workflow-kicker">COURSE MANAGEMENT</span><h1 class="page-title">แก้ไขรายวิชา</h1><p class="page-sub">แก้เฉพาะข้อมูลรายวิชา ไม่กระทบแผนการเรียนทั้งหลักสูตร</p></div><div class="editor-topbar-actions"><button type="button" class="workflow-action workflow-action--primary" data-create-course-standalone>+ สร้างรายวิชาใหม่</button><button type="button" class="workflow-action workflow-action--muted" data-go="curriculum-management">กลับไปจัดการหลักสูตร</button></div></div><section class="course-picker-card"><label>ค้นหารายวิชา<input type="search" data-course-editor-search value="${esc(state.courseEditorQuery ?? "")}" placeholder="พิมพ์รหัสหรือชื่อวิชา"></label><div class="course-picker-list">${entries.length ? entries.map(([itemCode, item]) => `<div class="course-picker-row"><button type="button" class="course-picker-row-main" data-course-editor-open="${esc(itemCode)}"><span><strong>${esc(itemCode)}</strong><span>${esc(item.name ?? "-")}</span><small>${esc(item.nameEn ?? "")} · ${esc(item.credits ?? 0)} หน่วยกิต</small></span><span>แก้ไข</span></button>${item.createdCourse ? `<button type="button" class="workflow-action workflow-action--danger" data-course-delete="${esc(itemCode)}">ลบวิชา</button>` : ""}</div>`).join("") : `<p class="audit-empty">ไม่พบรายวิชา</p>`}</div></section></div>`;
   }
   if (!course || !program) return renderManagementPlaceholder("แก้ไขรายวิชา", "ไม่พบรายวิชาที่เลือก");
   const nextCourses = Object.entries(COURSES).filter(([, item]) => (item.prereq ?? []).includes(code)).map(([nextCode]) => nextCode);
@@ -4380,6 +4381,29 @@ function bind() {
       state.courseEditorCourseId = button.dataset.courseEditorOpen;
       state.courseEditorStandalone = true;
       render();
+    };
+  });
+
+  document.querySelectorAll("[data-course-delete]").forEach(button => {
+    button.onclick = async () => {
+      const code = button.dataset.courseDelete;
+      if (!confirm(`ลบวิชา ${code} ออกจาก Catalog หรือไม่`)) return;
+      button.disabled = true;
+      try {
+        const response = await fetch(`${API_BASE}/api/courses/${encodeURIComponent(code)}`, {
+          method: "DELETE",
+          headers: draftApiHeaders()
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? "ลบวิชาไม่สำเร็จ");
+        delete COURSES[code];
+        alert("ลบวิชาแล้ว");
+        await loadApiData();
+        render();
+      } catch (error) {
+        alert(error.message ?? "ลบวิชาไม่สำเร็จ");
+        button.disabled = false;
+      }
     };
   });
 
