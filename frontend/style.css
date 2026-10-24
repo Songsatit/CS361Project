@@ -170,7 +170,8 @@
   font-size: 13px;
 }
 
-.curriculum-change-form input {
+.curriculum-change-form input,
+.curriculum-change-form select {
   width: 150px;
   padding: 10px 12px;
   border: 1px solid var(--line);
@@ -182,15 +183,111 @@
   margin-top: 18px;
 }
 
+.curriculum-edit-launcher {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.edit-modal[hidden] {
+  display: none;
+}
+
+.edit-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.edit-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgb(20 16 18 / 45%);
+}
+
+.edit-modal-dialog {
+  position: relative;
+  z-index: 1;
+  width: min(620px, 100%);
+  max-height: min(720px, 90vh);
+  overflow: auto;
+  padding: 28px;
+  border: 1px solid #f0d4dc;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 22px 70px rgb(40 20 28 / 25%);
+}
+
+.edit-modal-dialog h2 {
+  margin: 8px 0 4px;
+}
+
+.edit-modal-help {
+  margin: 0 0 18px;
+  color: var(--text-soft);
+}
+
+.edit-modal-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.edit-modal-dialog .curriculum-change-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+}
+
+.edit-modal-dialog .curriculum-change-form label,
+.edit-modal-dialog .curriculum-change-form input,
+.edit-modal-dialog .curriculum-change-form select {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.edit-modal-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+}
+
 @media (max-width: 600px) {
   .curriculum-change-form {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .curriculum-change-form input {
+  .curriculum-change-form input,
+  .curriculum-change-form select {
     box-sizing: border-box;
     width: 100%;
+  }
+
+  .curriculum-edit-launcher,
+  .edit-modal-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .edit-modal-dialog .curriculum-change-form {
+    grid-template-columns: 1fr;
+  }
+
+  .edit-modal-actions {
+    grid-column: auto;
   }
 }
 
@@ -1453,6 +1550,20 @@
 .workflow-action:disabled {
   cursor: wait;
   opacity: .6;
+}
+
+.change-diff-cell {
+  min-width: 280px;
+}
+
+.change-diff-cell strong,
+.change-diff-cell small {
+  display: block;
+}
+
+.change-diff-cell small {
+  margin-top: 4px;
+  color: var(--text-soft);
 }
 
 .workflow-page-head {

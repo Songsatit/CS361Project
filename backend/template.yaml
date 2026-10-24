@@ -101,9 +101,12 @@ Resources:
         AllowMethods:
           - GET
           - POST
+          - PUT
           - OPTIONS
         AllowHeaders:
           - content-type
+          - x-user
+          - x-role
 
   CurriculumReadFunction:
     Type: AWS::Serverless::Function
@@ -116,6 +119,42 @@ Resources:
         SecurityGroupIds:
           - !Ref LambdaSecurityGroupId
       Events:
+        CreateDraftChangeRequest:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/change-requests
+            Method: POST
+        ListDraftChangeRequests:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/change-requests
+            Method: GET
+        GetDraftChangeRequest:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/change-requests/{requestId}
+            Method: GET
+        SaveDraftChangeItems:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/change-requests/{requestId}/items
+            Method: PUT
+        SubmitDraftChangeRequest:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/change-requests/{requestId}/submit
+            Method: POST
+        GetActivePlanForDraft:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/curricula/{curriculumId}/active-plan
+            Method: GET
         ListCourses:
           Type: HttpApi
           Properties:

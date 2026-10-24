@@ -138,6 +138,31 @@ async function loadCurriculumChanges(curriculumId) {
   return state.curriculumChanges;
 }
 
+async function loadCurriculumCourses(program) {
+  if (!program?.curriculumId) return [];
+  const key = `${program.curriculumId}:${program.pathwayId ?? ""}`;
+  if (state.curriculumCoursesLoaded && state.curriculumCoursesKey === key) {
+    return state.curriculumCourses;
+  }
+  try {
+    const pathway = program.pathwayId
+      ? `&pathwayId=${encodeURIComponent(program.pathwayId)}`
+      : "";
+    const response = await fetch(
+      `${API_BASE}/api/courses?curriculumId=${encodeURIComponent(program.curriculumId)}${pathway}&limit=500`
+    );
+    if (!response.ok) throw new Error(`Course API returned ${response.status}`);
+    const payload = await response.json();
+    state.curriculumCourses = payload?.data ?? [];
+  } catch (error) {
+    console.warn("Unable to load curriculum courses for editing.", error);
+    state.curriculumCourses = [];
+  }
+  state.curriculumCoursesLoaded = true;
+  state.curriculumCoursesKey = key;
+  return state.curriculumCourses;
+}
+
 const workflowStatusLabels = {
   draft: "ฉบับร่าง",
   review: "รอตรวจสอบ",
@@ -182,6 +207,34 @@ function renderWorkflowPage() {
       : "สิทธิ์อาจารย์ผู้สอน";
   const auditLogs = auditLogCache.get("recent") ?? [];
   const pendingChanges = state.curriculumChanges.filter(item => item.status === "pending");
+  const currentCourses = state.curriculumCourses.filter(course =>
+    !program.pathwayId || course.pathway_id === program.pathwayId
+  );
+  const currentCourseOptions = currentCourses.map(course => `
+    <option value="${esc(course.curriculum_course_id)}">
+      ${esc(course.course_code)} — ${esc(course.title_th)}
+    </option>
+  `).join("");
+  const availableCourseOptions = Object.entries(COURSES)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([code, course]) => `
+      <option value="${esc(code)}">${esc(course.name ?? code)} (${esc(code)})</option>
+    `).join("");
+  const changeDescription = change => {
+    const payload = change.payload ?? {};
+    const oldCourse = payload.oldCourse;
+    const newCourse = payload.newCourse;
+    if (payload.changeType === "course_replace") {
+      return `<strong>เปลี่ยนรายวิชา</strong><small>เดิม: ${esc(oldCourse?.course_code ?? payload.curriculumCourseId)} — ${esc(oldCourse?.title_th ?? "ไม่พบข้อมูล")}</small><small>ใหม่: ${esc(newCourse?.course_code ?? payload.newCourseCode)} — ${esc(newCourse?.title_th ?? "ไม่พบข้อมูล")}</small>`;
+    }
+    if (payload.changeType === "course_add") {
+      return `<strong>เพิ่มรายวิชา</strong><small>เพิ่ม: ${esc(newCourse?.course_code ?? payload.newCourseCode)} — ${esc(newCourse?.title_th ?? "ไม่พบข้อมูล")}</small>`;
+    }
+    if (payload.changeType === "course_remove") {
+      return `<strong>เอารายวิชาออก</strong><small>เดิม: ${esc(oldCourse?.course_code ?? payload.curriculumCourseId)} — ${esc(oldCourse?.title_th ?? "ไม่พบข้อมูล")}</small>`;
+    }
+    return `<strong>เปลี่ยนปีหลักสูตร</strong><small>ปีใหม่: พ.ศ. ${esc(payload.academicYear)}</small>`;
+  };
 
   return `
     <div class="page workflow-page">
@@ -224,28 +277,70 @@ function renderWorkflowPage() {
       </section>
 
       ${state.user.role === "curriculum_admin" ? `
-        <section class="role-capability-card curriculum-edit-card">
-          <h2>เสนอแก้ไขข้อมูลหลักสูตร</h2>
-          <p>เลือกประเภทการแก้ไข ระบบจะบันทึกเป็นฉบับร่างและยังไม่กระทบข้อมูลหลักจนกว่าจะอนุมัติ</p>
-          <form id="curriculumChangeForm" class="curriculum-change-form">
-            <label>ประเภทการแก้ไข
-              <select name="changeType" id="changeType">
-                <option value="academic_year">เปลี่ยนปีหลักสูตร</option>
-                <option value="course_replace">เปลี่ยนรายวิชา</option>
-              </select>
-            </label>
-            <label data-change-field="academic_year">ปีหลักสูตรใหม่
-              <input name="academicYear" type="number" min="2500" max="2600" value="${esc(program.academicYear ?? (program.curriculumId.match(/(25\\d{2})/) || ["", "2566"])[1])}">
-            </label>
-            <label data-change-field="course_replace" hidden>รหัส Curriculum Course เดิม
-              <input name="curriculumCourseId" placeholder="เช่น BSC-CS-2566-CIS-CS361">
-            </label>
-            <label data-change-field="course_replace" hidden>รหัสวิชาใหม่
-              <input name="newCourseCode" placeholder="เช่น CS 331">
-            </label>
-            <button class="workflow-action workflow-action--primary" type="submit">บันทึกฉบับร่าง</button>
-          </form>
+        <section class="role-capability-card curriculum-edit-card curriculum-edit-launcher">
+          <div><h2>จัดการข้อมูลหลักสูตร</h2><p>เพิ่มหรือแก้ไขข้อมูล ระบบจะสร้างฉบับร่างเพื่อรอตรวจสอบก่อนเผยแพร่</p></div>
+          <button class="workflow-action workflow-action--primary" type="button" data-open-edit-modal>เพิ่ม/แก้ไขข้อมูล</button>
         </section>
+
+        <div class="edit-modal" data-edit-modal hidden>
+          <div class="edit-modal-backdrop" data-close-edit-modal></div>
+          <section class="edit-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-modal-title">
+            <button class="edit-modal-close" type="button" data-close-edit-modal aria-label="ปิด">×</button>
+            <span class="workflow-kicker">จัดการข้อมูลหลักสูตร</span>
+            <h2 id="edit-modal-title">เพิ่มหรือแก้ไขข้อมูล</h2>
+            <p class="edit-modal-help">ข้อมูลจะยังไม่เปลี่ยนในหลักสูตรจริงจนกว่าจะผ่านการอนุมัติ</p>
+            <form id="curriculumChangeForm" class="curriculum-change-form">
+              <label>หลักสูตรที่ต้องการจัดการ
+                <select name="targetCurriculum" disabled>
+                  <option value="${esc(program.curriculumId)}">${esc(program.code)} · พ.ศ. ${esc(program.revisionYear)}</option>
+                </select>
+              </label>
+              <label>ต้องการทำอะไร
+                <select name="operation" data-edit-operation>
+                  <option value="update">แก้ไขหลักสูตรนี้</option>
+                  <option value="create">เพิ่มหลักสูตรใหม่</option>
+                </select>
+              </label>
+              <label data-change-field="new_curriculum" hidden>รหัสหลักสูตรใหม่
+                <input name="newCurriculumId" placeholder="เช่น BSC-CS-2569">
+              </label>
+              <label>รายการที่ต้องการแก้
+                <select name="changeType" id="changeType">
+                  <option value="academic_year">ปีหลักสูตร</option>
+                  <option value="course_add">เพิ่มรายวิชา</option>
+                  <option value="course_remove">เอารายวิชาออก</option>
+                  <option value="course_replace">เปลี่ยนรายวิชา</option>
+                </select>
+              </label>
+              <label data-change-field="academic_year">ปีหลักสูตรใหม่
+                <input name="academicYear" type="number" min="2500" max="2600" value="${esc(program.academicYear ?? (program.curriculumId.match(/(25\\d{2})/) || ["", "2566"])[1])}">
+              </label>
+              <label data-change-field="course_existing" hidden>รายวิชาในหลักสูตร
+                <select name="curriculumCourseId">
+                  <option value="">ค้นหาแล้วเลือกวิชาเดิม</option>
+                  ${currentCourseOptions}
+                </select>
+              </label>
+              <label data-change-field="course_new" hidden>วิชาใหม่
+                <input name="newCourseCode" list="availableCourseList" placeholder="พิมพ์รหัสหรือชื่อวิชาเพื่อค้นหา">
+                <datalist id="availableCourseList">${availableCourseOptions.replaceAll("<option", "<option")}</datalist>
+              </label>
+              <label data-change-field="course_add" hidden>กลุ่มวิชา
+                <select name="courseGroup">
+                  <option value="วิชาเฉพาะ">วิชาเฉพาะ</option>
+                  <option value="วิชาศึกษาทั่วไป">วิชาศึกษาทั่วไป</option>
+                  <option value="วิชาเลือกเสรี">วิชาเลือกเสรี</option>
+                  <option value="วิชาโครงงาน">วิชาโครงงาน</option>
+                  <option value="วิชาสหกิจศึกษา">วิชาสหกิจศึกษา</option>
+                </select>
+              </label>
+              <div class="edit-modal-actions">
+                <button class="workflow-action workflow-action--muted" type="button" data-close-edit-modal>ยกเลิก</button>
+                <button class="workflow-action workflow-action--primary" type="submit">บันทึกเป็นฉบับร่าง</button>
+              </div>
+            </form>
+          </section>
+        </div>
       ` : ""}
 
       ${canAudit ? `
@@ -254,7 +349,7 @@ function renderWorkflowPage() {
           ${pendingChanges.length ? `<div class="audit-log-table-wrap"><table class="audit-log-table">
             <thead><tr><th>หลักสูตร</th><th>การแก้ไข</th><th>สถานะ</th><th>การดำเนินการ</th></tr></thead>
             <tbody>${pendingChanges.map(change => `
-              <tr><td>${esc(change.curriculum_id)}</td><td>${change.payload?.changeType === "course_replace" ? `เปลี่ยน ${esc(change.payload.curriculumCourseId)} เป็น ${esc(change.payload.newCourseCode)}` : `ปี พ.ศ. ${esc(change.payload?.academicYear)}`}</td><td>${esc(change.status)}</td><td>
+              <tr><td>${esc(change.curriculum_id)}</td><td class="change-diff-cell">${changeDescription(change)}</td><td>${esc(change.status)}</td><td>
                 <button class="link-btn" data-change-action="approve" data-change-id="${esc(change.change_id)}">อนุมัติ</button><button class="link-btn" data-change-action="reject" data-change-id="${esc(change.change_id)}">ปฏิเสธ</button>
               </td></tr>`).join("")}</tbody>
           </table></div>` : `<p class="audit-empty">ยังไม่มีรายการแก้ไขที่รอตรวจสอบ</p>`}
@@ -2575,6 +2670,11 @@ function render() {
         if (state.view === "workflow") render();
       });
     }
+    if (state.view === "workflow" && !state.curriculumCoursesLoaded) {
+      loadCurriculumCourses(program).then(() => {
+        if (state.view === "workflow") render();
+      });
+    }
   }
   if (state.view === "profile" && canAccessStudentProfile() && !state.studentProfile && !state.studentProfileLoading) {
     loadStudentProfile().then(() => {
@@ -2788,21 +2888,45 @@ function bind() {
   });
 
   const curriculumChangeForm = document.getElementById("curriculumChangeForm");
+  const editModal = document.querySelector("[data-edit-modal]");
+  document.querySelectorAll("[data-open-edit-modal]").forEach(button => {
+    button.onclick = () => {
+      if (!editModal) return;
+      editModal.hidden = false;
+      editModal.querySelector("[name=changeType]")?.focus();
+    };
+  });
+  document.querySelectorAll("[data-close-edit-modal]").forEach(button => {
+    button.onclick = () => {
+      if (editModal) editModal.hidden = true;
+    };
+  });
+
   if (curriculumChangeForm) {
     curriculumChangeForm.onsubmit = async event => {
       event.preventDefault();
       const program = PROGRAMS.find(item => item.id === state.programId);
       const formData = new FormData(curriculumChangeForm);
+      const operation = String(formData.get("operation") ?? "update");
       const changeType = String(formData.get("changeType"));
-      const payload = changeType === "course_replace"
-        ? { changeType, curriculumCourseId: String(formData.get("curriculumCourseId") ?? "").trim(), newCourseCode: String(formData.get("newCourseCode") ?? "").trim() }
-        : { changeType, academicYear: Number(formData.get("academicYear")) };
+      const payload = changeType === "academic_year"
+        ? { changeType, academicYear: Number(formData.get("academicYear")) }
+        : {
+            changeType,
+            curriculumCourseId: String(formData.get("curriculumCourseId") ?? "").trim(),
+            newCourseCode: String(formData.get("newCourseCode") ?? "").trim(),
+            pathwayId: program?.pathwayId,
+            courseGroup: String(formData.get("courseGroup") ?? "วิชาเฉพาะ"),
+            requirementType: "required"
+          };
       const response = await fetch(`${API_BASE}/api/curriculum-changes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          curriculumId: program?.curriculumId,
-          operation: "update",
+          curriculumId: operation === "create"
+            ? String(formData.get("newCurriculumId") ?? "").trim()
+            : program?.curriculumId,
+          operation,
           changeType,
           payload,
           username: state.user.username,
@@ -2811,17 +2935,27 @@ function bind() {
       });
       const resultPayload = await response.json().catch(() => ({}));
       if (!response.ok) return alert(resultPayload.error ?? "บันทึกฉบับร่างไม่สำเร็จ");
+      if (editModal) editModal.hidden = true;
       state.curriculumChangesLoaded = false;
       loadCurriculumChanges(program?.curriculumId).then(() => render());
     };
     const changeType = curriculumChangeForm.querySelector("[name=changeType]");
+    const operation = curriculumChangeForm.querySelector("[name=operation]");
     const updateChangeFields = () => {
+      const isCreate = operation?.value === "create";
+      if (isCreate && changeType.value !== "academic_year") changeType.value = "academic_year";
       curriculumChangeForm.querySelectorAll("[data-change-field]").forEach(field => {
-        field.hidden = field.dataset.changeField !== changeType.value;
-        field.querySelectorAll("input").forEach(input => { input.required = !field.hidden; });
+        const fieldType = field.dataset.changeField;
+        const visible = (fieldType === "new_curriculum" && isCreate) ||
+          (!isCreate && (fieldType === changeType.value ||
+          (fieldType === "course_existing" && ["course_replace", "course_remove"].includes(changeType.value)) ||
+          (fieldType === "course_new" && ["course_add", "course_replace"].includes(changeType.value))));
+        field.hidden = !visible;
+        field.querySelectorAll("input, select").forEach(input => { input.required = visible; });
       });
     };
     changeType.onchange = updateChangeFields;
+    if (operation) operation.onchange = updateChangeFields;
     updateChangeFields();
   }
 
