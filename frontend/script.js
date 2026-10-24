@@ -1435,8 +1435,8 @@ function renderCurriculumManagement() {
             ? curriculumStatus.get(program.curriculumId)
             : true;
           const isCore = coreCurriculumIds.has(program.curriculumId);
-          const visibilityAction = isActive ? (isCore ? "hide" : "delete") : "show";
-          const visibilityLabel = isActive ? (isCore ? "ซ่อนหลักสูตร" : "ลบหลักสูตร") : "แสดงหลักสูตร";
+          const visibilityAction = isActive ? "hide" : "show";
+          const visibilityLabel = isActive ? "ซ่อนหลักสูตร" : "แสดงหลักสูตร";
           const extraDeleteButton = !isActive && !isCore
             ? `<button class="workflow-action workflow-action--danger" type="button" data-curriculum-visibility="delete" data-curriculum-id="${esc(program.curriculumId)}">ลบถาวร</button>`
             : "";
@@ -1826,7 +1826,7 @@ function editorChangeItems(program) {
     if (change.action === "prereq") {
       return { action: change.newValue?.removePrerequisite ? "REMOVE_PREREQ" : "ADD_PREREQ", courseCode: courseCodeValue, studyYear: change.year, term: String(change.term), newValue: change.newValue };
     }
-    return { action: "ADD_COURSE", courseCode: courseCodeValue, studyYear: change.year, term: String(change.term), newValue: { year: change.year, term: change.term, requirementText: courseCodeValue ? null : String(change.code).replace(/^__REQ__/, "") } };
+    return { action: "ADD_COURSE", courseCode: courseCodeValue, studyYear: change.year, term: String(change.term), newValue: { year: change.year, term: change.term, planId: state.editorPlanId, requirementText: courseCodeValue ? null : String(change.code).replace(/^__REQ__/, "") } };
   });
   if (state.editorMode === "new") {
     items.unshift({
