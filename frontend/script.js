@@ -1712,7 +1712,7 @@ function renderEditorTermCard(program, term) {
         }).join("") : `<div class="editor-empty-term">ยังไม่มีวิชา</div>`}
         ${state.planEdit.changes.filter(change => change.action === "move" && change.fromYear === term.year && change.fromTerm === term.term).map(change => `<div class="term-course-row plan-course--moved-away"><span class="course-code">${esc(change.code)}</span><span class="term-course-name">ย้ายไปปี ${change.toYear} ภาค ${change.toTerm}</span><span class="term-course-cr">เดิม</span></div>`).join("")}
       </div>
-      <div class="editor-add-course"><input type="text" data-plan-search data-year="${term.year}" data-term="${term.term}" value="${esc(searchValue)}" placeholder="${searchReady ? "ค้นหารหัสหรือชื่อวิชา" : "กำลังโหลดรายการวิชา..."}"><div class="plan-search-results" data-plan-results="${term.year}-${term.term}"></div><button class="plan-add-button" type="button" data-plan-add data-year="${term.year}" data-term="${term.term}">+ เพิ่มวิชาจาก Catalog</button><button class="plan-add-button" type="button" data-plan-create-course data-year="${term.year}" data-term="${term.term}">+ สร้างวิชาใหม่</button></div>
+      <div class="editor-add-course"><input type="text" data-plan-search data-year="${term.year}" data-term="${term.term}" value="${esc(searchValue)}" placeholder="${searchReady ? "ค้นหารหัสหรือชื่อวิชา" : "กำลังโหลดรายการวิชา..."}"><div class="plan-search-results" data-plan-results="${term.year}-${term.term}"></div><button class="plan-add-button" type="button" data-plan-add data-year="${term.year}" data-term="${term.term}">+ เพิ่มวิชาจาก Catalog</button></div>
     </article>
   `;
 }
@@ -1758,7 +1758,7 @@ function renderCourseEditor() {
   if (!code) {
     const query = norm(state.courseEditorQuery ?? "");
     const entries = Object.entries(COURSES).filter(([itemCode, item]) => norm(`${itemCode} ${item.name} ${item.nameEn ?? ""}`).includes(query)).slice(0, 30);
-    return `<div class="page course-editor-page">${crumbs([{ label: "หน้าแรก", view: "home" }, { label: "แก้ไขรายวิชา" }])}<div class="editor-topbar"><div><span class="workflow-kicker">COURSE MANAGEMENT</span><h1 class="page-title">แก้ไขรายวิชา</h1><p class="page-sub">แก้เฉพาะข้อมูลรายวิชา ไม่กระทบแผนการเรียนทั้งหลักสูตร</p></div><div class="editor-topbar-actions"><button type="button" class="workflow-action workflow-action--muted" data-go="curriculum-management">กลับไปจัดการหลักสูตร</button></div></div><section class="course-picker-card"><label>ค้นหารายวิชา<input type="search" data-course-editor-search value="${esc(state.courseEditorQuery ?? "")}" placeholder="พิมพ์รหัสหรือชื่อวิชา"></label><div class="course-picker-list">${entries.length ? entries.map(([itemCode, item]) => `<button type="button" class="course-picker-row" data-course-editor-open="${esc(itemCode)}"><span><strong>${esc(itemCode)}</strong><span>${esc(item.name ?? "-")}</span><small>${esc(item.nameEn ?? "")} · ${esc(item.credits ?? 0)} หน่วยกิต</small></span><span>แก้ไข</span></button>`).join("") : `<p class="audit-empty">ไม่พบรายวิชา</p>`}</div></section></div>`;
+    return `<div class="page course-editor-page">${crumbs([{ label: "หน้าแรก", view: "home" }, { label: "แก้ไขรายวิชา" }])}<div class="editor-topbar"><div><span class="workflow-kicker">COURSE MANAGEMENT</span><h1 class="page-title">แก้ไขรายวิชา</h1><p class="page-sub">แก้เฉพาะข้อมูลรายวิชา ไม่กระทบแผนการเรียนทั้งหลักสูตร</p></div><div class="editor-topbar-actions"><button type="button" class="workflow-action workflow-action--primary" data-create-course-standalone>+ สร้างรายวิชาใหม่</button><button type="button" class="workflow-action workflow-action--muted" data-go="curriculum-management">กลับไปจัดการหลักสูตร</button></div></div><section class="course-picker-card"><label>ค้นหารายวิชา<input type="search" data-course-editor-search value="${esc(state.courseEditorQuery ?? "")}" placeholder="พิมพ์รหัสหรือชื่อวิชา"></label><div class="course-picker-list">${entries.length ? entries.map(([itemCode, item]) => `<button type="button" class="course-picker-row" data-course-editor-open="${esc(itemCode)}"><span><strong>${esc(itemCode)}</strong><span>${esc(item.name ?? "-")}</span><small>${esc(item.nameEn ?? "")} · ${esc(item.credits ?? 0)} หน่วยกิต</small></span><span>แก้ไข</span></button>`).join("") : `<p class="audit-empty">ไม่พบรายวิชา</p>`}</div></section></div>`;
   }
   if (!course || !program) return renderManagementPlaceholder("แก้ไขรายวิชา", "ไม่พบรายวิชาที่เลือก");
   const nextCourses = Object.entries(COURSES).filter(([, item]) => (item.prereq ?? []).includes(code)).map(([nextCode]) => nextCode);
@@ -4087,6 +4087,50 @@ function bind() {
       target.courses.push(code);
       state.planEdit.changes.push({ action: "add", code, year, term });
       render();
+    };
+  });
+
+  document.querySelectorAll("[data-create-course-standalone]").forEach(button => {
+    button.onclick = async () => {
+      const code = courseKey(window.prompt("รหัสวิชาใหม่ เช่น CS999") ?? "");
+      if (!code || code.length > 30) return alert("รหัสวิชาไม่ถูกต้องหรือยาวเกิน 30 ตัวอักษร");
+      const name = String(window.prompt("ชื่อวิชาภาษาไทย") ?? "").trim();
+      if (!name) return;
+      const nameEn = String(window.prompt("ชื่อวิชาภาษาอังกฤษ (ถ้ามี)") ?? "").trim();
+      const credits = Number(window.prompt("หน่วยกิต", "3"));
+      if (!Number.isFinite(credits) || credits < 0) return alert("หน่วยกิตไม่ถูกต้อง");
+      if (COURSES[code]) return alert("รหัสวิชานี้มีอยู่แล้ว");
+      if (!confirm(`ส่งคำขอสร้างวิชา ${code} เพื่อให้ Staff อนุมัติหรือไม่`)) return;
+      button.disabled = true;
+      try {
+        const createResponse = await fetch(`${API_BASE}/api/change-requests`, {
+          method: "POST",
+          headers: draftApiHeaders(),
+          body: JSON.stringify({
+            curriculumId: null,
+            type: "edit_course",
+            title: `สร้างรายวิชา ${code}`,
+            note: "คำขอสร้างรายวิชาใหม่"
+          })
+        });
+        const created = await createResponse.json().catch(() => ({}));
+        if (!createResponse.ok || !created.data?.id) throw new Error(created.error ?? "สร้างคำขอไม่สำเร็จ");
+        const itemsResponse = await fetch(`${API_BASE}/api/change-requests/${created.data.id}/items`, {
+          method: "PUT",
+          headers: draftApiHeaders(),
+          body: JSON.stringify({ items: [{ action: "CREATE_COURSE", courseCode: code, newValue: { code, name, nameEn, credits } }] })
+        });
+        const saved = await itemsResponse.json().catch(() => ({}));
+        if (!itemsResponse.ok) throw new Error(saved.error ?? "บันทึกรายการสร้างวิชาไม่สำเร็จ");
+        const submitResponse = await fetch(`${API_BASE}/api/change-requests/${created.data.id}/submit`, { method: "POST", headers: draftApiHeaders(), body: "{}" });
+        const submitted = await submitResponse.json().catch(() => ({}));
+        if (!submitResponse.ok) throw new Error(submitted.error ?? "ส่งคำขอไม่สำเร็จ");
+        alert("ส่งคำขอสร้างวิชาแล้ว รอ Staff อนุมัติ");
+        go("my-change-requests");
+      } catch (error) {
+        alert(error.message ?? "สร้างคำขอไม่สำเร็จ");
+        button.disabled = false;
+      }
     };
   });
 

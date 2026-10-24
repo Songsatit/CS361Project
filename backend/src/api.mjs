@@ -551,7 +551,7 @@ async function createDraftChangeRequest(event) {
   if (baseVersionId !== null && !Number.isInteger(baseVersionId)) {
     return response(400, { error: 'baseVersionId must be an integer' });
   }
-  if (type !== 'add_curriculum' && !curriculumId) {
+  if (type === 'edit_structure' && !curriculumId) {
     return response(400, { error: 'curriculumId is required for this draft type' });
   }
   if (curriculumId) {
@@ -844,6 +844,19 @@ async function decideDraftChangeRequest(event) {
     } else if (action === 'approve' && request.type === 'edit_course') {
       for (const rawItem of items) {
         const item = normalizeChangeItem(rawItem);
+        if (item.action === 'CREATE_COURSE') {
+          const value = item.new_value ?? {};
+          const courseCode = String(item.course_code ?? value.code ?? '').trim();
+          if (!courseCode || !value.name) throw new Error('New course details are incomplete');
+          const courseId = `COURSE-${requestId}-${item.id}`.slice(0, 80);
+          await connection.execute(
+            `INSERT INTO course
+              (course_id, course_code, course_code_th, title_th, title_en, credits_total, status, active)
+             VALUES (?, ?, ?, ?, ?, ?, 'active', 1)`,
+            [courseId, courseCode, value.codeTh ?? null, value.name, value.nameEn ?? null, Number(value.credits ?? 0)],
+          );
+          continue;
+        }
         if (item.action !== 'EDIT_FIELD' || !item.course_code) continue;
         const value = item.new_value ?? {};
         const courseRows = await queryRows(
