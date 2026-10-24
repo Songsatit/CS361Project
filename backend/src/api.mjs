@@ -472,6 +472,294 @@ function actorFromRequest(event, body = {}) {
   };
 }
 
+const draftEditorRoles = new Set(['staff', 'curriculum_admin']);
+const changeItemActions = new Set([
+  'ADD_COURSE',
+  'REMOVE_COURSE',
+  'MOVE_COURSE',
+  'EDIT_FIELD',
+  'ADD_PREREQ',
+  'REMOVE_PREREQ',
+  'CREATE_CURRICULUM',
+]);
+
+function canEditDraft(actor) {
+  return draftEditorRoles.has(actor.role);
+}
+
+function parseJsonValue(value, fallback = null) {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function normalizeChangeRequest(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    base_version_id: row.base_version_id == null ? null : Number(row.base_version_id),
+    payload: parseJsonValue(row.payload),
+  };
+}
+
+function normalizeChangeItem(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    old_value: parseJsonValue(row.old_value),
+    new_value: parseJsonValue(row.new_value),
+  };
+}
+
+async function createDraftChangeRequest(event) {
+  const body = requestBody(event);
+  if (!body) return response(400, { error: 'Request body must be valid JSON' });
+  const actor = actorFromRequest(event, body);
+  if (!canEditDraft(actor)) return response(403, { error: 'Only staff or curriculum admin can create drafts' });
+
+  const type = String(body.type ?? '').trim();
+  const curriculumId = String(body.curriculumId ?? '').trim() || null;
+  const sourceCurriculumId = String(body.sourceCurriculumId ?? '').trim() || null;
+  const title = String(body.title ?? '').trim();
+  const note = String(body.note ?? '').trim() || null;
+  const baseVersionId = body.baseVersionId == null || body.baseVersionId === ''
+    ? null
+    : Number(body.baseVersionId);
+  if (!['add_curriculum', 'edit_structure', 'edit_course'].includes(type) || !title) {
+    return response(400, { error: 'type and title are required' });
+  }
+  if (baseVersionId !== null && !Number.isInteger(baseVersionId)) {
+    return response(400, { error: 'baseVersionId must be an integer' });
+  }
+  if (type !== 'add_curriculum' && !curriculumId) {
+    return response(400, { error: 'curriculumId is required for this draft type' });
+  }
+  if (curriculumId) {
+    const curriculum = await queryRows('SELECT curriculum_id FROM curriculum WHERE curriculum_id = ?', [curriculumId]);
+    if (!curriculum.length) return response(404, { error: 'Curriculum not found' });
+  }
+  if (sourceCurriculumId) {
+    const source = await queryRows('SELECT curriculum_id FROM curriculum WHERE curriculum_id = ?', [sourceCurriculumId]);
+    if (!source.length) return response(404, { error: 'Source curriculum not found' });
+  }
+  if (baseVersionId !== null) {
+    const version = await queryRows('SELECT id, curriculum_id FROM curriculum_versions WHERE id = ?', [baseVersionId]);
+    if (!version.length) return response(404, { error: 'Base version not found' });
+    if (curriculumId && version[0].curriculum_id !== curriculumId) {
+      return response(400, { error: 'Base version does not belong to curriculum' });
+    }
+  }
+
+  const [result] = await pool.execute(
+    `INSERT INTO change_requests
+      (curriculum_id, type, status, base_version_id, source_curriculum_id, title, note, created_by)
+     VALUES (?, ?, 'draft', ?, ?, ?, ?, ?)`,
+    [curriculumId, type, baseVersionId, sourceCurriculumId, title, note, actor.username],
+  );
+  const rows = await queryRows('SELECT * FROM change_requests WHERE id = ?', [result.insertId]);
+  const data = normalizeChangeRequest(rows[0]);
+  await writeAuditLog({
+    username: actor.username,
+    role: actor.role,
+    action: 'change_request_created',
+    entityType: 'change_request',
+    entityId: String(result.insertId),
+    newValue: data,
+  });
+  return response(201, { data });
+}
+
+async function saveDraftChangeItems(event) {
+  const requestId = Number(pathParameter(event, 'requestId'));
+  const body = requestBody(event);
+  if (!Number.isInteger(requestId) || !body) return response(400, { error: 'requestId and valid JSON body are required' });
+  const actor = actorFromRequest(event, body);
+  if (!canEditDraft(actor)) return response(403, { error: 'Only staff or curriculum admin can edit drafts' });
+  const items = Array.isArray(body.items) ? body.items : null;
+  if (!items) return response(400, { error: 'items must be an array' });
+
+  const requests = await queryRows('SELECT * FROM change_requests WHERE id = ?', [requestId]);
+  const request = normalizeChangeRequest(requests[0]);
+  if (!request) return response(404, { error: 'Change request not found' });
+  if (request.status !== 'draft') return response(409, { error: 'Only draft requests can be edited' });
+  if (request.created_by !== actor.username) return response(403, { error: 'Only the draft owner can edit this request' });
+
+  const normalized = items.map((item, index) => ({
+    action: String(item.action ?? '').trim().toUpperCase(),
+    courseCode: String(item.courseCode ?? item.course_code ?? '').trim() || null,
+    studyYear: item.studyYear ?? item.study_year ?? null,
+    term: item.term ?? item.semester ?? null,
+    oldValue: item.oldValue ?? item.old_value ?? null,
+    newValue: item.newValue ?? item.new_value ?? null,
+    sortOrder: Number.isInteger(Number(item.sortOrder ?? item.sort_order))
+      ? Number(item.sortOrder ?? item.sort_order)
+      : index,
+  }));
+  for (const item of normalized) {
+    if (!changeItemActions.has(item.action)) return response(400, { error: `Unsupported item action: ${item.action}` });
+    if (item.courseCode && item.courseCode.length > 30) return response(400, { error: 'courseCode is too long' });
+    if (item.studyYear !== null && (!Number.isInteger(Number(item.studyYear)) || Number(item.studyYear) < 1)) {
+      return response(400, { error: 'studyYear must be a positive integer' });
+    }
+    if (item.term !== null && !['1', '2', 'S', 1, 2].includes(item.term)) {
+      return response(400, { error: 'term must be 1, 2, or S' });
+    }
+  }
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.execute('DELETE FROM change_items WHERE request_id = ?', [requestId]);
+    for (const item of normalized) {
+      await connection.execute(
+        `INSERT INTO change_items
+          (request_id, action, course_code, study_year, term, old_value, new_value, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          requestId,
+          item.action,
+          item.courseCode,
+          item.studyYear === null ? null : Number(item.studyYear),
+          item.term === null ? null : String(item.term),
+          item.oldValue == null ? null : JSON.stringify(item.oldValue),
+          item.newValue == null ? null : JSON.stringify(item.newValue),
+          item.sortOrder,
+        ],
+      );
+    }
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+
+  const savedItems = await queryRows('SELECT * FROM change_items WHERE request_id = ? ORDER BY sort_order, id', [requestId]);
+  await writeAuditLog({
+    username: actor.username,
+    role: actor.role,
+    action: 'change_items_saved',
+    entityType: 'change_request',
+    entityId: String(requestId),
+    newValue: { itemCount: savedItems.length },
+  });
+  return response(200, { data: { requestId, items: savedItems.map(normalizeChangeItem) } });
+}
+
+async function submitDraftChangeRequest(event) {
+  const requestId = Number(pathParameter(event, 'requestId'));
+  const body = requestBody(event);
+  if (!Number.isInteger(requestId) || !body) return response(400, { error: 'requestId and valid JSON body are required' });
+  const actor = actorFromRequest(event, body);
+  if (!canEditDraft(actor)) return response(403, { error: 'Only staff or curriculum admin can submit drafts' });
+  const requests = await queryRows('SELECT * FROM change_requests WHERE id = ?', [requestId]);
+  const request = normalizeChangeRequest(requests[0]);
+  if (!request) return response(404, { error: 'Change request not found' });
+  if (request.created_by !== actor.username) return response(403, { error: 'Only the draft owner can submit this request' });
+  if (request.status !== 'draft') return response(409, { error: 'Only draft requests can be submitted' });
+  const items = await queryRows('SELECT id FROM change_items WHERE request_id = ?', [requestId]);
+  if (!items.length) return response(400, { error: 'Add at least one change item before submitting' });
+  await pool.execute(`UPDATE change_requests SET status = 'pending', submitted_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'draft'`, [requestId]);
+  const updatedRows = await queryRows('SELECT * FROM change_requests WHERE id = ?', [requestId]);
+  const data = normalizeChangeRequest(updatedRows[0]);
+  await writeAuditLog({
+    username: actor.username,
+    role: actor.role,
+    action: 'change_request_submitted',
+    entityType: 'change_request',
+    entityId: String(requestId),
+    oldValue: request,
+    newValue: data,
+  });
+  return response(200, { data });
+}
+
+async function getDraftChangeRequest(event) {
+  const requestId = Number(pathParameter(event, 'requestId'));
+  if (!Number.isInteger(requestId)) return response(400, { error: 'requestId is required' });
+  const body = requestBody(event) ?? {};
+  const actor = actorFromRequest(event, body);
+  const requests = await queryRows('SELECT * FROM change_requests WHERE id = ?', [requestId]);
+  const request = normalizeChangeRequest(requests[0]);
+  if (!request) return response(404, { error: 'Change request not found' });
+  if (!canEditDraft(actor) && request.created_by !== actor.username) {
+    return response(403, { error: 'You are not allowed to view this request' });
+  }
+  const items = await queryRows('SELECT * FROM change_items WHERE request_id = ? ORDER BY sort_order, id', [requestId]);
+  return response(200, { data: { request, items: items.map(normalizeChangeItem) } });
+}
+
+async function listDraftChangeRequests(event) {
+  const query = event.queryStringParameters ?? {};
+  const body = requestBody(event) ?? {};
+  const actor = actorFromRequest(event, body);
+  const status = String(query.status ?? '').trim();
+  const conditions = [];
+  const params = [];
+  if (status) {
+    if (!['draft', 'pending', 'approved', 'rejected'].includes(status)) return response(400, { error: 'Invalid status' });
+    conditions.push('cr.status = ?');
+    params.push(status);
+  }
+  if (!canEditDraft(actor)) {
+    conditions.push('cr.created_by = ?');
+    params.push(actor.username);
+  }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const rows = await queryRows(
+    `SELECT cr.*, COUNT(ci.id) AS item_count
+       FROM change_requests cr
+       LEFT JOIN change_items ci ON ci.request_id = cr.id
+       ${where}
+      GROUP BY cr.id
+      ORDER BY cr.created_at DESC, cr.id DESC`,
+    params,
+  );
+  return response(200, { data: rows.map((row) => ({ ...normalizeChangeRequest(row), item_count: Number(row.item_count) })) });
+}
+
+async function getActivePlanForDraft(event) {
+  const curriculumId = pathParameter(event, 'curriculumId');
+  if (!curriculumId) return response(400, { error: 'curriculumId is required' });
+  const actor = actorFromRequest(event, requestBody(event) ?? {});
+  if (!canEditDraft(actor)) return response(403, { error: 'Only staff or curriculum admin can load an active plan for editing' });
+  const query = event.queryStringParameters ?? {};
+  const conditions = ['sp.curriculum_id = ?', 'sp.active = 1'];
+  const params = [curriculumId];
+  if (query.studyYear) {
+    conditions.push('spi.study_year = ?');
+    params.push(Number.parseInt(query.studyYear, 10));
+  }
+  if (query.term) {
+    conditions.push('spi.semester = ?');
+    params.push(Number.parseInt(query.term, 10));
+  }
+  const plans = await queryRows(
+    `SELECT sp.study_plan_id, sp.curriculum_id, sp.pathway_id, sp.plan_name, sp.active
+       FROM study_plan sp
+      WHERE sp.curriculum_id = ? AND sp.active = 1
+      ORDER BY sp.study_plan_id`,
+    [curriculumId],
+  );
+  if (!plans.length) return response(404, { error: 'Active study plan not found' });
+  const items = await queryRows(
+    `SELECT spi.study_year, spi.semester, spi.item_order, spi.course_id,
+            c.course_code, c.title_th, c.title_en, spi.requirement_text, spi.credits
+       FROM study_plan_item spi
+       JOIN study_plan sp ON sp.study_plan_id = spi.study_plan_id AND sp.active = 1
+       LEFT JOIN course c ON c.course_id = spi.course_id
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY spi.study_year, spi.semester, spi.item_order`,
+    params,
+  );
+  return response(200, { data: { plans, items } });
+}
+
 async function getCurriculumWorkflow(event) {
   const curriculumId = pathParameter(event, 'curriculumId');
   if (!curriculumId) return response(400, { error: 'curriculumId is required' });
@@ -588,15 +876,41 @@ async function createCurriculumChange(event) {
   if (changeType === 'academic_year' && !Number.isInteger(Number(payload.academicYear))) {
     return response(400, { error: 'payload.academicYear must be an integer' });
   }
-  if (changeType === 'course_replace' && (!payload.curriculumCourseId || !payload.newCourseCode)) {
-    return response(400, { error: 'course_replace requires curriculumCourseId and newCourseCode' });
+  if (['course_replace', 'course_remove'].includes(changeType) && !payload.curriculumCourseId) {
+    return response(400, { error: `${changeType} requires curriculumCourseId` });
   }
-  if (!['academic_year', 'course_replace'].includes(changeType)) {
+  if (['course_replace', 'course_add'].includes(changeType) && !payload.newCourseCode) {
+    return response(400, { error: `${changeType} requires newCourseCode` });
+  }
+  if (!['academic_year', 'course_replace', 'course_add', 'course_remove'].includes(changeType)) {
     return response(400, { error: 'Unsupported curriculum change type' });
   }
   if (operation === 'update') {
     const existing = await queryRows('SELECT curriculum_id FROM curriculum WHERE curriculum_id = ?', [curriculumId]);
     if (!existing.length) return response(404, { error: 'Curriculum not found' });
+  }
+  if (['course_replace', 'course_remove'].includes(changeType)) {
+    const existingCourse = await queryRows(
+      `SELECT cc.curriculum_course_id, c.course_code, c.title_th, c.credits_total
+         FROM curriculum_course cc
+         JOIN course c ON c.course_id = cc.course_id
+        WHERE cc.curriculum_course_id = ? AND cc.curriculum_id = ?
+        LIMIT 1`,
+      [payload.curriculumCourseId, curriculumId],
+    );
+    if (!existingCourse.length) return response(404, { error: 'Existing curriculum course not found' });
+    payload.oldCourse = existingCourse[0];
+  }
+  if (['course_replace', 'course_add'].includes(changeType)) {
+    const newCourse = await queryRows(
+      `SELECT course_id, course_code, title_th, credits_total
+         FROM course
+        WHERE course_code = ? OR REPLACE(course_code, ' ', '') = REPLACE(?, ' ', '')
+        LIMIT 1`,
+      [payload.newCourseCode, payload.newCourseCode],
+    );
+    if (!newCourse.length) return response(404, { error: 'New course not found' });
+    payload.newCourse = newCourse[0];
   }
   const currentWorkflow = await queryRows(
     'SELECT status FROM curriculum_workflow WHERE curriculum_id = ?',
@@ -613,13 +927,15 @@ async function createCurriculumChange(event) {
       ...(changeType === 'academic_year' ? { academicYear: Number(payload.academicYear) } : {}),
     }), actor.username, actor.role],
   );
-  await pool.execute(
-    `INSERT INTO curriculum_workflow (curriculum_id, status, updated_by, updated_role)
-     VALUES (?, 'review', ?, ?)
-     ON DUPLICATE KEY UPDATE status = 'review', updated_by = VALUES(updated_by),
-       updated_role = VALUES(updated_role), updated_at = CURRENT_TIMESTAMP`,
-    [curriculumId, actor.username, actor.role],
-  );
+  if (operation === 'update') {
+    await pool.execute(
+      `INSERT INTO curriculum_workflow (curriculum_id, status, updated_by, updated_role)
+       VALUES (?, 'review', ?, ?)
+       ON DUPLICATE KEY UPDATE status = 'review', updated_by = VALUES(updated_by),
+         updated_role = VALUES(updated_role), updated_at = CURRENT_TIMESTAMP`,
+      [curriculumId, actor.username, actor.role],
+    );
+  }
   const data = {
     change_id: result.insertId,
     curriculum_id: curriculumId,
@@ -671,6 +987,36 @@ async function decideCurriculumChange(event) {
           WHERE curriculum_course_id = ? AND curriculum_id = ?`,
         [replacement[0].course_id, change.payload.curriculumCourseId, change.curriculum_id],
       );
+    } else if (change.payload?.changeType === 'course_remove') {
+      await pool.execute('DELETE FROM course_subcategory WHERE curriculum_course_id = ?', [change.payload.curriculumCourseId]);
+      await pool.execute('DELETE FROM course_classification WHERE curriculum_course_id = ?', [change.payload.curriculumCourseId]);
+      await pool.execute(
+        'DELETE FROM curriculum_course WHERE curriculum_course_id = ? AND curriculum_id = ?',
+        [change.payload.curriculumCourseId, change.curriculum_id],
+      );
+    } else if (change.payload?.changeType === 'course_add') {
+      const newCourse = await queryRows(
+        `SELECT course_id, course_code FROM course
+          WHERE course_code = ? OR REPLACE(course_code, ' ', '') = REPLACE(?, ' ', '')
+          LIMIT 1`,
+        [change.payload.newCourseCode, change.payload.newCourseCode],
+      );
+      if (!newCourse.length) return response(404, { error: 'New course not found' });
+      const curriculumCourseId = change.payload.curriculumCourseId ||
+        `${change.curriculum_id}-${String(change.payload.newCourseCode).replace(/\s+/g, '')}`;
+      await pool.execute(
+        `INSERT INTO curriculum_course
+          (curriculum_course_id, curriculum_id, pathway_id, course_id, course_group, requirement_type)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          curriculumCourseId,
+          change.curriculum_id,
+          change.payload.pathwayId ?? null,
+          newCourse[0].course_id,
+          change.payload.courseGroup ?? 'วิชาเฉพาะ',
+          change.payload.requirementType ?? 'required',
+        ],
+      );
     } else if (change.operation === 'create') {
       await pool.execute(
         'INSERT INTO curriculum (curriculum_id, academic_year) VALUES (?, ?)',
@@ -717,6 +1063,9 @@ export const handler = async (event) => {
     const route = event.routeKey ?? `${method} ${event.rawPath ?? event.path ?? ''}`;
 
     if (route === 'POST /api/auth/login') return await tuLogin(event);
+    if (route === 'POST /api/change-requests') return await createDraftChangeRequest(event);
+    if (route === 'PUT /api/change-requests/{requestId}/items') return await saveDraftChangeItems(event);
+    if (route === 'POST /api/change-requests/{requestId}/submit') return await submitDraftChangeRequest(event);
     if (route === 'POST /api/curriculum-changes') return await createCurriculumChange(event);
     if (route === 'POST /api/curriculum-changes/{changeId}/decision') return await decideCurriculumChange(event);
     if (route === 'POST /api/curricula/{curriculumId}/workflow') return await updateCurriculumWorkflow(event);
@@ -726,6 +1075,9 @@ export const handler = async (event) => {
     if (route === 'GET /api/courses/{courseCode}' || route.startsWith('GET /api/courses/')) return await getCourse(event);
     if (route === 'GET /api/curricula/{curriculumId}/graduation-conditions') return await listGraduationConditions(event);
     if (route === 'GET /api/curricula/{curriculumId}/workflow') return await getCurriculumWorkflow(event);
+    if (route === 'GET /api/curricula/{curriculumId}/active-plan') return await getActivePlanForDraft(event);
+    if (route === 'GET /api/change-requests') return await listDraftChangeRequests(event);
+    if (route === 'GET /api/change-requests/{requestId}') return await getDraftChangeRequest(event);
     if (route === 'GET /api/study-plans') return await listStudyPlans(event);
     if (route === 'GET /api/study-plans/{studyPlanId}') return await getStudyPlan(event);
     if (route === 'GET /api/faculties') return await listFaculties();
