@@ -1504,6 +1504,7 @@
 }
 
 .management-program-main { min-width: 0; }
+.management-program-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .management-program-year { color: var(--primary, #c9003d); font-size: 12px; font-weight: 700; }
 .management-program-card h2 { margin: 5px 0 3px; font-size: 20px; }
 .management-program-card p { margin: 0; color: var(--text-soft); }
@@ -1659,7 +1660,8 @@
   .management-page-head { align-items: stretch; flex-direction: column; }
   .management-create-button { width: 100%; }
   .management-program-card { align-items: stretch; flex-direction: column; }
-  .management-program-card .workflow-action { width: 100%; }
+  .management-program-actions { width: 100%; }
+  .management-program-actions .workflow-action { flex: 1; }
   .editor-topbar { align-items: stretch; flex-direction: column; }
   .editor-topbar-actions { justify-content: stretch; }
   .editor-topbar-actions button { flex: 1; }
