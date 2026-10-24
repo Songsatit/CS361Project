@@ -221,6 +221,12 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/curricula/{curriculumId}/workflow
             Method: GET
+        ListCurricula:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/curricula
+            Method: GET
         UpdateCurriculumWorkflow:
           Type: HttpApi
           Properties:

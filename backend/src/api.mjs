@@ -425,6 +425,16 @@ async function listFaculties() {
   return response(200, { data });
 }
 
+async function listCurricula() {
+  const data = await queryRows(
+    `SELECT curriculum_id, academic_year, active
+       FROM curriculum
+      WHERE active = 1
+      ORDER BY academic_year DESC, curriculum_id`,
+  );
+  return response(200, { data });
+}
+
 async function listDepartments(event) {
   const facultyId = event.queryStringParameters?.facultyId;
   const data = await queryRows(
@@ -1178,6 +1188,7 @@ export const handler = async (event) => {
     if (route === 'GET /api/change-requests/{requestId}') return await getDraftChangeRequest(event);
     if (route === 'GET /api/study-plans') return await listStudyPlans(event);
     if (route === 'GET /api/study-plans/{studyPlanId}') return await getStudyPlan(event);
+    if (route === 'GET /api/curricula') return await listCurricula();
     if (route === 'GET /api/faculties') return await listFaculties();
     if (route === 'GET /api/departments') return await listDepartments(event);
     if (route === 'GET /api/audit-logs') return await listAuditLogs(event);
