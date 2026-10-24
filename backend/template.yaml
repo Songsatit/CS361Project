@@ -103,6 +103,7 @@ Resources:
           - POST
           - PUT
           - PATCH
+          - DELETE
           - OPTIONS
         AllowHeaders:
           - content-type
@@ -240,6 +241,12 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/curricula/{curriculumId}/visibility
             Method: PATCH
+        DeleteCurriculum:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/curricula/{curriculumId}
+            Method: DELETE
         ListCurriculumChanges:
           Type: HttpApi
           Properties:
