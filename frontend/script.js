@@ -120,6 +120,24 @@ async function loadDraftChangeRequests() {
   return state.draftRequests;
 }
 
+async function loadManagementCurricula() {
+  if (!canManageCurricula() || state.managementCurriculaLoaded) return state.managementCurricula;
+  try {
+    const response = await fetch(`${API_BASE}/api/curricula?includeInactive=1`, {
+      headers: draftApiHeaders()
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error ?? `Curriculum API returned ${response.status}`);
+    state.managementCurricula = payload?.data ?? [];
+  } catch (error) {
+    console.warn("Management curriculum list API unavailable.", error);
+    state.managementCurricula = [];
+  } finally {
+    state.managementCurriculaLoaded = true;
+  }
+  return state.managementCurricula;
+}
+
 async function loadChangeRequestDetail(requestId) {
   state.changeRequestLoading = true;
   state.changeRequestError = "";
@@ -1376,6 +1394,23 @@ function renderPrograms() {
 function renderCurriculumManagement() {
   if (!canManageCurricula()) return renderHome();
   const requests = state.draftRequests ?? [];
+  const apiPrograms = (state.managementCurricula ?? []).map(curriculum => {
+    const existing = PROGRAMS.find(program => program.curriculumId === curriculum.curriculum_id);
+    return existing ?? {
+      id: `api-${curriculum.curriculum_id}`,
+      curriculumId: curriculum.curriculum_id,
+      code: curriculum.curriculum_id,
+      nameEn: curriculum.curriculum_id,
+      revisionYear: Number(curriculum.academic_year),
+      plan: [],
+      studyPlans: []
+    };
+  });
+  const managementPrograms = apiPrograms.length
+    ? apiPrograms
+    : PROGRAMS;
+  const curriculumStatus = new Map((state.managementCurricula ?? [])
+    .map(item => [item.curriculum_id, Number(item.active) !== 0]));
   const warningFor = program => requests.filter(request =>
     request.curriculum_id === program.curriculumId && ["draft", "pending"].includes(request.status)
   );
@@ -1391,19 +1426,22 @@ function renderCurriculumManagement() {
         <button class="workflow-action workflow-action--primary management-create-button" type="button" data-go="curriculum-editor" data-id="new">+ สร้างหลักสูตรใหม่</button>
       </div>
       <section class="management-program-list">
-        ${PROGRAMS.map(program => {
+        ${managementPrograms.map(program => {
           const courses = new Set((program.plan ?? []).flatMap(term => term.courses ?? []).filter(code => !code.startsWith("__REQ__")));
           const warnings = warningFor(program);
+          const isActive = curriculumStatus.has(program.curriculumId)
+            ? curriculumStatus.get(program.curriculumId)
+            : true;
           return `
             <article class="management-program-card">
               <div class="management-program-main">
                 <span class="management-program-year">พ.ศ. ${esc(program.revisionYear)}</span>
                 <h2>${esc(program.code)}</h2>
                 <p>${esc(program.nameEn)}</p>
-                <div class="management-program-meta"><span>${esc(program.curriculumId)}</span><span>วิชา ${courses.size} รายการ</span><span>เวอร์ชัน active</span></div>
+                <div class="management-program-meta"><span>${esc(program.curriculumId)}</span><span>วิชา ${courses.size} รายการ</span><span>${isActive ? "เผยแพร่" : "ซ่อนอยู่"}</span></div>
                 ${warnings.length ? `<p class="management-warning">มี ${warnings.length} รายการอยู่ในสถานะ ${warnings.some(item => item.status === "pending") ? "รอตรวจสอบ" : "ฉบับร่าง"}</p>` : ""}
               </div>
-              <div class="management-program-actions"><button class="workflow-action workflow-action--primary" type="button" data-go="curriculum-editor" data-id="${esc(program.id)}">แก้ไข</button><button class="workflow-action workflow-action--danger" type="button" data-curriculum-visibility="hide" data-curriculum-id="${esc(program.curriculumId)}">ซ่อนหลักสูตร</button></div>
+              <div class="management-program-actions"><button class="workflow-action workflow-action--primary" type="button" data-go="curriculum-editor" data-id="${esc(program.id)}">แก้ไข</button><button class="workflow-action ${isActive ? "workflow-action--danger" : "workflow-action--primary"}" type="button" data-curriculum-visibility="${isActive ? "hide" : "show"}" data-curriculum-id="${esc(program.curriculumId)}">${isActive ? "ซ่อนหลักสูตร" : "แสดงหลักสูตร"}</button></div>
             </article>
           `;
         }).join("")}
@@ -3400,6 +3438,11 @@ function render() {
       if (["curriculum-management", "my-change-requests", "review-requests"].includes(state.view)) render();
     });
   }
+  if (state.view === "curriculum-management" && canManageCurricula() && !state.managementCurriculaLoaded) {
+    loadManagementCurricula().then(() => {
+      if (state.view === "curriculum-management") render();
+    });
+  }
   if (state.view === "curriculum-editor" && state.editorMode === "edit" && state.editorProgram && !state.editorLoading && !state.editorProgramLoaded) {
     state.editorProgramLoaded = true;
     loadEditorActivePlan(state.editorProgram).then(() => {
@@ -3539,7 +3582,8 @@ function bind() {
   document.querySelectorAll("[data-curriculum-visibility]").forEach(button => {
     button.onclick = async () => {
       const curriculumId = button.dataset.curriculumId;
-      if (!curriculumId || !confirm(`ซ่อนหลักสูตร ${curriculumId} จากผู้ใช้ทั่วไปหรือไม่`)) return;
+      const show = button.dataset.curriculumVisibility === "show";
+      if (!curriculumId || !confirm(`${show ? "แสดง" : "ซ่อน"}หลักสูตร ${curriculumId} ${show ? "ให้ผู้ใช้ทั่วไปเห็นอีกครั้ง" : "จากผู้ใช้ทั่วไป"}หรือไม่`)) return;
       button.disabled = true;
       try {
         const response = await fetch(`${API_BASE}/api/curricula/${encodeURIComponent(curriculumId)}/visibility`, {
@@ -3548,12 +3592,13 @@ function bind() {
           body: JSON.stringify({ active: button.dataset.curriculumVisibility !== "hide" })
         });
         const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload.error ?? "ซ่อนหลักสูตรไม่สำเร็จ");
-        alert("ซ่อนหลักสูตรแล้ว");
-        await loadApiData();
+        if (!response.ok) throw new Error(payload.error ?? `${show ? "แสดง" : "ซ่อน"}หลักสูตรไม่สำเร็จ`);
+        alert(show ? "แสดงหลักสูตรแล้ว" : "ซ่อนหลักสูตรแล้ว");
+        state.managementCurriculaLoaded = false;
+        await loadManagementCurricula();
         render();
       } catch (error) {
-        alert(error.message ?? "ซ่อนหลักสูตรไม่สำเร็จ");
+        alert(error.message ?? `${show ? "แสดง" : "ซ่อน"}หลักสูตรไม่สำเร็จ`);
         button.disabled = false;
       }
     };

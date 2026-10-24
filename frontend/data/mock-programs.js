@@ -413,6 +413,8 @@ const state = {
   curriculumChangesLoaded: false,
   draftRequests: [],
   draftRequestsLoaded: false,
+  managementCurricula: [],
+  managementCurriculaLoaded: false,
   selectedChangeRequest: null,
   changeRequestFilter: "all",
   changeRequestLoading: false,
