@@ -709,8 +709,50 @@ async function decideDraftChangeRequest(event) {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
-    if (action === 'approve' && request.type === 'edit_course') {
-      const items = await queryRows('SELECT * FROM change_items WHERE request_id = ? ORDER BY sort_order, id', [requestId]);
+    const items = await queryRows('SELECT * FROM change_items WHERE request_id = ? ORDER BY sort_order, id', [requestId]);
+    if (action === 'approve' && request.type === 'add_curriculum') {
+      const createItem = items.map(normalizeChangeItem).find(item => item.action === 'CREATE_CURRICULUM');
+      const value = createItem?.new_value ?? {};
+      const curriculumId = String(value.curriculumId ?? request.curriculum_id ?? '').trim();
+      const academicYear = Number(value.academicYear);
+      if (!curriculumId || !Number.isInteger(academicYear)) throw new Error('New curriculum details are incomplete');
+      await connection.execute(
+        `INSERT INTO curriculum (curriculum_id, academic_year, active)
+         VALUES (?, ?, 1)
+         ON DUPLICATE KEY UPDATE academic_year = VALUES(academic_year), active = 1`,
+        [curriculumId, academicYear],
+      );
+      const studyPlanId = `${curriculumId}-MAIN`;
+      await connection.execute(
+        `INSERT INTO study_plan (study_plan_id, curriculum_id, plan_name, active)
+         VALUES (?, ?, 'แผนหลัก', 1)
+         ON DUPLICATE KEY UPDATE active = 1`,
+        [studyPlanId, curriculumId],
+      );
+      const orderByTerm = new Map();
+      for (const item of items.map(normalizeChangeItem).filter(item => item.action === 'ADD_COURSE')) {
+        const year = Number(item.study_year);
+        const semester = String(item.term ?? '1') === 'S' ? 3 : Number(item.term);
+        if (!Number.isInteger(year) || !Number.isInteger(semester)) continue;
+        const itemOrder = orderByTerm.get(`${year}-${semester}`) ?? 0;
+        orderByTerm.set(`${year}-${semester}`, itemOrder + 1);
+        let courseId = null;
+        if (item.course_code) {
+          const courseRows = await queryRows(
+            'SELECT course_id FROM course WHERE course_code = ? OR REPLACE(course_code, \' \', \'\') = REPLACE(?, \' \', \'\') LIMIT 1',
+            [item.course_code, item.course_code],
+          );
+          courseId = courseRows[0]?.course_id ?? null;
+        }
+        const value = item.new_value ?? {};
+        await connection.execute(
+          `INSERT IGNORE INTO study_plan_item
+            (study_plan_id, study_year, semester, item_order, course_id, requirement_text, credits)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [studyPlanId, year, semester, itemOrder, courseId, value.requirementText ?? null, value.credits == null ? null : Number(value.credits)],
+        );
+      }
+    } else if (action === 'approve' && request.type === 'edit_course') {
       for (const rawItem of items) {
         const item = normalizeChangeItem(rawItem);
         if (item.action !== 'EDIT_FIELD' || !item.course_code) continue;
