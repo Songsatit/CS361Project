@@ -679,6 +679,72 @@ async function submitDraftChangeRequest(event) {
   return response(200, { data });
 }
 
+async function decideDraftChangeRequest(event) {
+  const requestId = Number(pathParameter(event, 'requestId'));
+  const body = requestBody(event);
+  if (!Number.isInteger(requestId) || !body) return response(400, { error: 'requestId and valid JSON body are required' });
+  const actor = actorFromRequest(event, body);
+  if (actor.role !== 'staff') return response(403, { error: 'Only staff can approve or reject change requests' });
+  const action = String(body.action ?? '').toLowerCase();
+  if (!['approve', 'reject'].includes(action)) return response(400, { error: 'action must be approve or reject' });
+  const requestRows = await queryRows('SELECT * FROM change_requests WHERE id = ?', [requestId]);
+  const request = normalizeChangeRequest(requestRows[0]);
+  if (!request) return response(404, { error: 'Change request not found' });
+  if (request.status !== 'pending') return response(409, { error: 'Only pending requests can be reviewed' });
+  const note = String(body.note ?? '').trim() || null;
+  if (action === 'reject' && !note) return response(400, { error: 'A rejection reason is required' });
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    if (action === 'approve' && request.type === 'edit_course') {
+      const items = await queryRows('SELECT * FROM change_items WHERE request_id = ? ORDER BY sort_order, id', [requestId]);
+      for (const rawItem of items) {
+        const item = normalizeChangeItem(rawItem);
+        if (item.action !== 'EDIT_FIELD' || !item.course_code) continue;
+        const value = item.new_value ?? {};
+        const courseRows = await queryRows(
+          'SELECT course_id FROM course WHERE course_code = ? OR REPLACE(course_code, \' \', \'\') = REPLACE(?, \' \', \'\') LIMIT 1',
+          [item.course_code, item.course_code],
+        );
+        if (!courseRows.length) throw new Error(`Course not found: ${item.course_code}`);
+        await connection.execute(
+          `UPDATE course
+              SET title_th = COALESCE(?, title_th),
+                  title_en = COALESCE(?, title_en),
+                  credits_total = COALESCE(?, credits_total)
+            WHERE course_id = ?`,
+          [value.name ?? null, value.nameEn ?? null, value.credits == null ? null : Number(value.credits), courseRows[0].course_id],
+        );
+      }
+    }
+    await connection.execute(
+      `UPDATE change_requests
+          SET status = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, reject_reason = ?
+        WHERE id = ? AND status = 'pending'`,
+      [action === 'approve' ? 'approved' : 'rejected', actor.username, note, requestId],
+    );
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+  const updatedRows = await queryRows('SELECT * FROM change_requests WHERE id = ?', [requestId]);
+  const data = normalizeChangeRequest(updatedRows[0]);
+  await writeAuditLog({
+    username: actor.username,
+    role: actor.role,
+    action: `change_request_${action}d`,
+    entityType: 'change_request',
+    entityId: String(requestId),
+    oldValue: request,
+    newValue: data,
+  });
+  return response(200, { data });
+}
+
 async function getDraftChangeRequest(event) {
   const requestId = Number(pathParameter(event, 'requestId'));
   if (!Number.isInteger(requestId)) return response(400, { error: 'requestId is required' });
@@ -1066,6 +1132,7 @@ export const handler = async (event) => {
     if (route === 'POST /api/change-requests') return await createDraftChangeRequest(event);
     if (route === 'PUT /api/change-requests/{requestId}/items') return await saveDraftChangeItems(event);
     if (route === 'POST /api/change-requests/{requestId}/submit') return await submitDraftChangeRequest(event);
+    if (route === 'POST /api/change-requests/{requestId}/decision') return await decideDraftChangeRequest(event);
     if (route === 'POST /api/curriculum-changes') return await createCurriculumChange(event);
     if (route === 'POST /api/curriculum-changes/{changeId}/decision') return await decideCurriculumChange(event);
     if (route === 'POST /api/curricula/{curriculumId}/workflow') return await updateCurriculumWorkflow(event);

@@ -149,6 +149,12 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/change-requests/{requestId}/submit
             Method: POST
+        DecideDraftChangeRequest:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/change-requests/{requestId}/decision
+            Method: POST
         GetActivePlanForDraft:
           Type: HttpApi
           Properties:

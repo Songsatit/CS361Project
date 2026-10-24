@@ -23,6 +23,14 @@ function canAccessCurriculumManagement(user = state.user) {
   return ["instructor", "staff", "curriculum_admin"].includes(user?.role);
 }
 
+function canManageCurricula(user = state.user) {
+  return ["staff", "curriculum_admin"].includes(user?.role);
+}
+
+function canReviewCurriculumRequests(user = state.user) {
+  return user?.role === "staff";
+}
+
 function canViewAuditLogs(user = state.user) {
   return ["staff", "curriculum_admin"].includes(user?.role);
 }
@@ -64,6 +72,10 @@ function restoreMockUser() {
   try {
     const saved = localStorage.getItem("cs361-v3-user");
     state.user = saved ? JSON.parse(saved) : null;
+    if (state.user && ["admin", "curriculumadmin"].includes(state.user.role)) {
+      state.user.role = "curriculum_admin";
+      state.user.roleLabel = "ผู้ดูแลข้อมูลหลักสูตร";
+    }
   } catch {
     state.user = null;
   }
@@ -80,6 +92,167 @@ function mockLogin(username, password) {
 function mockLogout() {
   state.user = null;
   localStorage.removeItem("cs361-v3-user");
+}
+
+function draftApiHeaders() {
+  return {
+    "Content-Type": "application/json",
+    "x-user": state.user?.username ?? "",
+    "x-role": state.user?.role ?? ""
+  };
+}
+
+async function loadDraftChangeRequests() {
+  if (!state.user || state.draftRequestsLoaded) return state.draftRequests;
+  try {
+    const response = await fetch(`${API_BASE}/api/change-requests`, {
+      headers: draftApiHeaders()
+    });
+    if (!response.ok) throw new Error(`Draft API returned ${response.status}`);
+    const payload = await response.json();
+    state.draftRequests = payload?.data ?? [];
+  } catch (error) {
+    console.warn("Draft change request API unavailable.", error);
+    state.draftRequests = [];
+  } finally {
+    state.draftRequestsLoaded = true;
+  }
+  return state.draftRequests;
+}
+
+async function loadChangeRequestDetail(requestId) {
+  state.changeRequestLoading = true;
+  state.changeRequestError = "";
+  try {
+    const response = await fetch(`${API_BASE}/api/change-requests/${encodeURIComponent(requestId)}`, {
+      headers: draftApiHeaders()
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error ?? "โหลดรายละเอียดคำขอไม่สำเร็จ");
+    state.selectedChangeRequest = payload.data ?? null;
+  } catch (error) {
+    state.changeRequestError = error.message || "โหลดรายละเอียดคำขอไม่สำเร็จ";
+  } finally {
+    state.changeRequestLoading = false;
+  }
+  render();
+}
+
+function changeRequestStatusLabel(status) {
+  return {
+    draft: "ฉบับร่าง",
+    pending: "รอตรวจสอบ",
+    approved: "อนุมัติแล้ว",
+    rejected: "ถูกปฏิเสธ"
+  }[status] ?? status ?? "ไม่ทราบสถานะ";
+}
+
+function changeRequestStatusClass(status) {
+  return `change-request-status change-request-status--${status || "unknown"}`;
+}
+
+function changeRequestItemLabel(item) {
+  const actionLabels = {
+    ADD_COURSE: "เพิ่มรายวิชา",
+    REMOVE_COURSE: "ลบรายวิชา",
+    MOVE_COURSE: "ย้ายรายวิชา",
+    EDIT_FIELD: "แก้รายละเอียดรายวิชา",
+    ADD_PREREQ: "เพิ่มวิชาบังคับก่อน",
+    REMOVE_PREREQ: "ลบวิชาบังคับก่อน",
+    CREATE_CURRICULUM: "สร้างหลักสูตร"
+  };
+  const code = item.course_code || item.courseCode || item.new_value?.courseCode || "";
+  const course = code ? COURSES[courseKey(code)] : null;
+  const name = course?.name ? ` — ${course.name}` : "";
+  return `${actionLabels[item.action] ?? item.action ?? "แก้ไขข้อมูล"}${code ? ` · ${code}${name}` : ""}`;
+}
+
+function changeRequestLocation(value) {
+  if (!value || typeof value !== "object") return "";
+  const year = value.year ?? value.studyYear;
+  const term = value.term ?? value.semester;
+  if (!year && !term) return "";
+  const termLabel = String(term) === "S" || String(term) === "3" ? "ซัมเมอร์" : `ภาค ${term}`;
+  return `ชั้นปีที่ ${year ?? "-"} · ${termLabel}`;
+}
+
+function changeRequestReadableDiff(item) {
+  const oldValue = item.old_value ?? item.oldValue;
+  const newValue = item.new_value ?? item.newValue;
+  const code = item.course_code || item.courseCode || newValue?.courseCode || "";
+  const course = code ? COURSES[courseKey(code)] : null;
+  const courseTitle = code
+    ? `<div class="request-course-heading"><strong>${esc(code)}</strong><span>${esc(course?.name ?? "รายวิชา")}</span>${course?.nameEn ? `<small>${esc(course.nameEn)}</small>` : ""}</div>`
+    : "";
+  const action = String(item.action ?? "").toUpperCase();
+  if (action === "CREATE_CURRICULUM") {
+    return `<div class="request-readable-change"><div class="request-field-line"><span>การดำเนินการ</span><strong>สร้างหลักสูตรใหม่</strong></div><div class="request-field-line"><span>รหัสหลักสูตร</span><strong>${esc(newValue?.curriculumId ?? "-")}</strong></div><div class="request-field-line"><span>ปีหลักสูตร</span><strong>พ.ศ. ${esc(newValue?.academicYear ?? "-")}</strong></div><div class="request-field-line"><span>ชื่อหลักสูตร</span><strong>${esc(newValue?.title ?? "-")}</strong></div></div>`;
+  }
+  if (action === "ADD_COURSE") {
+    return `<div class="request-readable-change">${courseTitle}<div class="request-field-line"><span>เพิ่มใน</span><strong>${esc(changeRequestLocation(newValue) || "ยังไม่ระบุภาคเรียน")}</strong></div><div class="request-field-line"><span>หน่วยกิต</span><strong>${esc(course?.credits ?? "-")} หน่วยกิต</strong></div></div>`;
+  }
+  if (action === "REMOVE_COURSE") {
+    return `<div class="request-readable-change request-readable-change--remove">${courseTitle}<div class="request-field-line"><span>นำออกจาก</span><strong>${esc(changeRequestLocation(oldValue) || "หลักสูตร")}</strong></div></div>`;
+  }
+  if (action === "MOVE_COURSE") {
+    return `<div class="request-readable-change request-readable-change--move">${courseTitle}<div class="request-move-line"><span>${esc(changeRequestLocation(oldValue) || "ตำแหน่งเดิม")}</span><b>→</b><span>${esc(changeRequestLocation(newValue) || "ตำแหน่งใหม่")}</span></div></div>`;
+  }
+  if (action === "EDIT_FIELD") {
+    const fields = ["code", "name", "nameEn", "credits", "category"].filter(field => oldValue?.[field] !== newValue?.[field]);
+    return `<div class="request-readable-change">${courseTitle}${fields.length ? fields.map(field => `<div class="request-field-line"><span>${esc({ code: "รหัสวิชา", name: "ชื่อภาษาไทย", nameEn: "ชื่อภาษาอังกฤษ", credits: "หน่วยกิต", category: "กลุ่มวิชา" }[field] ?? field)}</span><strong><del>${esc(oldValue?.[field] ?? "-")}</del> → ${esc(newValue?.[field] ?? "-")}</strong></div>`).join("") : `<span>มีการแก้รายละเอียดรายวิชา</span>`}</div>`;
+  }
+  if (["ADD_PREREQ", "REMOVE_PREREQ"].includes(action)) {
+    const prereq = newValue?.prerequisiteCode ?? newValue?.prereqCode ?? newValue?.code ?? "-";
+    return `<div class="request-readable-change">${courseTitle}<div class="request-field-line"><span>วิชาบังคับก่อน</span><strong>${action === "ADD_PREREQ" ? "เพิ่ม" : "ลบ"} ${esc(prereq)}</strong></div></div>`;
+  }
+  return `<div class="request-readable-change"><span>มีการเปลี่ยนแปลงข้อมูลรายการนี้</span></div>`;
+}
+
+function changeRequestItemGroup(item) {
+  const value = item.new_value ?? item.newValue ?? item.old_value ?? item.oldValue ?? {};
+  const year = item.study_year ?? item.studyYear ?? value.year;
+  const term = item.term ?? item.semester ?? value.term;
+  if (!year && !term) return "ข้อมูลหลักสูตร";
+  return `ชั้นปีที่ ${year ?? "-"} · ${String(term) === "S" || String(term) === "3" ? "ซัมเมอร์" : `ภาค ${term}`}`;
+}
+
+function renderChangeRequestDetail(request) {
+  if (!request) return `<p class="audit-empty">เลือกคำขอเพื่อดูรายละเอียดก่อน–หลัง</p>`;
+  const detail = request.request ?? request;
+  const items = request.items ?? [];
+  const canDecide = canReviewCurriculumRequests() && detail.status === "pending";
+  const groupedItems = items.reduce((groups, item) => {
+    const key = changeRequestItemGroup(item);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+    return groups;
+  }, new Map());
+  return `
+    <section class="change-request-detail audit-log-card">
+      <div class="audit-log-head"><div><span class="workflow-kicker">REQUEST #${esc(detail.id)}</span><h2>${esc(detail.title ?? "คำขอแก้ไขหลักสูตร")}</h2></div><span class="${changeRequestStatusClass(detail.status)}">${esc(changeRequestStatusLabel(detail.status))}</span></div>
+      <div class="change-request-meta"><span>ผู้ส่ง: ${esc(detail.created_by ?? "-")}</span><span>สร้างเมื่อ: ${esc(detail.created_at ?? "-")}</span><span>รายการ: ${items.length}</span></div>
+      ${detail.note ? `<p class="change-request-note">${esc(detail.note)}</p>` : ""}
+      <div class="change-request-items">${items.length ? [...groupedItems.entries()].map(([group, groupItems], groupIndex) => `<details class="change-request-group" ${groupIndex === 0 ? "open" : ""}><summary><strong>${esc(group)}</strong><span>${groupItems.length} รายการ</span></summary><div class="change-request-group-items">${groupItems.map((item, index) => `<article class="change-request-item"><strong>${index + 1}. ${esc(changeRequestItemLabel(item))}</strong>${changeRequestReadableDiff(item)}</article>`).join("")}</div></details>`).join("") : `<p class="audit-empty">คำขอนี้ยังไม่มีรายการเปลี่ยนแปลง</p>`}</div>
+      ${detail.review_note ? `<div class="change-request-review-note"><strong>หมายเหตุผู้ตรวจ</strong><p>${esc(detail.review_note)}</p></div>` : ""}
+      ${canDecide ? `<div class="change-request-decision"><button type="button" class="workflow-action workflow-action--primary" data-request-decision="approve" data-request-id="${esc(detail.id)}">อนุมัติคำขอ</button><button type="button" class="workflow-action workflow-action--danger" data-request-decision="reject" data-request-id="${esc(detail.id)}">ปฏิเสธคำขอ</button></div>` : ""}
+    </section>
+  `;
+}
+
+function renderChangeRequestsPage(review = false) {
+  if (!canManageCurricula()) return renderHome();
+  const all = state.draftRequests ?? [];
+  const filtered = state.changeRequestFilter === "all" ? all : all.filter(item => item.status === state.changeRequestFilter);
+  const counts = ["draft", "pending", "approved", "rejected"].map(status => `${changeRequestStatusLabel(status)} ${all.filter(item => item.status === status).length}`).join(" · ");
+  return `
+    <div class="page change-requests-page">
+      ${crumbs([{ label: "หน้าแรก", view: "home" }, { label: review ? "ตรวจคำขอ" : "คำขอของฉัน" }])}
+      <div class="management-page-head"><div><span class="workflow-kicker">CURRICULUM WORKFLOW</span><h1 class="page-title">${review ? "ตรวจคำขอหลักสูตร" : "คำขอของฉัน"}</h1><p class="page-sub">ติดตามว่าคำขออยู่ขั้นตอนไหน และดูรายละเอียดก่อน–หลังได้จากหน้านี้</p></div></div>
+      <section class="change-request-summary audit-log-card"><strong>ภาพรวมคำขอ</strong><span>${esc(counts)}</span></section>
+      <div class="change-request-tabs">${[["all", "ทั้งหมด"], ["draft", "ฉบับร่าง"], ["pending", "รอตรวจสอบ"], ["approved", "อนุมัติแล้ว"], ["rejected", "ถูกปฏิเสธ"]].map(([value, label]) => `<button type="button" class="${state.changeRequestFilter === value ? "is-active" : ""}" data-request-filter="${value}">${label} (${value === "all" ? all.length : all.filter(item => item.status === value).length})</button>`).join("")}</div>
+      <div class="change-request-layout"><section class="change-request-list">${filtered.length ? filtered.map(item => `<button type="button" class="change-request-row ${state.selectedChangeRequest?.request?.id === item.id || state.selectedChangeRequest?.id === item.id ? "is-selected" : ""}" data-request-detail="${esc(item.id)}"><span><strong>#${esc(item.id)} · ${esc(item.title ?? "คำขอแก้ไขหลักสูตร")}</strong><small>${esc(item.created_by ?? "-")} · ${esc(item.created_at ?? "-")} · ${esc(item.item_count ?? 0)} รายการ</small></span><span class="${changeRequestStatusClass(item.status)}">${esc(changeRequestStatusLabel(item.status))}</span></button>`).join("") : `<p class="audit-empty">ยังไม่มีคำขอในสถานะนี้</p>`}</section><section class="change-request-detail-column">${state.changeRequestLoading ? `<div class="management-placeholder"><p>กำลังโหลดรายละเอียด...</p></div>` : state.changeRequestError ? `<div class="management-placeholder"><p class="error-text">${esc(state.changeRequestError)}</p></div>` : renderChangeRequestDetail(state.selectedChangeRequest)}</section></div>
+    </div>
+  `;
 }
 
 async function loadCurriculumWorkflow(curriculumId) {
@@ -207,6 +380,7 @@ function renderWorkflowPage() {
       : "สิทธิ์อาจารย์ผู้สอน";
   const auditLogs = auditLogCache.get("recent") ?? [];
   const pendingChanges = state.curriculumChanges.filter(item => item.status === "pending");
+  const pendingDrafts = state.draftRequests.filter(item => item.status === "pending");
   const currentCourses = state.curriculumCourses.filter(course =>
     !program.pathwayId || course.pathway_id === program.pathwayId
   );
@@ -276,82 +450,16 @@ function renderWorkflowPage() {
         `).join("")}
       </section>
 
-      ${state.user.role === "curriculum_admin" ? `
-        <section class="role-capability-card curriculum-edit-card curriculum-edit-launcher">
-          <div><h2>จัดการข้อมูลหลักสูตร</h2><p>เพิ่มหรือแก้ไขข้อมูล ระบบจะสร้างฉบับร่างเพื่อรอตรวจสอบก่อนเผยแพร่</p></div>
-          <button class="workflow-action workflow-action--primary" type="button" data-open-edit-modal>เพิ่ม/แก้ไขข้อมูล</button>
-        </section>
-
-        <div class="edit-modal" data-edit-modal hidden>
-          <div class="edit-modal-backdrop" data-close-edit-modal></div>
-          <section class="edit-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-modal-title">
-            <button class="edit-modal-close" type="button" data-close-edit-modal aria-label="ปิด">×</button>
-            <span class="workflow-kicker">จัดการข้อมูลหลักสูตร</span>
-            <h2 id="edit-modal-title">เพิ่มหรือแก้ไขข้อมูล</h2>
-            <p class="edit-modal-help">ข้อมูลจะยังไม่เปลี่ยนในหลักสูตรจริงจนกว่าจะผ่านการอนุมัติ</p>
-            <form id="curriculumChangeForm" class="curriculum-change-form">
-              <label>หลักสูตรที่ต้องการจัดการ
-                <select name="targetCurriculum" disabled>
-                  <option value="${esc(program.curriculumId)}">${esc(program.code)} · พ.ศ. ${esc(program.revisionYear)}</option>
-                </select>
-              </label>
-              <label>ต้องการทำอะไร
-                <select name="operation" data-edit-operation>
-                  <option value="update">แก้ไขหลักสูตรนี้</option>
-                  <option value="create">เพิ่มหลักสูตรใหม่</option>
-                </select>
-              </label>
-              <label data-change-field="new_curriculum" hidden>รหัสหลักสูตรใหม่
-                <input name="newCurriculumId" placeholder="เช่น BSC-CS-2569">
-              </label>
-              <label>รายการที่ต้องการแก้
-                <select name="changeType" id="changeType">
-                  <option value="academic_year">ปีหลักสูตร</option>
-                  <option value="course_add">เพิ่มรายวิชา</option>
-                  <option value="course_remove">เอารายวิชาออก</option>
-                  <option value="course_replace">เปลี่ยนรายวิชา</option>
-                </select>
-              </label>
-              <label data-change-field="academic_year">ปีหลักสูตรใหม่
-                <input name="academicYear" type="number" min="2500" max="2600" value="${esc(program.academicYear ?? (program.curriculumId.match(/(25\\d{2})/) || ["", "2566"])[1])}">
-              </label>
-              <label data-change-field="course_existing" hidden>รายวิชาในหลักสูตร
-                <select name="curriculumCourseId">
-                  <option value="">ค้นหาแล้วเลือกวิชาเดิม</option>
-                  ${currentCourseOptions}
-                </select>
-              </label>
-              <label data-change-field="course_new" hidden>วิชาใหม่
-                <input name="newCourseCode" list="availableCourseList" placeholder="พิมพ์รหัสหรือชื่อวิชาเพื่อค้นหา">
-                <datalist id="availableCourseList">${availableCourseOptions.replaceAll("<option", "<option")}</datalist>
-              </label>
-              <label data-change-field="course_add" hidden>กลุ่มวิชา
-                <select name="courseGroup">
-                  <option value="วิชาเฉพาะ">วิชาเฉพาะ</option>
-                  <option value="วิชาศึกษาทั่วไป">วิชาศึกษาทั่วไป</option>
-                  <option value="วิชาเลือกเสรี">วิชาเลือกเสรี</option>
-                  <option value="วิชาโครงงาน">วิชาโครงงาน</option>
-                  <option value="วิชาสหกิจศึกษา">วิชาสหกิจศึกษา</option>
-                </select>
-              </label>
-              <div class="edit-modal-actions">
-                <button class="workflow-action workflow-action--muted" type="button" data-close-edit-modal>ยกเลิก</button>
-                <button class="workflow-action workflow-action--primary" type="submit">บันทึกเป็นฉบับร่าง</button>
-              </div>
-            </form>
-          </section>
-        </div>
-      ` : ""}
-
       ${canAudit ? `
         <section class="audit-log-card curriculum-change-list">
-          <div class="audit-log-head"><h2>รายการแก้ไขที่รอตรวจสอบ</h2><span>${pendingChanges.length} รายการ</span></div>
-          ${pendingChanges.length ? `<div class="audit-log-table-wrap"><table class="audit-log-table">
+          <div class="audit-log-head"><h2>รายการแก้ไขที่รอตรวจสอบ</h2><span>${pendingChanges.length + pendingDrafts.length} รายการ</span></div>
+          ${pendingChanges.length || pendingDrafts.length ? `<div class="audit-log-table-wrap"><table class="audit-log-table">
             <thead><tr><th>หลักสูตร</th><th>การแก้ไข</th><th>สถานะ</th><th>การดำเนินการ</th></tr></thead>
             <tbody>${pendingChanges.map(change => `
               <tr><td>${esc(change.curriculum_id)}</td><td class="change-diff-cell">${changeDescription(change)}</td><td>${esc(change.status)}</td><td>
                 <button class="link-btn" data-change-action="approve" data-change-id="${esc(change.change_id)}">อนุมัติ</button><button class="link-btn" data-change-action="reject" data-change-id="${esc(change.change_id)}">ปฏิเสธ</button>
-              </td></tr>`).join("")}</tbody>
+              </td></tr>`).join("")}${pendingDrafts.map(draft => `
+              <tr><td>${esc(draft.curriculum_id ?? draft.source_curriculum_id ?? "หลักสูตรใหม่")}</td><td class="change-diff-cell"><strong>${esc(draft.title)}</strong><small>${esc(draft.note ?? "ฉบับร่างจากระบบใหม่")}</small></td><td>${esc(draft.status)}</td><td>รอตรวจสอบ</td></tr>`).join("")}</tbody>
           </table></div>` : `<p class="audit-empty">ยังไม่มีรายการแก้ไขที่รอตรวจสอบ</p>`}
         </section>
       ` : ""}
@@ -510,8 +618,9 @@ async function loadStudyPlans() {
   const plans = payload?.data ?? [];
 
   for (const program of PROGRAMS) {
-    if (!program.pathwayId) continue;
-    const pathwayPlans = plans.filter(plan => plan.pathway_id === program.pathwayId);
+    const pathwayPlans = plans.filter(plan =>
+      plan.curriculum_id === program.curriculumId && (!program.pathwayId || plan.pathway_id === program.pathwayId)
+    );
     if (!pathwayPlans.length) continue;
 
     const loadedPlans = [];
@@ -552,6 +661,16 @@ async function loadStudyPlans() {
     }
 
     if (loadedPlans.length) {
+      if (program.curriculumId === "BSC-CNC-2568" && loadedPlans.length === 2) {
+        loadedPlans.forEach((loadedPlan, index) => {
+          const planText = `${loadedPlan.id} ${loadedPlan.label}`;
+          loadedPlan.label = /3\s*[._-]?\s*5|สามปีครึ่ง/i.test(planText)
+            ? "แผน 3.5 ปี"
+            : /4\s*ปี|(^|[-_])4($|[-_])/i.test(planText)
+              ? "แผน 4 ปี"
+              : index === 0 ? "แผน 3.5 ปี" : "แผน 4 ปี";
+        });
+      }
       const selected = loadedPlans.find(plan => /PROJECT$/i.test(plan.id)) ?? loadedPlans[0];
       program.studyPlans = loadedPlans;
       program.activeStudyPlanId = selected.id;
@@ -561,6 +680,9 @@ async function loadStudyPlans() {
 }
 
 function studyPlanLabel(planId, planName) {
+  const planText = `${planId ?? ""} ${planName ?? ""}`;
+  if (/3\s*[.]?\s*5\s*ปี|3\s*ปีครึ่ง|สามปีครึ่ง/i.test(planText)) return "แผน 3.5 ปี";
+  if (/4\s*ปี|สี่ปี/i.test(planText)) return "แผน 4 ปี";
   if (planName) {
     if (/สหกิจ|co-?operative/i.test(planName)) return "แผนสหกิจศึกษา";
     if (/โครงงาน|project/i.test(planName)) return "แผนโครงงานพิเศษ";
@@ -723,7 +845,8 @@ const esc = s =>
 const norm = s =>
   (s || "")
     .toString()
-    .toLowerCase();
+    .toLowerCase()
+    .replace(/\s+/g, "");
 
 function findUnlocks(code) {
   return Object.entries(COURSES)
@@ -1204,10 +1327,472 @@ function renderPrograms() {
   `;
 }
 
+function renderCurriculumManagement() {
+  if (!canManageCurricula()) return renderHome();
+  const requests = state.draftRequests ?? [];
+  const warningFor = program => requests.filter(request =>
+    request.curriculum_id === program.curriculumId && ["draft", "pending"].includes(request.status)
+  );
+  return `
+    <div class="page curriculum-management-page">
+      ${crumbs([{ label: "หน้าแรก", view: "home" }, { label: "จัดการหลักสูตร" }])}
+      <div class="management-page-head">
+        <div>
+          <span class="workflow-kicker">CURRICULUM MANAGEMENT</span>
+          <h1 class="page-title">จัดการหลักสูตร</h1>
+          <p class="page-sub">เลือกหลักสูตรเพื่อแก้ไข หรือสร้างหลักสูตรฉบับใหม่</p>
+        </div>
+        <button class="workflow-action workflow-action--primary management-create-button" type="button" data-go="curriculum-editor" data-id="new">+ สร้างหลักสูตรใหม่</button>
+      </div>
+      <section class="management-program-list">
+        ${PROGRAMS.map(program => {
+          const courses = new Set((program.plan ?? []).flatMap(term => term.courses ?? []).filter(code => !code.startsWith("__REQ__")));
+          const warnings = warningFor(program);
+          return `
+            <article class="management-program-card">
+              <div class="management-program-main">
+                <span class="management-program-year">พ.ศ. ${esc(program.revisionYear)}</span>
+                <h2>${esc(program.code)}</h2>
+                <p>${esc(program.nameEn)}</p>
+                <div class="management-program-meta"><span>${esc(program.curriculumId)}</span><span>วิชา ${courses.size} รายการ</span><span>เวอร์ชัน active</span></div>
+                ${warnings.length ? `<p class="management-warning">มี ${warnings.length} รายการอยู่ในสถานะ ${warnings.some(item => item.status === "pending") ? "รอตรวจสอบ" : "ฉบับร่าง"}</p>` : ""}
+              </div>
+              <button class="workflow-action workflow-action--primary" type="button" data-go="curriculum-editor" data-id="${esc(program.id)}">แก้ไข</button>
+            </article>
+          `;
+        }).join("")}
+      </section>
+    </div>
+  `;
+}
+
+function renderManagementPlaceholder(title, message) {
+  if (!canManageCurricula()) return renderHome();
+  return `
+    <div class="page">
+      ${crumbs([{ label: "หน้าแรก", view: "home" }, { label: title }])}
+      <section class="management-placeholder">
+        <span class="workflow-kicker">CURRICULUM MANAGEMENT</span>
+        <h1 class="page-title">${esc(title)}</h1>
+        <p>${esc(message)}</p>
+      </section>
+    </div>
+  `;
+}
+
+function editorCurrentProgram() {
+  return state.editorProgram || PROGRAMS.find(program => program.id === state.programId) || null;
+}
+
+function initializeEditorState(id) {
+  state.editorMode = id === "new" ? "new" : "edit";
+  const source = id === "new"
+    ? { id: "new", code: "", nameEn: "", revisionYear: "", curriculumId: null, plan: [] }
+    : PROGRAMS.find(program => program.id === id);
+  if (!source) return false;
+  state.editorProgram = { ...source, plan: state.editorMode === "new" ? [] : [...(source.plan ?? [])] };
+  state.programId = source.id;
+  state.year = 1;
+  state.editorLoading = false;
+  state.editorError = "";
+  state.editorProgramLoaded = false;
+  state.editorPlanId = state.editorMode === "new" ? null : (source.activeStudyPlanId ?? source.studyPlans?.[0]?.id ?? null);
+  state.planEdit = {
+    active: true,
+    programId: source.id,
+    planId: state.editorMode === "new" ? null : (source.activeStudyPlanId ?? `${source.id}-default`),
+    terms: state.editorMode === "new" ? clonePlanForEditing({ plan: [] }) : clonePlanForEditing(source),
+    changes: []
+  };
+  return true;
+}
+
+function restoreEditorRoute(pageState = {}) {
+  if (pageState.view !== "curriculum-editor") return;
+  let saved = null;
+  try {
+    saved = JSON.parse(sessionStorage.getItem("cs361-editor-route") || "null");
+  } catch {
+    saved = null;
+  }
+  const id = pageState.editorId ?? saved?.id;
+  if (id) initializeEditorState(id);
+}
+
+function editorAvailableCourseEntries(program) {
+  if (state.curriculumCoursesLoaded && state.curriculumCourses.length) {
+    const pathwayCourses = state.curriculumCourses.filter(course => !program?.pathwayId || course.pathway_id === program.pathwayId);
+    return pathwayCourses.map(course => {
+      const code = courseKey(course.course_code ?? course.course_id);
+      return [code, COURSES[code] ?? {
+        name: course.title_th ?? code,
+        nameEn: course.title_en ?? "",
+        credits: Number(course.credits_total ?? course.credits ?? 0),
+        category: course.course_group ?? "วิชาเฉพาะ"
+      }];
+    }).filter(([code]) => code);
+  }
+  return Object.entries(COURSES);
+}
+
+async function loadEditorActivePlan(program) {
+  if (!program?.curriculumId || state.editorLoading) return;
+  state.editorLoading = true;
+  state.editorError = "";
+  try {
+    const pathwayQuery = program.pathwayId ? `&pathwayId=${encodeURIComponent(program.pathwayId)}` : "";
+    const [plansResponse, coursesResponse] = await Promise.all([
+      fetch(`${API_BASE}/api/study-plans?curriculumId=${encodeURIComponent(program.curriculumId)}${pathwayQuery}&active=true`),
+      fetch(`${API_BASE}/api/courses?curriculumId=${encodeURIComponent(program.curriculumId)}${pathwayQuery}&limit=500`)
+    ]);
+    if (!plansResponse.ok) throw new Error(`โหลดแผนย่อยไม่สำเร็จ (${plansResponse.status})`);
+    const plansPayload = await plansResponse.json();
+    const plans = plansPayload?.data ?? [];
+    if (!plans.length) {
+      if (program.plan?.length) {
+        state.editorPlanId = program.activeStudyPlanId ?? `${program.id}-default`;
+        state.editorProgram = program;
+        return;
+      }
+      throw new Error("ไม่พบแผนการเรียนย่อยของหลักสูตรนี้");
+    }
+    const selectedPlanId = state.editorPlanId || program.activeStudyPlanId || plans[0].study_plan_id;
+    const selectedPlan = plans.find(plan => plan.study_plan_id === selectedPlanId) || plans[0];
+    state.editorPlanId = selectedPlan.study_plan_id;
+    program.studyPlans = plans.map(plan => ({
+      id: plan.study_plan_id,
+      label: studyPlanLabel(plan.study_plan_id, plan.plan_name),
+      plan: []
+    }));
+    const detailResponse = await fetch(`${API_BASE}/api/study-plans/${encodeURIComponent(selectedPlan.study_plan_id)}`);
+    if (!detailResponse.ok) throw new Error(`โหลดรายวิชาในแผนย่อยไม่สำเร็จ (${detailResponse.status})`);
+    const detailPayload = await detailResponse.json();
+    const items = detailPayload?.data?.items ?? [];
+    if (coursesResponse.ok) {
+      const coursesPayload = await coursesResponse.json();
+      state.curriculumCourses = coursesPayload?.data ?? [];
+      state.curriculumCoursesLoaded = true;
+      state.curriculumCoursesKey = `${program.curriculumId}:${program.pathwayId ?? ""}`;
+      state.curriculumCourses.forEach(course => {
+        const code = courseKey(course.course_code ?? course.course_id);
+        if (!code) return;
+        COURSES[code] = {
+          ...(COURSES[code] ?? {}),
+          name: course.title_th ?? COURSES[code]?.name ?? code,
+          nameEn: course.title_en ?? COURSES[code]?.nameEn ?? "",
+          credits: Number(course.credits_total ?? COURSES[code]?.credits ?? 0),
+          category: course.course_group ?? COURSES[code]?.category ?? "วิชาเฉพาะ"
+        };
+      });
+    }
+    const grouped = new Map();
+    items.forEach(item => {
+      const year = Number(item.study_year);
+      const term = Number(item.semester);
+      if (!year || !term) return;
+      const key = `${year}-${term}`;
+      if (!grouped.has(key)) grouped.set(key, { year, term, courses: [] });
+      const code = courseKey(item.course_code ?? item.course_id);
+      if (!code) return;
+      grouped.get(key).courses.push(code);
+      COURSES[code] = {
+        ...(COURSES[code] ?? {}),
+        name: item.title_th ?? COURSES[code]?.name ?? code,
+        nameEn: item.title_en ?? COURSES[code]?.nameEn ?? "",
+        credits: Number(item.credits ?? item.credits_total ?? COURSES[code]?.credits ?? 0),
+        category: item.course_group ?? COURSES[code]?.category ?? "วิชาเฉพาะ"
+      };
+    });
+    if (grouped.size) program.plan = [...grouped.values()].sort((a, b) => a.year - b.year || a.term - b.term);
+    program.activeStudyPlanId = selectedPlan.study_plan_id;
+    state.editorProgram = program;
+  } catch (error) {
+    state.editorError = error.message || "โหลดแผนหลักสูตรไม่สำเร็จ";
+  } finally {
+    state.editorLoading = false;
+  }
+}
+
+function editorCourseCount(program) {
+  return (state.planEdit?.terms ?? program?.plan ?? []).reduce((count, term) => count + (term.courses ?? []).length, 0);
+}
+
+function renderEditorCurriculumHeader(program) {
+  return `<section class="program-header editor-curriculum-header">${seal(program.revisionYear)}<div><div class="program-header-faculty">${esc(program.faculty ?? "คณะวิทยาศาสตร์และเทคโนโลยี")}</div><h1 class="page-title">${esc(program.code)}</h1><div class="program-header-en">${esc(program.nameEn)}</div><small class="editor-pathway-label">หลักสูตรย่อย: ${esc(studyPlanMajorLabel(program))}${program.pathwayId ? ` · ${esc(program.pathwayId)}` : ""}</small></div></section>`;
+}
+
+function renderEditorDrawer() {
+  const drawer = state.editorDrawer;
+  if (!drawer) return "";
+  const course = COURSES[drawer.code] ?? { name: drawer.code, nameEn: "", credits: 0, category: "วิชาเฉพาะ", prereq: [] };
+  const nextCourses = Object.entries(COURSES).filter(([, item]) => (item.prereq ?? []).includes(drawer.code)).map(([code]) => code);
+  const prereqHtml = (course.prereq ?? []).length
+    ? course.prereq.map(prereq => `<span class="editor-chip">${esc(prereq)} <button type="button" data-editor-remove-prereq="${esc(prereq)}" aria-label="ลบวิชาบังคับก่อน ${esc(prereq)}">×</button></span>`).join("")
+    : `<span class="editor-drawer-hint">ยังไม่มีข้อมูลวิชาบังคับก่อน</span>`;
+  const nextHtml = nextCourses.length
+    ? nextCourses.map(code => `<button type="button" class="editor-related-course" data-editor-related-course="${esc(code)}">${esc(code)} — ${esc(COURSES[code]?.name ?? code)}</button>`).join("")
+    : `<span class="editor-drawer-hint">ยังไม่มีรายวิชาต่อเนื่อง</span>`;
+  return `<aside class="editor-drawer" aria-label="แก้รายละเอียดวิชา"><div class="editor-drawer-head"><div><span class="workflow-kicker">COURSE DETAIL</span><h2>แก้รายละเอียดวิชา</h2></div><button type="button" class="editor-drawer-close" data-editor-drawer-close>×</button></div><form data-editor-course-form><label>รหัสวิชา<input name="code" value="${esc(drawer.code)}" required></label><label>ชื่อภาษาไทย<input name="name" value="${esc(course.name ?? "")}" required></label><label>ชื่อภาษาอังกฤษ<input name="nameEn" value="${esc(course.nameEn ?? "")}"></label><label>หน่วยกิต<input name="credits" type="number" min="0" value="${esc(course.credits ?? 0)}" required></label><label>กลุ่มวิชา<select name="category"><option ${course.category === "วิชาเฉพาะ" ? "selected" : ""}>วิชาเฉพาะ</option><option ${course.category === "วิชาศึกษาทั่วไป" ? "selected" : ""}>วิชาศึกษาทั่วไป</option><option ${course.category === "วิชาเลือกเสรี" ? "selected" : ""}>วิชาเลือกเสรี</option><option ${course.category === "วิชาสหกิจศึกษา" ? "selected" : ""}>วิชาสหกิจศึกษา</option></select></label><div class="editor-drawer-section"><h3>วิชาบังคับก่อน</h3><div class="editor-chip-list">${prereqHtml}</div><button type="button" class="workflow-action workflow-action--muted" data-editor-add-prereq>+ เพิ่มวิชาบังคับก่อน</button></div><div class="editor-drawer-section"><h3>วิชาที่เรียนต่อได้</h3><div class="editor-related-list">${nextHtml}</div></div><div class="editor-drawer-actions"><button type="button" class="workflow-action workflow-action--muted" data-editor-drawer-close>ยกเลิก</button><button type="submit" class="workflow-action workflow-action--primary">ตกลง</button></div></form></aside>`;
+}
+
+function renderEditorCopyModal() {
+  const copy = state.editorCopy;
+  if (!copy) return "";
+  const source = PROGRAMS.find(program => program.id === copy.sourceId) || PROGRAMS[0];
+  const sourceQuery = norm(copy.sourceQuery ?? "");
+  const sourceOptions = PROGRAMS.filter(program => norm(`${program.code} ${program.nameEn} ${program.curriculumId} ${program.pathwayId ?? ""}`).includes(sourceQuery));
+  const sourcePlans = source?.studyPlans ?? [];
+  const selectedSourcePlan = sourcePlans.find(plan => plan.id === (copy.sourcePlanId || source.activeStudyPlanId)) || sourcePlans[0];
+  const sourcePlanId = selectedSourcePlan?.id || source?.activeStudyPlanId;
+  let previewTerms = selectedSourcePlan?.plan ?? source?.plan ?? [];
+  if (copy.level === "year") previewTerms = previewTerms.filter(term => term.year === Number(copy.year));
+  if (copy.level === "term") previewTerms = previewTerms.filter(term => term.year === Number(copy.year) && term.term === Number(copy.term));
+  const preview = previewTerms.flatMap(term => term.courses ?? []);
+  const planOptions = sourcePlans.length ? `<div class="editor-copy-plan-list"><strong>แผนย่อยต้นทาง</strong>${sourcePlans.map(plan => `<button type="button" class="editor-source-option ${plan.id === sourcePlanId ? "editor-source-option--active" : ""}" data-editor-copy-plan-choice="${esc(plan.id)}"><strong>${esc(plan.label)}</strong><small>${esc(plan.id)}</small></button>`).join("")}</div>` : `<p class="editor-drawer-hint">หลักสูตรนี้มีแผนหลักเดียว</p>`;
+  return `<div class="editor-modal-backdrop" data-editor-copy-close><section class="editor-copy-modal" role="dialog" aria-modal="true" data-editor-copy-dialog><div class="editor-drawer-head"><div><span class="workflow-kicker">COPY FROM ACTIVE VERSION</span><h2>คัดลอกจากหลักสูตรอื่น</h2><p class="editor-drawer-hint">เลือกหลักสูตรย่อยและแผนย่อยต้นทาง แล้วตรวจตัวอย่างก่อนยืนยัน</p></div><button type="button" class="editor-drawer-close" data-editor-copy-close>×</button></div><label>ค้นหาหลักสูตรต้นทาง<input type="search" data-editor-copy-source-search value="${esc(copy.sourceQuery ?? "")}" placeholder="ค้นหาชื่อ รหัส หรือสาขา"></label><div class="editor-source-list">${sourceOptions.length ? sourceOptions.map(program => `<button type="button" class="editor-source-option ${program.id === copy.sourceId ? "editor-source-option--active" : ""}" data-editor-copy-source-choice="${esc(program.id)}"><strong>${esc(program.code)}</strong><span>พ.ศ. ${esc(program.revisionYear)} · ${esc(studyPlanMajorLabel(program))}</span><small>${esc(program.curriculumId)}${program.pathwayId ? ` · ${esc(program.pathwayId)}` : ""}</small></button>`).join("") : `<span class="editor-drawer-hint">ไม่พบหลักสูตรต้นทาง</span>`}</div>${planOptions}${copy.level !== "curriculum" ? `<div class="editor-copy-scope"><span>ขอบเขต: ${copy.level === "year" ? `ปี ${copy.year}` : `ปี ${copy.year} ภาค ${copy.term}`}</span></div>` : ""}<div class="editor-copy-preview"><strong>ตัวอย่าง ${preview.length} รายวิชา</strong>${preview.map(code => `<span>${esc(code)} — ${esc(COURSES[code]?.name ?? code)}</span>`).join("")}</div><label>ถ้าปลายทางมีวิชาอยู่แล้ว<select data-editor-copy-mode><option value="append">เพิ่มต่อท้าย (ข้ามที่ซ้ำ)</option><option value="replace">แทนที่ทั้งหมด</option></select></label><div class="editor-drawer-actions"><button type="button" class="workflow-action workflow-action--muted" data-editor-copy-close>ยกเลิก</button><button type="button" class="workflow-action workflow-action--primary" data-editor-copy-confirm ${preview.length ? "" : "disabled"}>ยืนยันคัดลอก</button></div></section></div>`;
+}
+
+function renderEditorTermCard(program, term) {
+  const courses = term.courses ?? [];
+  const total = courses.reduce((sum, code) => sum + (code === "FREE3" ? 3 : (COURSES[code]?.credits ?? 0)), 0);
+  const searchReady = state.editorMode === "new" || state.editorProgramLoaded;
+  const searchValue = state.editorSearch?.year === term.year && state.editorSearch?.term === term.term ? state.editorSearch.value : "";
+  return `
+    <article class="term-card editor-term-card">
+      <div class="term-card-head">
+        <span>${term.term === 3 ? "ภาคฤดูร้อน" : `ภาคการศึกษาที่ ${term.term}`}</span>
+        <span class="term-card-credits">${total ? `${total} นก.` : "ยังไม่มีวิชา"}</span>
+        <button class="term-copy-button" type="button" data-editor-copy-level="term" data-year="${term.year}" data-term="${term.term}">คัดลอกภาคนี้จาก...</button>
+      </div>
+      <div class="term-course-list">
+        ${courses.length ? courses.map(code => {
+          const course = COURSES[code] ?? { name: "รายวิชาตามเอกสารหลักสูตร", credits: 0 };
+          const change = editorChangeFor(program, code, term.year, term.term);
+          const removed = change?.action === "remove";
+          const moved = change?.action === "move";
+          const added = change?.action === "add";
+          const copiedFrom = change?.copiedFrom;
+          return `<div class="term-course-row editor-course-row ${removed ? "plan-course--removed" : ""} ${moved ? "plan-course--moved" : ""} ${added ? "plan-course--added" : ""}">
+            <button class="editor-course-main" type="button" data-editor-course="${esc(code)}">${courseCode(code)}<span class="term-course-name">${esc(course.name)}</span><span class="term-course-cr">${course.credits ?? 0} นก.</span>${added ? `<em class="plan-change-badge plan-change-badge--added">ใหม่</em>` : ""}${moved ? `<em class="plan-change-badge plan-change-badge--moved">ย้ายจากปี ${change.fromYear} ภาค ${change.fromTerm}</em>` : ""}${copiedFrom ? `<em class="plan-change-badge plan-change-badge--moved">คัดลอกจาก ${esc(copiedFrom)}</em>` : ""}</button>
+            <details class="editor-course-menu"><summary aria-label="เมนูวิชา">⋮</summary><div class="editor-course-menu-popover">${removed ? `<button type="button" data-plan-undo-delete data-code="${esc(code)}" data-year="${term.year}" data-term="${term.term}">ยกเลิกการลบ</button>` : `<button type="button" data-editor-course-detail="${esc(code)}">แก้รายละเอียด</button><label>ย้ายไป<select data-plan-move-target="${esc(code)}" data-year="${term.year}" data-term="${term.term}"><option value="">เลือกปี/ภาค</option>${[1, 2, 3, 4].flatMap(year => [1, 2, 3].map(targetTerm => `<option value="${year}-${targetTerm}">ปี ${year} ภาค ${targetTerm === 3 ? "ซัมเมอร์" : targetTerm}</option>`)).join("")}</select></label><button type="button" data-plan-delete data-code="${esc(code)}" data-year="${term.year}" data-term="${term.term}">ลบ</button>`}</div></details>
+          </div>`;
+        }).join("") : `<div class="editor-empty-term">ยังไม่มีวิชา</div>`}
+        ${state.planEdit.changes.filter(change => change.action === "move" && change.fromYear === term.year && change.fromTerm === term.term).map(change => `<div class="term-course-row plan-course--moved-away"><span class="course-code">${esc(change.code)}</span><span class="term-course-name">ย้ายไปปี ${change.toYear} ภาค ${change.toTerm}</span><span class="term-course-cr">เดิม</span></div>`).join("")}
+      </div>
+      <div class="editor-add-course"><input type="text" data-plan-search data-year="${term.year}" data-term="${term.term}" value="${esc(searchValue)}" placeholder="${searchReady ? "ค้นหารหัสหรือชื่อวิชา" : "กำลังโหลดรายการวิชา..."}"><div class="plan-search-results" data-plan-results="${term.year}-${term.term}"></div><button class="plan-add-button" type="button" data-plan-add data-year="${term.year}" data-term="${term.term}">+ เพิ่มวิชา</button></div>
+    </article>
+  `;
+}
+
+function renderCurriculumEditor() {
+  if (!canManageCurricula()) return renderHome();
+  const program = editorCurrentProgram();
+  const isNew = state.editorMode === "new";
+  if (!program) return renderManagementPlaceholder("ตัวแก้ไขหลักสูตร", "ไม่พบหลักสูตรที่เลือก");
+  const editing = Boolean(state.planEdit?.active);
+  const terms = state.planEdit?.terms ?? [];
+  const years = [1, 2, 3, 4];
+  const visibleTerms = terms.filter(term => term.year === state.year);
+  const statsCredits = terms.reduce((sum, term) => sum + term.courses.reduce((subtotal, code) => subtotal + (COURSES[code]?.credits ?? 0), 0), 0);
+  return `
+    <div class="page curriculum-editor-page">
+      ${crumbs([{ label: "หน้าแรก", view: "home" }, { label: "จัดการหลักสูตร", view: "curriculum-management" }, { label: "ตัวแก้ไขหลักสูตร" }])}
+      ${renderEditorCurriculumHeader(program)}
+      <div class="editor-topbar">
+        <div><span class="workflow-kicker">CURRICULUM EDITOR</span><h1 class="page-title">${isNew ? "สร้างหลักสูตรใหม่" : "แก้ไขหลักสูตร"}</h1><p class="page-sub">${isNew ? "สร้างฉบับร่างใหม่โดยยังไม่กระทบข้อมูลจริง" : `${esc(program.nameEn ?? program.code)} · ${esc(program.curriculumId)}`}</p></div>
+        <div class="editor-topbar-actions"><button class="workflow-action workflow-action--muted" type="button" data-go="curriculum-management">กลับไปจัดการหลักสูตร</button><button class="workflow-action workflow-action--muted" type="button" data-editor-copy-level="curriculum">คัดลอกจากหลักสูตรอื่น</button></div>
+      </div>
+      <section class="editor-header-card">
+        ${isNew ? `<label>รหัสหลักสูตร<input data-editor-field="curriculumId" placeholder="เช่น BSC-CS-2569" value="${esc(program.curriculumId ?? "")}"></label><label>ปีหลักสูตร<input data-editor-field="academicYear" type="number" value="${esc(program.revisionYear ?? "")}"></label><label>ชื่อหลักสูตร<input data-editor-field="title" placeholder="ชื่อหลักสูตร" value="${esc(program.code ?? "")}"></label>` : `<div><small>หลักสูตร</small><strong>${esc(program.code)}</strong></div><div><small>รหัส</small><strong>${esc(program.curriculumId)}</strong></div><div><small>ปีหลักสูตร</small><strong>พ.ศ. ${esc(program.revisionYear)}</strong></div><label><small>แผนย่อยที่กำลังแก้ไข</small><select data-editor-plan-select>${(program.studyPlans ?? []).map(plan => `<option value="${esc(plan.id)}" ${plan.id === state.editorPlanId ? "selected" : ""}>${esc(plan.label)}</option>`).join("")}</select></label>`}
+      </section>
+      ${state.editorLoading ? `<section class="editor-state-card">กำลังโหลดแผนการเรียน...</section>` : ""}
+      ${state.editorError ? `<section class="editor-state-card editor-state-card--error">${esc(state.editorError)} <button type="button" data-editor-retry>ลองใหม่</button></section>` : ""}
+      <div class="study-plan-stats editor-stats"><div class="study-plan-stat"><span class="study-plan-stat-icon">▤</span><span><small>รายวิชา/ข้อกำหนด</small><strong>${editorCourseCount(program)} รายการ</strong></span></div><div class="study-plan-stat"><span class="study-plan-stat-icon">▦</span><span><small>จำนวนปี</small><strong>4 ปี</strong></span></div><div class="study-plan-stat"><span class="study-plan-stat-icon">▥</span><span><small>จำนวนภาคการศึกษา</small><strong>12 ภาค</strong></span></div><div class="study-plan-stat"><span class="study-plan-stat-icon">▣</span><span><small>หน่วยกิตทั้งหมด</small><strong>${statsCredits} หน่วยกิต</strong></span></div></div>
+      <div class="editor-year-tabs">${years.map(year => `<button class="year-tab ${state.year === year ? "year-tab--active" : ""}" data-year="${year}">ชั้นปีที่ ${year}<span class="editor-year-copy" data-editor-copy-level="year" data-year="${year}">คัดลอกปีนี้จาก...</span></button>`).join("")}</div>
+      <div class="editor-term-grid">${visibleTerms.map(term => renderEditorTermCard(program, term)).join("")}</div>
+      ${state.planEdit?.changes?.length ? `<div class="editor-sticky-bar"><strong>มีการเปลี่ยนแปลง ${state.planEdit.changes.length} รายการ</strong><button type="button" class="workflow-action workflow-action--muted" data-plan-summary>ดูสรุปการเปลี่ยนแปลง</button><button type="button" class="workflow-action workflow-action--muted" data-plan-save>บันทึกฉบับร่าง</button><button type="button" class="workflow-action workflow-action--primary" data-plan-submit>ส่งขออนุมัติ</button><button type="button" class="workflow-action workflow-action--danger" data-editor-cancel>ยกเลิก</button></div>` : ""}
+      ${renderEditorDrawer()}
+      ${renderEditorCopyModal()}
+    </div>
+  `;
+}
+
+function renderCourseEditor() {
+  if (!canManageCurricula()) return renderHome();
+  const code = state.courseEditorCourseId;
+  const course = COURSES[code];
+  const program = editorCurrentProgram() || PROGRAMS[0];
+  if (!code) {
+    const query = norm(state.courseEditorQuery ?? "");
+    const entries = Object.entries(COURSES).filter(([itemCode, item]) => norm(`${itemCode} ${item.name} ${item.nameEn ?? ""}`).includes(query)).slice(0, 30);
+    return `<div class="page course-editor-page">${crumbs([{ label: "หน้าแรก", view: "home" }, { label: "แก้ไขรายวิชา" }])}<div class="editor-topbar"><div><span class="workflow-kicker">COURSE MANAGEMENT</span><h1 class="page-title">แก้ไขรายวิชา</h1><p class="page-sub">แก้เฉพาะข้อมูลรายวิชา ไม่กระทบแผนการเรียนทั้งหลักสูตร</p></div><div class="editor-topbar-actions"><button type="button" class="workflow-action workflow-action--muted" data-go="curriculum-management">กลับไปจัดการหลักสูตร</button></div></div><section class="course-picker-card"><label>ค้นหารายวิชา<input type="search" data-course-editor-search value="${esc(state.courseEditorQuery ?? "")}" placeholder="พิมพ์รหัสหรือชื่อวิชา"></label><div class="course-picker-list">${entries.length ? entries.map(([itemCode, item]) => `<button type="button" class="course-picker-row" data-course-editor-open="${esc(itemCode)}"><span><strong>${esc(itemCode)}</strong><span>${esc(item.name ?? "-")}</span><small>${esc(item.nameEn ?? "")} · ${esc(item.credits ?? 0)} หน่วยกิต</small></span><span>แก้ไข</span></button>`).join("") : `<p class="audit-empty">ไม่พบรายวิชา</p>`}</div></section></div>`;
+  }
+  if (!course || !program) return renderManagementPlaceholder("แก้ไขรายวิชา", "ไม่พบรายวิชาที่เลือก");
+  const nextCourses = Object.entries(COURSES).filter(([, item]) => (item.prereq ?? []).includes(code)).map(([nextCode]) => nextCode);
+  const prereq = course.prereq ?? [];
+  return `
+    <div class="page course-editor-page">
+      ${crumbs([{ label: "หน้าแรก", view: "home" }, { label: "จัดการหลักสูตร", view: "curriculum-management" }, { label: "ตัวแก้ไขหลักสูตร", view: "curriculum-editor", id: program.id }, { label: "แก้ไขรายวิชา" }])}
+      ${renderEditorCurriculumHeader(program)}
+      <div class="editor-topbar">
+        <div><span class="workflow-kicker">COURSE EDITOR</span><h1 class="page-title">แก้เฉพาะวิชา</h1><p class="page-sub">${esc(code)} · ${esc(course.name ?? "")} · แก้ในฉบับร่างของ ${esc(program.curriculumId)}</p></div>
+        <div class="editor-topbar-actions"><button type="button" class="workflow-action workflow-action--muted" data-course-editor-back>${state.courseEditorStandalone ? "กลับไปค้นหารายวิชา" : "กลับไปตัวแก้ไขหลักสูตร"}</button></div>
+      </div>
+      <section class="course-editor-layout">
+        <form class="course-editor-form" data-course-editor-form>
+          <div class="course-editor-form-head"><div><span class="workflow-kicker">EDIT ONE COURSE</span><h2>รายละเอียดรายวิชา</h2></div><span class="course-editor-draft-note">ยังไม่บันทึกลงข้อมูลจริง</span></div>
+          <label>รหัสวิชา<input name="code" value="${esc(code)}" required></label>
+          <label>ชื่อภาษาไทย<input name="name" value="${esc(course.name ?? "")}" required></label>
+          <label>ชื่อภาษาอังกฤษ<input name="nameEn" value="${esc(course.nameEn ?? "")}"></label>
+          <label>หน่วยกิต<input name="credits" type="number" min="0" value="${esc(course.credits ?? 0)}" required></label>
+          <label>กลุ่มวิชา<select name="category"><option ${course.category === "วิชาเฉพาะ" ? "selected" : ""}>วิชาเฉพาะ</option><option ${course.category === "วิชาศึกษาทั่วไป" ? "selected" : ""}>วิชาศึกษาทั่วไป</option><option ${course.category === "วิชาเลือกเสรี" ? "selected" : ""}>วิชาเลือกเสรี</option><option ${course.category === "วิชาสหกิจศึกษา" ? "selected" : ""}>วิชาสหกิจศึกษา</option></select></label>
+          <section class="course-editor-section"><h3>วิชาบังคับก่อน</h3><div class="editor-chip-list">${prereq.length ? prereq.map(item => `<span class="editor-chip">${esc(item)} <button type="button" data-course-editor-remove-prereq="${esc(item)}">×</button></span>`).join("") : `<span class="editor-drawer-hint">ยังไม่มีข้อมูล</span>`}</div><button type="button" class="workflow-action workflow-action--muted" data-course-editor-add-prereq>+ เพิ่มวิชาบังคับก่อน</button></section>
+          <section class="course-editor-section"><h3>วิชาที่เรียนต่อได้</h3><div class="editor-related-list">${nextCourses.length ? nextCourses.map(item => `<button type="button" class="editor-related-course" data-course-editor-related="${esc(item)}">${esc(item)} — ${esc(COURSES[item]?.name ?? item)}</button>`).join("") : `<span class="editor-drawer-hint">ยังไม่มีรายวิชาต่อเนื่อง</span>`}</div></section>
+          <div class="editor-drawer-actions">${state.courseEditorStandalone ? "" : `<button type="button" class="workflow-action workflow-action--danger" data-course-editor-delete>ลบวิชานี้</button>`}<button type="button" class="workflow-action workflow-action--muted" data-course-editor-back>ยกเลิก</button><button type="submit" class="workflow-action workflow-action--primary">${state.courseEditorStandalone ? "ส่งขออนุมัติการแก้ไขวิชา" : "บันทึกการแก้ไขวิชา"}</button></div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
 
 /* =========================================================
    PROGRAM DETAIL
    ========================================================= */
+
+function isPlanEditing(program) {
+  return Boolean(state.planEdit?.active && state.planEdit.programId === program.id);
+}
+
+function clonePlanForEditing(program) {
+  const terms = (program.plan ?? []).map(term => ({
+    year: Number(term.year),
+    term: Number(term.term),
+    courses: [...(term.courses ?? [])]
+  }));
+  for (let year = 1; year <= 4; year += 1) {
+    for (let term = 1; term <= 3; term += 1) {
+      if (!terms.some(item => item.year === year && item.term === term)) {
+        terms.push({ year, term, courses: [] });
+      }
+    }
+  }
+  return terms.sort((a, b) => a.year - b.year || a.term - b.term);
+}
+
+function startPlanEditing(program) {
+  state.planEdit = {
+    active: true,
+    programId: program.id,
+    planId: program.activeStudyPlanId ?? `${program.id}-default`,
+    terms: clonePlanForEditing(program),
+    changes: []
+  };
+  state.programTab = "plan";
+  render();
+}
+
+function editorChangeFor(program, code, year, term) {
+  if (!isPlanEditing(program)) return null;
+  return state.planEdit.changes.find(change =>
+    change.code === code &&
+    ((change.action === "remove" && change.year === year && change.term === term) ||
+      (change.action === "add" && change.year === year && change.term === term) ||
+      (change.action === "move" && change.toYear === year && change.toTerm === term) ||
+      (change.action === "edit" && change.year === year && change.term === term) ||
+      (change.action === "prereq" && change.year === year && change.term === term))
+  );
+}
+
+function editorChangeCount(program) {
+  return isPlanEditing(program) ? state.planEdit.changes.length : 0;
+}
+
+function editorTotalCredits(plan) {
+  return plan.reduce((total, term) => total + term.courses.reduce((subtotal, code) => {
+    return subtotal + (COURSES[code]?.credits ?? (code === "FREE3" ? 3 : 0));
+  }, 0), 0);
+}
+
+function draftCourseCode(code) {
+  const value = String(code ?? "");
+  return value.startsWith("__REQ__") ? null : value;
+}
+
+function editorChangeItems(program) {
+  const items = state.planEdit.changes.map(change => {
+    const courseCodeValue = draftCourseCode(change.code);
+    if (change.action === "move") {
+      return { action: "MOVE_COURSE", courseCode: courseCodeValue, studyYear: change.fromYear, term: String(change.fromTerm), oldValue: { year: change.fromYear, term: change.fromTerm }, newValue: { year: change.toYear, term: change.toTerm, requirementText: courseCodeValue ? null : String(change.code).replace(/^__REQ__/, "") } };
+    }
+    if (change.action === "remove") {
+      return { action: "REMOVE_COURSE", courseCode: courseCodeValue, studyYear: change.year, term: String(change.term), oldValue: { year: change.year, term: String(change.term), requirementText: courseCodeValue ? null : String(change.code).replace(/^__REQ__/, "") } };
+    }
+    if (change.action === "edit") {
+      return { action: "EDIT_FIELD", courseCode: courseCodeValue, studyYear: change.year, term: String(change.term), oldValue: change.oldValue, newValue: change.newValue };
+    }
+    if (change.action === "prereq") {
+      return { action: change.newValue?.removePrerequisite ? "REMOVE_PREREQ" : "ADD_PREREQ", courseCode: courseCodeValue, studyYear: change.year, term: String(change.term), newValue: change.newValue };
+    }
+    return { action: "ADD_COURSE", courseCode: courseCodeValue, studyYear: change.year, term: String(change.term), newValue: { year: change.year, term: change.term, requirementText: courseCodeValue ? null : String(change.code).replace(/^__REQ__/, "") } };
+  });
+  if (state.editorMode === "new") {
+    items.unshift({
+      action: "CREATE_CURRICULUM",
+      newValue: {
+        curriculumId: program.curriculumId,
+        academicYear: Number(program.revisionYear),
+        title: program.code
+      }
+    });
+  }
+  return items;
+}
+
+async function savePlanDraft(program, submit = false) {
+  if (!isPlanEditing(program) || !state.planEdit.changes.length) return;
+  const longCourse = state.planEdit.changes.find(change => {
+    const code = draftCourseCode(change.code);
+    return code && code.length > 30;
+  });
+  if (longCourse) throw new Error(`รหัสวิชายาวเกิน 30 ตัวอักษร: ${longCourse.code}`);
+  if (state.editorMode === "new") {
+    const curriculumId = document.querySelector('[data-editor-field="curriculumId"]')?.value.trim();
+    const academicYear = Number(document.querySelector('[data-editor-field="academicYear"]')?.value);
+    const title = document.querySelector('[data-editor-field="title"]')?.value.trim();
+    if (!curriculumId || !/^BSC-[A-Z0-9-]+$/i.test(curriculumId) || !Number.isInteger(academicYear) || !title) {
+      throw new Error("กรุณากรอกรหัสหลักสูตร ปีหลักสูตร และชื่อหลักสูตรให้ครบ");
+    }
+    program.curriculumId = curriculumId;
+    program.revisionYear = academicYear;
+    program.code = title;
+  }
+  const createResponse = await fetch(`${API_BASE}/api/change-requests`, {
+    method: "POST",
+    headers: draftApiHeaders(),
+    body: JSON.stringify({ curriculumId: state.editorMode === "new" ? null : program.curriculumId, type: state.editorMode === "new" ? "add_curriculum" : "edit_structure", sourceCurriculumId: null, title: state.editorMode === "new" ? `สร้างหลักสูตร ${program.curriculumId}` : `แก้ไขแผนการเรียน ${program.code}`, note: `แก้ไข ${state.planEdit.changes.length} รายการ` })
+  });
+  const created = await createResponse.json().catch(() => ({}));
+  if (!createResponse.ok || !created.data?.id) throw new Error(created.error ?? "สร้างฉบับร่างไม่สำเร็จ");
+  const requestId = created.data.id;
+  const itemsResponse = await fetch(`${API_BASE}/api/change-requests/${requestId}/items`, {
+    method: "PUT",
+    headers: draftApiHeaders(),
+    body: JSON.stringify({ items: editorChangeItems(program) })
+  });
+  const saved = await itemsResponse.json().catch(() => ({}));
+  if (!itemsResponse.ok) throw new Error(saved.error ?? "บันทึกรายการแก้ไขไม่สำเร็จ");
+  if (submit) {
+    const submitResponse = await fetch(`${API_BASE}/api/change-requests/${requestId}/submit`, { method: "POST", headers: draftApiHeaders(), body: "{}" });
+    const submitted = await submitResponse.json().catch(() => ({}));
+    if (!submitResponse.ok) throw new Error(submitted.error ?? "ส่งขออนุมัติไม่สำเร็จ");
+  }
+  state.draftRequestsLoaded = false;
+  await loadDraftChangeRequests();
+  state.planEdit = null;
+  alert(submit ? "ส่งขออนุมัติแล้ว" : "บันทึกฉบับร่างแล้ว");
+  render();
+}
 
 function renderProgram() {
 
@@ -1216,10 +1801,13 @@ function renderProgram() {
       x => x.id === state.programId
     ) || PROGRAMS[0];
 
+  const editing = false;
+  const visiblePlan = p.plan ?? [];
+
 
   const years = [
     ...new Set(
-      p.plan.map(t => t.year)
+      visiblePlan.map(t => t.year)
     )
   ];
 
@@ -1229,10 +1817,10 @@ function renderProgram() {
   }
 
 
-  const terms =
-    p.plan.filter(
-      t => t.year === state.year
-    );
+  const terms = visiblePlan.filter(t => t.year === state.year);
+  const termSlots = editing
+    ? [1, 2, 3].map(term => terms.find(item => item.term === term) ?? { year: state.year, term, courses: [] })
+    : terms;
 
 
   let content = "";
@@ -1250,11 +1838,23 @@ function renderProgram() {
   const curriculumYears = versions.map(version => version.revisionYear);
 
   const activePlanId = p.activeStudyPlanId || `${p.id}-default`;
-  const planCourses = (p.plan ?? []).flatMap(term => term.courses ?? []);
-  const planCredits = planCourses.reduce((total, code) => {
-    if (code === "FREE3") return total + 3;
-    return total + (COURSES[code]?.credits ?? 0);
-  }, 0);
+  const planCourses = visiblePlan.flatMap(term => term.courses ?? []);
+  const planCredits = visiblePlan.reduce((total, term) => total + term.courses.reduce((subtotal, code) => {
+    if (editing && editorChangeFor(p, code, term.year, term.term)?.action === "remove") return subtotal;
+    if (code === "FREE3") return subtotal + 3;
+    return subtotal + (COURSES[code]?.credits ?? 0);
+  }, 0), 0);
+  const basePlanCredits = editorTotalCredits(p.plan ?? []);
+  const creditDelta = editing ? planCredits - basePlanCredits : 0;
+  const activeCourseCount = visiblePlan.reduce((count, term) => count + term.courses.filter(code => !editing || editorChangeFor(p, code, term.year, term.term)?.action !== "remove").length, 0);
+  const baseCourseCount = (p.plan ?? []).reduce((count, term) => count + (term.courses ?? []).length, 0);
+  const courseDelta = editing ? activeCourseCount - baseCourseCount : 0;
+  const creditDeltaLabel = editing && creditDelta !== 0
+    ? ` <small class="plan-stat-delta">(${creditDelta > 0 ? "+" : ""}${creditDelta})</small>`
+    : "";
+  const courseDeltaLabel = editing && courseDelta !== 0
+    ? ` <small class="plan-stat-delta">(${courseDelta > 0 ? "+" : ""}${courseDelta})</small>`
+    : "";
 
 
   /* -------------------------
@@ -1372,8 +1972,12 @@ function renderProgram() {
       <div class="panel">
 
         <div class="study-plan-heading">
-          <h2>${esc(studyPlanMajorLabel(p))} — ${esc(p.studyPlans?.find(plan => plan.id === activePlanId)?.label ?? "แผนหลัก")}</h2>
-          <p>แผนการศึกษาจากหลักสูตรปรับปรุง พ.ศ. ${esc(p.revisionYear)}</p>
+          <div class="study-plan-heading-row">
+            <div>
+              <h2>${esc(studyPlanMajorLabel(p))} — ${esc(p.studyPlans?.find(plan => plan.id === activePlanId)?.label ?? "แผนหลัก")}</h2>
+              <p>แผนการศึกษาจากหลักสูตรปรับปรุง พ.ศ. ${esc(p.revisionYear)}</p>
+            </div>
+          </div>
         </div>
 
         <div class="study-plan-picker" aria-label="เลือกแผนการเรียนและปีหลักสูตร">
@@ -1406,7 +2010,7 @@ function renderProgram() {
         <div class="study-plan-stats">
           <div class="study-plan-stat">
             <span class="study-plan-stat-icon">▤</span>
-            <span><small>รายวิชา/ข้อกำหนด</small><strong>${planCourses.length} รายการ</strong></span>
+            <span><small>รายวิชา/ข้อกำหนด</small><strong>${activeCourseCount} รายการ${courseDeltaLabel}</strong></span>
           </div>
           <div class="study-plan-stat">
             <span class="study-plan-stat-icon">▦</span>
@@ -1414,11 +2018,11 @@ function renderProgram() {
           </div>
           <div class="study-plan-stat">
             <span class="study-plan-stat-icon">▥</span>
-            <span><small>จำนวนภาคการศึกษา</small><strong>${p.plan.length} ภาค</strong></span>
+            <span><small>จำนวนภาคการศึกษา</small><strong>${visiblePlan.length} ภาค</strong></span>
           </div>
           <div class="study-plan-stat">
             <span class="study-plan-stat-icon">▣</span>
-            <span><small>จำนวนหน่วยกิตทั้งหมด</small><strong>${planCredits} หน่วยกิต</strong></span>
+            <span><small>จำนวนหน่วยกิตทั้งหมด</small><strong>${planCredits} หน่วยกิต${creditDeltaLabel}</strong></span>
           </div>
         </div>
 
@@ -1445,12 +2049,15 @@ function renderProgram() {
 
         <div class="term-grid">
 
-          ${terms
+          ${termSlots
         .map(t => {
 
           let total = 0;
 
           t.courses.forEach(code => {
+
+            const courseChange = editorChangeFor(p, code, t.year, t.term);
+            if (courseChange?.action === "remove") return;
 
             if (
               COURSES[code]
@@ -1491,6 +2098,10 @@ function renderProgram() {
 
                     ${t.courses
               .map(code => {
+                const change = editorChangeFor(p, code, t.year, t.term);
+                const removed = change?.action === "remove";
+                const added = change?.action === "add";
+                const moved = change?.action === "move";
 
                 if (code.startsWith("__REQ__")) {
                   return `
@@ -1553,6 +2164,24 @@ function renderProgram() {
                 }
 
 
+                if (editing) {
+                  return `
+                          <div class="term-course-row plan-edit-course-row ${removed ? "plan-course--removed" : ""} ${added ? "plan-course--added" : ""} ${moved ? "plan-course--moved" : ""}">
+                            <button class="plan-course-main" type="button" data-course-detail="${esc(code)}">
+                              ${courseCode(code)}
+                              <span class="term-course-name">${esc(c.name)}</span>
+                              <span class="term-course-cr">${c.credits} นก.</span>
+                              ${added ? `<em class="plan-change-badge plan-change-badge--added">ใหม่</em>` : ""}
+                              ${moved ? `<em class="plan-change-badge plan-change-badge--moved">ย้ายจากปี ${change.fromYear} ภาค ${change.fromTerm}</em>` : ""}
+                              ${removed ? `<em class="plan-change-badge plan-change-badge--removed">ลบแล้ว</em>` : ""}
+                            </button>
+                            <div class="plan-course-actions">
+                              ${removed ? `<button class="plan-icon-button" type="button" data-plan-undo-delete data-code="${esc(code)}" data-year="${t.year}" data-term="${t.term}">ยกเลิกการลบ</button>` : `<button class="plan-icon-button" type="button" data-plan-delete data-code="${esc(code)}" data-year="${t.year}" data-term="${t.term}">ลบ</button><select class="plan-move-select" data-plan-move-target="${esc(code)}" data-year="${t.year}" data-term="${t.term}"><option value="">ย้ายไป...</option>${[1, 2, 3].flatMap(targetTerm => [1, 2, 3, 4].map(targetYear => `<option value="${targetYear}-${targetTerm}">ปี ${targetYear} ภาค ${targetTerm === 3 ? "ซัมเมอร์" : targetTerm}</option>`)).join("")}</select>`}
+                            </div>
+                          </div>
+                        `;
+                }
+
                 return `
                           <button
                             class="term-course-row"
@@ -1576,7 +2205,10 @@ function renderProgram() {
               })
               .join("")}
 
+                    ${editing ? state.planEdit.changes.filter(change => change.action === "move" && change.fromYear === t.year && change.fromTerm === t.term).map(change => `<div class="term-course-row plan-course--moved-away"><span class="course-code">${esc(change.code)}</span><span class="term-course-name">ย้ายไปปี ${change.toYear} ภาค ${change.toTerm}</span><span class="term-course-cr">เดิม</span></div>`).join("") : ""}
+
                   </div>
+                  ${editing ? `<div class="plan-add-course"><input type="search" placeholder="ค้นหารหัสหรือชื่อวิชา" data-plan-search data-year="${t.year}" data-term="${t.term}"><div class="plan-search-results" data-plan-results="${t.year}-${t.term}"></div><button type="button" class="plan-add-button" data-plan-add data-year="${t.year}" data-term="${t.term}">+ เพิ่มวิชา</button></div>` : ""}
 
                 </div>
               `;
@@ -1585,6 +2217,7 @@ function renderProgram() {
         .join("")}
 
         </div>
+        ${editing ? `<div class="plan-edit-summary-bar"><span>มีการเปลี่ยนแปลง ${editorChangeCount(p)} รายการ</span><button type="button" class="workflow-action workflow-action--muted" data-plan-summary>ดูสรุปการเปลี่ยนแปลง</button><button type="button" class="workflow-action workflow-action--muted" data-plan-save ${editorChangeCount(p) ? "" : "disabled"}>บันทึกฉบับร่าง</button><button type="button" class="workflow-action workflow-action--primary" data-plan-submit ${editorChangeCount(p) ? "" : "disabled"}>ส่งขออนุมัติ</button><button type="button" class="workflow-action workflow-action--danger" data-plan-cancel>ยกเลิก</button></div>` : ""}
 
       </div>
     `;
@@ -1670,7 +2303,12 @@ function renderProgram() {
             ${esc(p.nameEn)}
           </div>
 
+          <small class="program-pathway-label">
+            หลักสูตรย่อย: ${esc(studyPlanMajorLabel(p))}${p.pathwayId ? ` · ${esc(p.pathwayId)}` : ""}
+          </small>
+
         </div>
+
 
       </div>
 
@@ -2434,6 +3072,14 @@ function shell(content) {
     ["courses", "ค้นหารายวิชา"],
     ["faq", "คำถามที่พบบ่อย"]
   ];
+  if (canManageCurricula()) {
+    nav.push(["curriculum-management", "แก้ไขหลักสูตร"]);
+    nav.push(["course-editor", "แก้ไขรายวิชา"]);
+    nav.push(["my-change-requests", "คำขอของฉัน"]);
+  }
+  if (canReviewCurriculumRequests()) {
+    nav.push(["review-requests", "ตรวจคำขอ"]);
+  }
   if (canAccessCurriculumManagement()) {
     nav.push(["workflow", "ตรวจสอบข้อมูลหลักสูตร", state.programId || PROGRAMS[0].id]);
   }
@@ -2490,6 +3136,8 @@ function shell(content) {
             ${canAccessStudentProfile() ? `<button data-go="profile" role="menuitem">ข้อมูลส่วนตัว</button>` : ""}
             <button data-go="programs" role="menuitem">หลักสูตร</button>
             <button data-go="courses" role="menuitem">ค้นหารายวิชา</button>
+            ${canManageCurricula() ? `<button data-go="curriculum-management" role="menuitem">จัดการหลักสูตร</button><button data-go="my-change-requests" role="menuitem">คำขอของฉัน</button>` : ""}
+            ${canReviewCurriculumRequests() ? `<button data-go="review-requests" role="menuitem">ตรวจคำขอ + ประวัติเวอร์ชัน</button>` : ""}
             ${canAccessCurriculumManagement() ? `<button data-go="workflow" data-id="${esc(state.programId || PROGRAMS[0].id)}" role="menuitem">ตรวจสอบข้อมูลหลักสูตร</button>` : ""}
             <button data-auth-action="logout" role="menuitem" class="account-menu-logout">ออกจากระบบ</button>
           </div>` : ""}
@@ -2626,7 +3274,14 @@ function render() {
     faq: renderFaq,
     login: renderLogin,
     profile: renderStudentProfile,
-    workflow: renderWorkflowPage
+    workflow: renderWorkflowPage,
+    "curriculum-management": renderCurriculumManagement,
+    "curriculum-editor": renderCurriculumEditor,
+    "course-editor": renderCourseEditor,
+    "my-change-requests": () => renderChangeRequestsPage(false),
+    "review-requests": () => canReviewCurriculumRequests()
+      ? renderChangeRequestsPage(true)
+      : renderHome()
   };
 
 
@@ -2653,6 +3308,14 @@ function render() {
 
   bind();
 
+  if (state.view === "curriculum-editor" && state.editorSearch) {
+    const searchInput = document.querySelector(`[data-plan-search][data-year="${state.editorSearch.year}"][data-term="${state.editorSearch.term}"]`);
+    if (searchInput) {
+      searchInput.focus();
+      searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length);
+    }
+  }
+
   if (state.view === "program" || state.view === "workflow") {
     const program = PROGRAMS.find(item => item.id === state.programId) || PROGRAMS[0];
     if (program?.curriculumId && !workflowCache.has(program.curriculumId)) {
@@ -2670,6 +3333,11 @@ function render() {
         if (state.view === "workflow") render();
       });
     }
+    if (state.view === "workflow" && !state.draftRequestsLoaded) {
+      loadDraftChangeRequests().then(() => {
+        if (state.view === "workflow") render();
+      });
+    }
     if (state.view === "workflow" && !state.curriculumCoursesLoaded) {
       loadCurriculumCourses(program).then(() => {
         if (state.view === "workflow") render();
@@ -2679,6 +3347,20 @@ function render() {
   if (state.view === "profile" && canAccessStudentProfile() && !state.studentProfile && !state.studentProfileLoading) {
     loadStudentProfile().then(() => {
       if (state.view === "profile") render();
+    });
+  }
+  if (["curriculum-management", "my-change-requests", "review-requests"].includes(state.view) && !state.draftRequestsLoaded) {
+    loadDraftChangeRequests().then(() => {
+      if (["curriculum-management", "my-change-requests", "review-requests"].includes(state.view)) render();
+    });
+  }
+  if (state.view === "curriculum-editor" && state.editorMode === "edit" && state.editorProgram && !state.editorLoading && !state.editorProgramLoaded) {
+    state.editorProgramLoaded = true;
+    loadEditorActivePlan(state.editorProgram).then(() => {
+      if (state.view === "curriculum-editor") {
+        state.planEdit.terms = clonePlanForEditing(state.editorProgram);
+        render();
+      }
     });
   }
 }
@@ -2694,6 +3376,26 @@ function go(v, id, addHistory = true) {
     state.view = state.user ? "home" : "login";
     render();
     return;
+  }
+  if (["curriculum-management", "curriculum-editor", "course-editor", "my-change-requests"].includes(v) && !canManageCurricula()) {
+    state.loginError = "หน้านี้สำหรับผู้ดูแลข้อมูลหลักสูตรและเจ้าหน้าที่เท่านั้น";
+    state.view = state.user ? "home" : "login";
+    render();
+    return;
+  }
+  if (v === "review-requests" && !canReviewCurriculumRequests()) {
+    state.loginError = "หน้านี้สำหรับเจ้าหน้าที่เท่านั้น";
+    state.view = state.user ? "home" : "login";
+    render();
+    return;
+  }
+  if (v === "curriculum-editor") {
+    if (!initializeEditorState(id)) return;
+    try {
+      sessionStorage.setItem("cs361-editor-route", JSON.stringify({ id }));
+    } catch {
+      // Session storage may be unavailable for some file:// browser settings.
+    }
   }
   if (v === "profile" && !canAccessStudentProfile()) {
     state.view = state.user ? "home" : "login";
@@ -2712,10 +3414,22 @@ function go(v, id, addHistory = true) {
     state.courseCode = id;
   }
 
+  if (v === "course-editor" && !id) {
+    state.courseEditorStandalone = true;
+    state.courseEditorCourseId = null;
+    state.courseEditorQuery = "";
+  }
+
   if (v === "profile") {
     state.studentProfile = null;
     state.studentProfileAttempted = false;
     state.studentProfileError = "";
+  }
+
+  if (["my-change-requests", "review-requests"].includes(v)) {
+    state.selectedChangeRequest = null;
+    state.changeRequestFilter = "all";
+    state.changeRequestError = "";
   }
 
   state.navOpen = false;
@@ -2728,7 +3442,8 @@ function go(v, id, addHistory = true) {
       programId: state.programId,
       courseCode: state.courseCode,
       programTab: state.programTab,
-      year: state.year
+      year: state.year,
+      editorId: v === "curriculum-editor" ? id : null
     };
 
     history.pushState(
@@ -2774,6 +3489,44 @@ function syncHistoryState() {
    ========================================================= */
 
 function bind() {
+
+  document.querySelectorAll("[data-request-filter]").forEach(button => {
+    button.onclick = () => {
+      state.changeRequestFilter = button.dataset.requestFilter || "all";
+      state.selectedChangeRequest = null;
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-request-detail]").forEach(button => {
+    button.onclick = () => loadChangeRequestDetail(button.dataset.requestDetail);
+  });
+
+  document.querySelectorAll("[data-request-decision]").forEach(button => {
+    button.onclick = async () => {
+      const action = button.dataset.requestDecision;
+      const requestId = button.dataset.requestId;
+      const note = window.prompt(action === "approve" ? "หมายเหตุการอนุมัติ (ถ้ามี)" : "กรุณาระบุเหตุผลที่ปฏิเสธ");
+      if (action === "reject" && !note?.trim()) return;
+      button.disabled = true;
+      try {
+        const response = await fetch(`${API_BASE}/api/change-requests/${encodeURIComponent(requestId)}/decision`, {
+          method: "POST",
+          headers: draftApiHeaders(),
+          body: JSON.stringify({ action, note: note?.trim() ?? "" })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? "ดำเนินการกับคำขอไม่สำเร็จ");
+        state.draftRequestsLoaded = false;
+        state.selectedChangeRequest = null;
+        await loadDraftChangeRequests();
+        render();
+      } catch (error) {
+        window.alert(error.message || "ดำเนินการกับคำขอไม่สำเร็จ");
+        button.disabled = false;
+      }
+    };
+  });
 
   document.querySelectorAll("[data-api-action]").forEach(button => {
     button.onclick = async () => {
@@ -2909,35 +3662,95 @@ function bind() {
       const formData = new FormData(curriculumChangeForm);
       const operation = String(formData.get("operation") ?? "update");
       const changeType = String(formData.get("changeType"));
-      const payload = changeType === "academic_year"
-        ? { changeType, academicYear: Number(formData.get("academicYear")) }
-        : {
-            changeType,
-            curriculumCourseId: String(formData.get("curriculumCourseId") ?? "").trim(),
-            newCourseCode: String(formData.get("newCourseCode") ?? "").trim(),
-            pathwayId: program?.pathwayId,
-            courseGroup: String(formData.get("courseGroup") ?? "วิชาเฉพาะ"),
-            requirementType: "required"
-          };
-      const response = await fetch(`${API_BASE}/api/curriculum-changes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          curriculumId: operation === "create"
-            ? String(formData.get("newCurriculumId") ?? "").trim()
-            : program?.curriculumId,
-          operation,
-          changeType,
-          payload,
-          username: state.user.username,
-          role: state.user.role
-        })
-      });
-      const resultPayload = await response.json().catch(() => ({}));
-      if (!response.ok) return alert(resultPayload.error ?? "บันทึกฉบับร่างไม่สำเร็จ");
-      if (editModal) editModal.hidden = true;
-      state.curriculumChangesLoaded = false;
-      loadCurriculumChanges(program?.curriculumId).then(() => render());
+      const newCurriculumId = String(formData.get("newCurriculumId") ?? "").trim();
+      const existingId = String(formData.get("curriculumCourseId") ?? "").trim();
+      const existingCourse = state.curriculumCourses.find(course => course.curriculum_course_id === existingId);
+      const newCourseCode = String(formData.get("newCourseCode") ?? "").trim();
+      const courseGroup = String(formData.get("courseGroup") ?? "วิชาเฉพาะ");
+      const isNewCurriculum = operation === "create";
+      const type = isNewCurriculum
+        ? "add_curriculum"
+        : changeType === "academic_year" ? "edit_structure" : "edit_course";
+      if (isNewCurriculum && !newCurriculumId) return alert("กรุณาระบุรหัสหลักสูตรใหม่");
+      if (!isNewCurriculum && changeType !== "academic_year" && !existingId) return alert("กรุณาเลือกวิชาเดิม");
+      if (["course_add", "course_replace"].includes(changeType) && !newCourseCode) return alert("กรุณาระบุวิชาใหม่");
+
+      let item;
+      if (isNewCurriculum) {
+        item = {
+          action: "CREATE_CURRICULUM",
+          newValue: {
+            curriculumId: newCurriculumId,
+            academicYear: Number(formData.get("academicYear")),
+            sourceCurriculumId: program?.curriculumId ?? null
+          }
+        };
+      } else if (changeType === "academic_year") {
+        item = {
+          action: "EDIT_FIELD",
+          newValue: { field: "academic_year", value: Number(formData.get("academicYear")) },
+          oldValue: { field: "academic_year", value: program?.academicYear ?? null }
+        };
+      } else if (changeType === "course_add") {
+        item = {
+          action: "ADD_COURSE",
+          courseCode: newCourseCode,
+          newValue: { courseCode: newCourseCode, courseGroup, pathwayId: program?.pathwayId ?? null }
+        };
+      } else if (changeType === "course_remove") {
+        item = {
+          action: "REMOVE_COURSE",
+          courseCode: existingCourse?.course_code ?? null,
+          oldValue: existingCourse ?? { curriculumCourseId: existingId }
+        };
+      } else {
+        item = {
+          action: "EDIT_FIELD",
+          courseCode: existingCourse?.course_code ?? null,
+          oldValue: existingCourse ?? { curriculumCourseId: existingId },
+          newValue: { courseCode: newCourseCode, courseGroup, pathwayId: program?.pathwayId ?? null }
+        };
+      }
+
+      const submitButton = event.submitter?.value === "submit";
+      try {
+        const createResponse = await fetch(`${API_BASE}/api/change-requests`, {
+          method: "POST",
+          headers: draftApiHeaders(),
+          body: JSON.stringify({
+            curriculumId: isNewCurriculum ? null : program?.curriculumId,
+            sourceCurriculumId: isNewCurriculum ? program?.curriculumId : null,
+            type,
+            title: isNewCurriculum ? `เพิ่มหลักสูตร ${newCurriculumId}` : `แก้ไขหลักสูตร ${program?.code ?? ""}`,
+            note: `รายการแก้ไข: ${changeType}`
+          })
+        });
+        const created = await createResponse.json().catch(() => ({}));
+        if (!createResponse.ok || !created.data?.id) throw new Error(created.error ?? "สร้างฉบับร่างไม่สำเร็จ");
+        const requestId = created.data.id;
+        const itemsResponse = await fetch(`${API_BASE}/api/change-requests/${encodeURIComponent(requestId)}/items`, {
+          method: "PUT",
+          headers: draftApiHeaders(),
+          body: JSON.stringify({ items: [item] })
+        });
+        const saved = await itemsResponse.json().catch(() => ({}));
+        if (!itemsResponse.ok) throw new Error(saved.error ?? "บันทึกรายการแก้ไขไม่สำเร็จ");
+        if (submitButton) {
+          const submitResponse = await fetch(`${API_BASE}/api/change-requests/${encodeURIComponent(requestId)}/submit`, {
+            method: "POST",
+            headers: draftApiHeaders(),
+            body: "{}"
+          });
+          const submitted = await submitResponse.json().catch(() => ({}));
+          if (!submitResponse.ok) throw new Error(submitted.error ?? "ส่งตรวจสอบไม่สำเร็จ");
+        }
+        if (editModal) editModal.hidden = true;
+        state.draftRequestsLoaded = false;
+        await loadDraftChangeRequests();
+        render();
+      } catch (error) {
+        alert(error.message ?? "บันทึกฉบับร่างไม่สำเร็จ");
+      }
     };
     const changeType = curriculumChangeForm.querySelector("[name=changeType]");
     const operation = curriculumChangeForm.querySelector("[name=operation]");
@@ -2974,6 +3787,451 @@ function bind() {
     };
   });
 
+  document.querySelectorAll("[data-start-plan-edit]").forEach(button => {
+    button.onclick = () => {
+      const program = PROGRAMS.find(item => item.id === state.programId);
+      if (program) startPlanEditing(program);
+    };
+  });
+
+  document.querySelectorAll("[data-plan-delete]").forEach(button => {
+    button.onclick = () => {
+      const program = editorCurrentProgram();
+      if (!program || !isPlanEditing(program)) return;
+      const code = button.dataset.code;
+      const year = Number(button.dataset.year);
+      const term = Number(button.dataset.term);
+      const addedIndex = state.planEdit.changes.findIndex(change => change.action === "add" && change.code === code && change.year === year && change.term === term);
+      if (addedIndex >= 0) {
+        const target = state.planEdit.terms.find(item => item.year === year && item.term === term);
+        target.courses = target.courses.filter(item => item !== code);
+        state.planEdit.changes.splice(addedIndex, 1);
+      } else if (!state.planEdit.changes.some(change => change.action === "remove" && change.code === code && change.year === year && change.term === term)) {
+        state.planEdit.changes.push({ action: "remove", code, year, term });
+      }
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-plan-undo-delete]").forEach(button => {
+    button.onclick = () => {
+      const index = state.planEdit?.changes.findIndex(change => change.action === "remove" && change.code === button.dataset.code && change.year === Number(button.dataset.year) && change.term === Number(button.dataset.term));
+      if (index >= 0) state.planEdit.changes.splice(index, 1);
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-plan-move-target]").forEach(select => {
+    select.onchange = () => {
+      if (!select.value) return;
+      const program = editorCurrentProgram();
+      if (!program || !isPlanEditing(program)) return;
+      const [toYear, toTerm] = select.value.split("-").map(Number);
+      const fromYear = Number(select.dataset.year);
+      const fromTerm = Number(select.dataset.term);
+      const source = state.planEdit.terms.find(item => item.year === fromYear && item.term === fromTerm);
+      const target = state.planEdit.terms.find(item => item.year === toYear && item.term === toTerm);
+      const code = select.dataset.planMoveTarget;
+      if (!source || !target || (toYear === fromYear && toTerm === fromTerm)) return;
+      if (target.courses.includes(code)) return alert("ภาคปลายทางมีวิชานี้อยู่แล้ว");
+      source.courses = source.courses.filter(item => item !== code);
+      target.courses.push(code);
+      const addChange = state.planEdit.changes.find(change => change.action === "add" && change.code === code && change.year === fromYear && change.term === fromTerm);
+      if (addChange) {
+        addChange.year = toYear;
+        addChange.term = toTerm;
+      } else {
+        state.planEdit.changes.push({ action: "move", code, fromYear, fromTerm, toYear, toTerm });
+      }
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-plan-search]").forEach(input => {
+    input.onkeydown = event => event.stopPropagation();
+    input.onclick = event => event.stopPropagation();
+    input.oninput = () => {
+      state.editorSearch = { year: Number(input.dataset.year), term: Number(input.dataset.term), value: input.value };
+      const query = norm(input.value);
+      const results = document.querySelector(`[data-plan-results="${input.dataset.year}-${input.dataset.term}"]`);
+      if (!results) return;
+      const program = editorCurrentProgram();
+      const usedCodes = new Set((state.planEdit?.terms ?? []).flatMap(term => term.courses ?? []));
+      const matches = editorAvailableCourseEntries(program)
+        .filter(([code]) => !usedCodes.has(code))
+        .filter(([code, course]) => norm(`${code} ${course.name} ${course.nameEn ?? ""}`).includes(query))
+        .slice(0, 8);
+      results.innerHTML = matches.map(([code, course]) => `<button type="button" class="plan-search-result" data-plan-add-course="${esc(code)}" data-year="${input.dataset.year}" data-term="${input.dataset.term}">${esc(code)} — ${esc(course.name)}</button>`).join("");
+      results.querySelectorAll("[data-plan-add-course]").forEach(button => {
+        button.onclick = () => {
+          const program = editorCurrentProgram();
+          const year = Number(button.dataset.year);
+          const term = Number(button.dataset.term);
+          const target = state.planEdit?.terms.find(item => item.year === year && item.term === term);
+          const code = button.dataset.planAddCourse;
+          if (!program || !target || target.courses.includes(code)) return alert("ภาคนี้มีวิชานี้อยู่แล้ว");
+          target.courses.push(code);
+          state.planEdit.changes.push({ action: "add", code, year, term });
+          state.editorSearch = null;
+          render();
+        };
+      });
+    };
+  });
+
+  document.querySelectorAll("[data-plan-add]").forEach(button => {
+    button.onclick = () => {
+      const input = button.parentElement?.querySelector("[data-plan-search]");
+      input?.focus();
+    };
+  });
+
+  document.querySelectorAll("[data-plan-summary]").forEach(button => {
+    button.onclick = () => {
+      const program = editorCurrentProgram();
+      const lines = state.planEdit?.changes.map(change => change.action === "move"
+        ? `ย้าย ${change.code}: ปี ${change.fromYear} ภาค ${change.fromTerm} → ปี ${change.toYear} ภาค ${change.toTerm}`
+        : `${change.action === "add" ? "เพิ่ม" : "ลบ"} ${change.code}: ปี ${change.year} ภาค ${change.term}`).join("\n");
+      if (program) alert(lines || "ยังไม่มีการเปลี่ยนแปลง");
+    };
+  });
+
+  document.querySelectorAll("[data-plan-save], [data-plan-submit]").forEach(button => {
+    button.onclick = async () => {
+      const program = editorCurrentProgram();
+      button.disabled = true;
+      try {
+        await savePlanDraft(program, button.hasAttribute("data-plan-submit"));
+      } catch (error) {
+        alert(error.message ?? "บันทึกไม่สำเร็จ");
+        button.disabled = false;
+      }
+    };
+  });
+
+  document.querySelectorAll("[data-plan-cancel]").forEach(button => {
+    button.onclick = () => {
+      if (state.planEdit?.changes.length && !confirm("ยกเลิกการเปลี่ยนแปลงทั้งหมดหรือไม่")) return;
+      state.planEdit = null;
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-editor-cancel]").forEach(button => {
+    button.onclick = () => {
+      if (state.planEdit?.changes.length && !confirm("ยกเลิกการเปลี่ยนแปลงทั้งหมดหรือไม่")) return;
+      state.planEdit = null;
+      state.editorProgram = null;
+      go("curriculum-management");
+    };
+  });
+
+  document.querySelectorAll("[data-editor-retry]").forEach(button => {
+    button.onclick = () => {
+      state.editorError = "";
+      state.editorProgramLoaded = false;
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-editor-plan-select]").forEach(select => {
+    select.onchange = () => {
+      if (state.planEdit?.changes?.length && !confirm("มีการเปลี่ยนแปลงที่ยังไม่ได้บันทึก เปลี่ยนแผนย่อยและล้างการเปลี่ยนแปลงหรือไม่")) {
+        render();
+        return;
+      }
+      state.editorPlanId = select.value;
+      state.planEdit.changes = [];
+      state.editorLoading = false;
+      state.editorError = "";
+      state.editorProgramLoaded = false;
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-editor-course], [data-editor-course-detail]").forEach(button => {
+    button.onclick = () => {
+      state.courseEditorCourseId = button.dataset.editorCourse || button.dataset.editorCourseDetail;
+      state.courseEditorStandalone = false;
+      state.editorDrawer = null;
+      state.view = "course-editor";
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-course-editor-back]").forEach(button => {
+    button.onclick = () => {
+      if (state.courseEditorStandalone) {
+        state.courseEditorCourseId = null;
+        state.courseEditorQuery = "";
+        render();
+        return;
+      }
+      state.view = "curriculum-editor";
+      state.courseEditorCourseId = null;
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-course-editor-delete]").forEach(button => {
+    button.onclick = () => {
+      const code = state.courseEditorCourseId;
+      const program = editorCurrentProgram();
+      if (!code || !program || !state.planEdit?.terms) return;
+      if (!confirm(`ต้องการลบ ${code} ออกจากแผนการเรียนนี้หรือไม่`)) return;
+      const location = state.planEdit.terms.find(term => term.courses.includes(code));
+      if (!location) return;
+      const addedIndex = state.planEdit.changes.findIndex(change => change.action === "add" && change.code === code && change.year === location.year && change.term === location.term);
+      location.courses = location.courses.filter(item => item !== code);
+      if (addedIndex >= 0) {
+        state.planEdit.changes.splice(addedIndex, 1);
+      } else if (!state.planEdit.changes.some(change => change.action === "remove" && change.code === code && change.year === location.year && change.term === location.term)) {
+        state.planEdit.changes.push({ action: "remove", code, year: location.year, term: location.term });
+      }
+      state.courseEditorCourseId = null;
+      state.view = "curriculum-editor";
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-course-editor-form]").forEach(form => {
+    form.onsubmit = async event => {
+      event.preventDefault();
+      const oldCode = state.courseEditorCourseId;
+      const data = new FormData(form);
+      const newCode = courseKey(data.get("code"));
+      const duplicate = Object.keys(COURSES).some(item => item === newCode && item !== oldCode);
+      if (!newCode || duplicate) return alert(duplicate ? "รหัสวิชาซ้ำในระบบ" : "กรุณาระบุรหัสวิชา");
+      const oldValue = { ...(COURSES[oldCode] ?? {}) };
+      const newValue = { name: String(data.get("name") ?? "").trim(), nameEn: String(data.get("nameEn") ?? "").trim(), credits: Number(data.get("credits")), category: String(data.get("category") ?? "วิชาเฉพาะ"), prereq: COURSES[oldCode]?.prereq ?? [] };
+      if (!newValue.name || !Number.isFinite(newValue.credits)) return alert("กรุณากรอกข้อมูลวิชาให้ครบ");
+      if (state.courseEditorStandalone) {
+        const program = editorCurrentProgram() || PROGRAMS[0];
+        try {
+          const createResponse = await fetch(`${API_BASE}/api/change-requests`, {
+            method: "POST",
+            headers: draftApiHeaders(),
+            body: JSON.stringify({
+              curriculumId: program.curriculumId,
+              type: "edit_course",
+              title: `แก้ไขรายวิชา ${oldCode}`,
+              note: `แก้ไขข้อมูลรายวิชา ${oldCode}`
+            })
+          });
+          const created = await createResponse.json().catch(() => ({}));
+          if (!createResponse.ok || !created.data?.id) throw new Error(created.error ?? "สร้างคำขอแก้รายวิชาไม่สำเร็จ");
+          const itemsResponse = await fetch(`${API_BASE}/api/change-requests/${created.data.id}/items`, {
+            method: "PUT",
+            headers: draftApiHeaders(),
+            body: JSON.stringify({ items: [{ action: "EDIT_FIELD", courseCode: oldCode, oldValue, newValue }] })
+          });
+          const saved = await itemsResponse.json().catch(() => ({}));
+          if (!itemsResponse.ok) throw new Error(saved.error ?? "บันทึกรายการแก้ไขไม่สำเร็จ");
+          const submitResponse = await fetch(`${API_BASE}/api/change-requests/${created.data.id}/submit`, { method: "POST", headers: draftApiHeaders(), body: "{}" });
+          const submitted = await submitResponse.json().catch(() => ({}));
+          if (!submitResponse.ok) throw new Error(submitted.error ?? "ส่งคำขอแก้รายวิชาไม่สำเร็จ");
+          state.draftRequestsLoaded = false;
+          alert("ส่งคำขอแก้ไขรายวิชาแล้ว");
+          go("my-change-requests");
+        } catch (error) {
+          alert(error.message ?? "ส่งคำขอแก้รายวิชาไม่สำเร็จ");
+        }
+        return;
+      }
+      COURSES[newCode] = { ...(COURSES[oldCode] ?? {}), ...newValue };
+      if (newCode !== oldCode && state.planEdit?.terms) state.planEdit.terms.forEach(term => { term.courses = term.courses.map(item => item === oldCode ? newCode : item); });
+      const location = state.planEdit?.terms.find(term => term.courses.includes(newCode));
+      state.planEdit?.changes.push({ action: "edit", code: newCode, oldCode, year: location?.year, term: location?.term, oldValue, newValue });
+      state.courseEditorCourseId = newCode;
+      state.view = "curriculum-editor";
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-course-editor-add-prereq]").forEach(button => {
+    button.onclick = () => {
+      const prerequisite = courseKey(prompt("ระบุรหัสวิชาบังคับก่อน") ?? "");
+      const course = COURSES[state.courseEditorCourseId];
+      if (!prerequisite || !course) return;
+      if (!COURSES[prerequisite]) return alert("ไม่พบรหัสวิชานี้ในหลักสูตรย่อยที่กำลังแก้");
+      if (prerequisite === state.courseEditorCourseId || (course.prereq ?? []).includes(prerequisite)) return alert("วิชาบังคับก่อนซ้ำหรือวนกลับมาที่ตัวเอง");
+      course.prereq = [...(course.prereq ?? []), prerequisite];
+      const location = state.planEdit?.terms.find(term => term.courses.includes(state.courseEditorCourseId));
+      state.planEdit?.changes.push({ action: "prereq", code: state.courseEditorCourseId, year: location?.year, term: location?.term, newValue: { prerequisite } });
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-course-editor-remove-prereq]").forEach(button => {
+    button.onclick = () => {
+      const course = COURSES[state.courseEditorCourseId];
+      const prerequisite = button.dataset.courseEditorRemovePrereq;
+      if (!course || !prerequisite) return;
+      course.prereq = (course.prereq ?? []).filter(item => item !== prerequisite);
+      const location = state.planEdit?.terms.find(term => term.courses.includes(state.courseEditorCourseId));
+      state.planEdit?.changes.push({ action: "prereq", code: state.courseEditorCourseId, year: location?.year, term: location?.term, newValue: { removePrerequisite: prerequisite } });
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-course-editor-related]").forEach(button => {
+    button.onclick = () => { state.courseEditorCourseId = button.dataset.courseEditorRelated; render(); };
+  });
+
+  document.querySelectorAll("[data-course-editor-search]").forEach(input => {
+    input.oninput = () => {
+      state.courseEditorQuery = input.value;
+      render();
+      const next = document.querySelector("[data-course-editor-search]");
+      next?.focus();
+      next?.setSelectionRange(input.value.length, input.value.length);
+    };
+  });
+
+  document.querySelectorAll("[data-course-editor-open]").forEach(button => {
+    button.onclick = () => {
+      state.courseEditorCourseId = button.dataset.courseEditorOpen;
+      state.courseEditorStandalone = true;
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-editor-drawer-close]").forEach(button => {
+    button.onclick = () => { state.editorDrawer = null; render(); };
+  });
+
+  document.querySelectorAll("[data-editor-course-form]").forEach(form => {
+    form.onsubmit = event => {
+      event.preventDefault();
+      const program = editorCurrentProgram();
+      const oldCode = state.editorDrawer?.code;
+      const data = new FormData(form);
+      const newCode = String(data.get("code") ?? "").trim().replace(/\s+/g, "");
+      const duplicate = Object.keys(COURSES).some(code => code === newCode && code !== oldCode);
+      if (!newCode || duplicate) return alert(duplicate ? "รหัสวิชาซ้ำในระบบ" : "กรุณาระบุรหัสวิชา");
+      const oldDetails = { ...(COURSES[oldCode] ?? {}) };
+      const location = state.planEdit?.terms.find(term => term.courses.includes(oldCode));
+      const details = { name: String(data.get("name") ?? "").trim(), nameEn: String(data.get("nameEn") ?? "").trim(), credits: Number(data.get("credits")), category: String(data.get("category") ?? "วิชาเฉพาะ"), prereq: COURSES[oldCode]?.prereq ?? [] };
+      if (!details.name || !Number.isFinite(details.credits)) return alert("กรุณากรอกข้อมูลวิชาให้ครบ");
+      COURSES[newCode] = { ...(COURSES[oldCode] ?? {}), ...details };
+      if (newCode !== oldCode) {
+        state.planEdit.terms.forEach(term => { term.courses = term.courses.map(code => code === oldCode ? newCode : code); });
+      }
+      state.planEdit.changes.push({ action: "edit", code: newCode, oldCode, year: location?.year, term: location?.term, oldValue: oldDetails, newValue: details });
+      state.editorDrawer = null;
+      if (program) render();
+    };
+  });
+
+  document.querySelectorAll("[data-editor-add-prereq]").forEach(button => {
+    button.onclick = () => {
+      const code = prompt("ระบุรหัสวิชาบังคับก่อน");
+      if (!code) return;
+      const course = COURSES[state.editorDrawer?.code];
+      if (!course) return;
+      const prerequisite = code.trim().replace(/\s+/g, "");
+      if (!COURSES[prerequisite]) return alert("ไม่พบรหัสวิชานี้ในรายการวิชา");
+      if (prerequisite === state.editorDrawer.code || (course.prereq ?? []).includes(prerequisite)) return alert("วิชาบังคับก่อนซ้ำหรือวนกลับมาที่ตัวเอง");
+      course.prereq = [...new Set([...(course.prereq ?? []), prerequisite])];
+      const location = state.planEdit?.terms.find(term => term.courses.includes(state.editorDrawer.code));
+      state.planEdit.changes.push({ action: "prereq", code: state.editorDrawer.code, year: location?.year, term: location?.term, newValue: { prerequisite } });
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-editor-remove-prereq]").forEach(button => {
+    button.onclick = () => {
+      const course = COURSES[state.editorDrawer?.code];
+      const prerequisite = button.dataset.editorRemovePrereq;
+      if (!course || !prerequisite) return;
+      course.prereq = (course.prereq ?? []).filter(code => code !== prerequisite);
+      const location = state.planEdit?.terms.find(term => term.courses.includes(state.editorDrawer.code));
+      state.planEdit.changes.push({ action: "prereq", code: state.editorDrawer.code, year: location?.year, term: location?.term, newValue: { removePrerequisite: prerequisite } });
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-editor-related-course]").forEach(button => {
+    button.onclick = () => {
+      state.editorDrawer = { code: button.dataset.editorRelatedCourse };
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-editor-copy-level]").forEach(button => {
+    button.onclick = event => {
+      event.stopPropagation();
+      const firstSource = PROGRAMS[0];
+      state.editorCopy = { level: button.dataset.editorCopyLevel, year: button.dataset.year, term: button.dataset.term, sourceId: firstSource?.id, sourcePlanId: firstSource?.activeStudyPlanId || firstSource?.studyPlans?.[0]?.id || null, sourceQuery: "" };
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-editor-copy-close]").forEach(button => {
+    button.onclick = () => { state.editorCopy = null; render(); };
+  });
+
+  document.querySelectorAll("[data-editor-copy-dialog]").forEach(dialog => {
+    dialog.onclick = event => event.stopPropagation();
+  });
+
+  document.querySelectorAll("[data-editor-copy-source-search]").forEach(input => {
+    input.oninput = () => {
+      state.editorCopy.sourceQuery = input.value;
+      render();
+      const nextInput = document.querySelector("[data-editor-copy-source-search]");
+      nextInput?.focus();
+      nextInput?.setSelectionRange(input.value.length, input.value.length);
+    };
+  });
+
+  document.querySelectorAll("[data-editor-copy-source-choice]").forEach(button => {
+    button.onclick = () => {
+      const nextSource = PROGRAMS.find(program => program.id === button.dataset.editorCopySourceChoice);
+      state.editorCopy.sourceId = button.dataset.editorCopySourceChoice;
+      state.editorCopy.sourcePlanId = nextSource?.activeStudyPlanId || nextSource?.studyPlans?.[0]?.id || null;
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-editor-copy-plan-choice]").forEach(button => {
+    button.onclick = () => {
+      state.editorCopy.sourcePlanId = button.dataset.editorCopyPlanChoice;
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-editor-copy-confirm]").forEach(button => {
+    button.onclick = async () => {
+      const copy = state.editorCopy;
+      const target = editorCurrentProgram();
+      const source = PROGRAMS.find(program => program.id === copy?.sourceId);
+      if (!copy || !target || !source) return;
+      const sourcePlan = source.studyPlans?.find(plan => plan.id === (copy.sourcePlanId || source.activeStudyPlanId)) || source.studyPlans?.[0];
+      const sourceTerms = sourcePlan?.plan ?? source.plan ?? [];
+      let selected = sourceTerms;
+      if (copy.level === "year") selected = selected.filter(term => term.year === Number(copy.year));
+      if (copy.level === "term") selected = selected.filter(term => term.year === Number(copy.year) && term.term === Number(copy.term));
+      const mode = document.querySelector("[data-editor-copy-mode]")?.value ?? "append";
+      const targetTerms = copy.level === "curriculum"
+        ? state.planEdit.terms
+        : state.planEdit.terms.filter(term => copy.level === "year" ? term.year === Number(copy.year) : term.year === Number(copy.year) && term.term === Number(copy.term));
+      if (mode === "replace") targetTerms.forEach(term => { term.courses = []; });
+      selected.forEach(sourceTerm => {
+        const targetTerm = state.planEdit.terms.find(term => term.year === sourceTerm.year && term.term === sourceTerm.term);
+        if (!targetTerm) return;
+        sourceTerm.courses.forEach(code => {
+          if (!targetTerm.courses.includes(code)) {
+            targetTerm.courses.push(code);
+            state.planEdit.changes.push({ action: "add", code, year: targetTerm.year, term: targetTerm.term, copiedFrom: source.curriculumId });
+          }
+        });
+      });
+      state.editorCopy = null;
+      render();
+    };
+  });
+
 
   /* -------------------------
      Navigation
@@ -2986,6 +4244,12 @@ function bind() {
     .forEach(b => {
 
       b.onclick = () => {
+
+        if (state.view === "curriculum-editor" && state.planEdit?.changes?.length && b.dataset.go !== "curriculum-editor") {
+          if (!confirm("มีการเปลี่ยนแปลงที่ยังไม่ได้บันทึก ต้องการออกจากหน้านี้หรือไม่")) return;
+          state.planEdit = null;
+          state.editorProgram = null;
+        }
 
         go(
           b.dataset.go,
@@ -3292,7 +4556,7 @@ function bind() {
 
   document
     .querySelectorAll(
-      "[data-year]"
+      ".year-tab[data-year], .plan-year-tab[data-year]"
     )
     .forEach(b => {
 
@@ -3419,6 +4683,8 @@ window.addEventListener("popstate", event => {
     state.year = pageState.year || 1;
   }
 
+  restoreEditorRoute(pageState || {});
+
   state.navOpen = false;
 
   render();
@@ -3439,6 +4705,7 @@ async function bootstrap() {
     state.programTab = pageState.programTab || "overview";
     state.year = pageState.year || 1;
   }
+  restoreEditorRoute(pageState || {});
   render();
   await loadApiData();
   render();
