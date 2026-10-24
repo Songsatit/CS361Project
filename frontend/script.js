@@ -1394,9 +1394,10 @@ function renderPrograms() {
 function renderCurriculumManagement() {
   if (!canManageCurricula()) return renderHome();
   const requests = state.draftRequests ?? [];
-  const apiPrograms = (state.managementCurricula ?? []).map(curriculum => {
-    const existing = PROGRAMS.find(program => program.curriculumId === curriculum.curriculum_id);
-    return existing ?? {
+  const apiPrograms = (state.managementCurricula ?? [])
+    .filter(curriculum => !PROGRAMS.some(program => program.curriculumId === curriculum.curriculum_id))
+    .map(curriculum => {
+      return {
       id: `api-${curriculum.curriculum_id}`,
       curriculumId: curriculum.curriculum_id,
       code: curriculum.curriculum_id,
@@ -1405,10 +1406,8 @@ function renderCurriculumManagement() {
       plan: [],
       studyPlans: []
     };
-  });
-  const managementPrograms = apiPrograms.length
-    ? apiPrograms
-    : PROGRAMS;
+    });
+  const managementPrograms = [...PROGRAMS, ...apiPrograms];
   const curriculumStatus = new Map((state.managementCurricula ?? [])
     .map(item => [item.curriculum_id, Number(item.active) !== 0]));
   const warningFor = program => requests.filter(request =>
