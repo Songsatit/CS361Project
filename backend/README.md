@@ -22,7 +22,7 @@ DB_PASSWORD=replace-me
 FACULTY_API_URL=https://restapi.tu.ac.th/api/v2/std/fac/all
 DEPARTMENT_API_URL=https://restapi.tu.ac.th/api/v2/std/dep/all
 TU_APPLICATION_KEY=replace-with-tu-access-token
-COURSE_API_URL=https://script.google.com/a/macros/dome.tu.ac.th/s/AKfycbw75ktHQ9wrWMNcMBq1rd0OnNCi3OOJwwNS0kTT5OQDYGiBA1Up7B-Ufbhtu603HZcZ/exec
+COURSE_API_URL=https://script.google.com/a/macros/dome.tu.ac.th/s/AKfycbxO0y-q5MC_dkvYOHwE5BguW0NYqBecLtF-JEvRJ42XnSouQ3Ij4-ss7paIYRX9wlU9SQ/exec
 ```
 
 Faculty และ Department API ของ มธ. ต้องส่ง token ผ่าน header ชื่อ `Application-Key` โดยใช้ค่าเดียวกับ `TU_APPLICATION_KEY`
