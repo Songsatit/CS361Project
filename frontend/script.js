@@ -151,6 +151,29 @@ function changeRequestStatusClass(status) {
   return `change-request-status change-request-status--${status || "unknown"}`;
 }
 
+function auditActionLabel(action) {
+  return {
+    change_request_created: "สร้างคำขอ",
+    change_request_submitted: "ส่งคำขอขออนุมัติ",
+    change_request_approved: "อนุมัติคำขอ",
+    change_request_rejected: "ปฏิเสธคำขอ",
+    change_request_rejectd: "ปฏิเสธคำขอ",
+    change_items_saved: "บันทึกรายการแก้ไข"
+  }[action] ?? action;
+}
+
+function auditEntityLabel(log) {
+  let value = log.new_value;
+  if (typeof value === "string") {
+    try { value = JSON.parse(value); } catch { value = null; }
+  }
+  if (log.entity_type === "change_request") {
+    const title = value?.title ?? value?.newValue?.title;
+    return title ? `คำขอ #${log.entity_id} · ${title}` : `คำขอแก้ไข #${log.entity_id}`;
+  }
+  return log.entity_id ?? "-";
+}
+
 function changeRequestItemLabel(item) {
   const actionLabels = {
     ADD_COURSE: "เพิ่มรายวิชา",
@@ -486,8 +509,8 @@ function renderWorkflowPage() {
                 <tbody>${auditLogs.map(log => `
                   <tr>
                     <td>${esc(log.actor_username)}<small>${esc(log.actor_role)}</small></td>
-                    <td>${esc(log.action)}</td>
-                    <td>${esc(log.entity_id)}</td>
+                    <td>${esc(auditActionLabel(log.action))}</td>
+                    <td>${esc(auditEntityLabel(log))}</td>
                     <td>${esc(new Date(log.created_at).toLocaleString("th-TH"))}</td>
                   </tr>
                 `).join("")}</tbody>
