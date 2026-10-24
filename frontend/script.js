@@ -156,6 +156,43 @@ async function loadChangeRequestDetail(requestId) {
   render();
 }
 
+function applyDraftRequestToEditor(detail) {
+  if (!detail || !state.planEdit?.terms) return;
+  const items = detail.items ?? [];
+  const changes = [];
+  const findTerm = (year, term) => state.planEdit.terms.find(item => item.year === Number(year) && item.term === Number(term));
+  for (const item of items) {
+    const action = String(item.action ?? "").toUpperCase();
+    const oldValue = item.old_value ?? {};
+    const newValue = item.new_value ?? {};
+    const code = courseKey(item.course_code ?? newValue.courseCode ?? "");
+    if (!code) continue;
+    if (action === "ADD_COURSE") {
+      const term = findTerm(item.study_year ?? newValue.year, item.term ?? newValue.term);
+      if (term && !term.courses.includes(code)) term.courses.push(code);
+      changes.push({ action: "add", code, year: Number(item.study_year ?? newValue.year), term: Number(item.term ?? newValue.term) });
+    } else if (action === "REMOVE_COURSE") {
+      const year = oldValue.year ?? item.study_year;
+      const termNumber = oldValue.term ?? item.term;
+      const target = findTerm(year, termNumber);
+      if (target) target.courses = target.courses.filter(value => value !== code);
+      changes.push({ action: "remove", code, year: Number(year), term: Number(termNumber) });
+    } else if (action === "MOVE_COURSE") {
+      const fromYear = oldValue.year ?? item.study_year;
+      const fromTerm = oldValue.term ?? item.term;
+      const toYear = newValue.year;
+      const toTerm = newValue.term;
+      const source = findTerm(fromYear, fromTerm);
+      const target = findTerm(toYear, toTerm);
+      if (source) source.courses = source.courses.filter(value => value !== code);
+      if (target && !target.courses.includes(code)) target.courses.push(code);
+      changes.push({ action: "move", code, fromYear: Number(fromYear), fromTerm: Number(fromTerm), toYear: Number(toYear), toTerm: Number(toTerm) });
+    }
+  }
+  state.planEdit.changes = changes;
+  state.pendingDraftToEdit = null;
+}
+
 function changeRequestStatusLabel(status) {
   return {
     draft: "ฉบับร่าง",
@@ -262,6 +299,8 @@ function renderChangeRequestDetail(request) {
   const detail = request.request ?? request;
   const items = request.items ?? [];
   const canDecide = canReviewCurriculumRequests() && detail.status === "pending";
+  const canEditDraft = detail.status === "draft"
+    && detail.created_by === state.user?.username;
   const groupedItems = items.reduce((groups, item) => {
     const key = changeRequestItemGroup(item);
     if (!groups.has(key)) groups.set(key, []);
@@ -275,7 +314,7 @@ function renderChangeRequestDetail(request) {
       ${detail.note ? `<p class="change-request-note">${esc(detail.note)}</p>` : ""}
       <div class="change-request-items">${items.length ? [...groupedItems.entries()].map(([group, groupItems], groupIndex) => `<details class="change-request-group" ${groupIndex === 0 ? "open" : ""}><summary><strong>${esc(group)}</strong><span>${groupItems.length} รายการ</span></summary><div class="change-request-group-items">${groupItems.map((item, index) => `<article class="change-request-item"><strong>${index + 1}. ${esc(changeRequestItemLabel(item))}</strong>${changeRequestReadableDiff(item)}</article>`).join("")}</div></details>`).join("") : `<p class="audit-empty">คำขอนี้ยังไม่มีรายการเปลี่ยนแปลง</p>`}</div>
       ${detail.review_note ? `<div class="change-request-review-note"><strong>หมายเหตุผู้ตรวจ</strong><p>${esc(detail.review_note)}</p></div>` : ""}
-      ${canDecide ? `<div class="change-request-decision"><button type="button" class="workflow-action workflow-action--primary" data-request-decision="approve" data-request-id="${esc(detail.id)}">อนุมัติคำขอ</button><button type="button" class="workflow-action workflow-action--danger" data-request-decision="reject" data-request-id="${esc(detail.id)}">ปฏิเสธคำขอ</button></div>` : ""}
+      ${canEditDraft || canDecide ? `<div class="change-request-decision">${canEditDraft ? `<button type="button" class="workflow-action workflow-action--muted" data-request-edit="${esc(detail.id)}">แก้ไขฉบับร่าง</button><button type="button" class="workflow-action workflow-action--primary" data-request-submit="${esc(detail.id)}">ส่งขออนุมัติ</button>` : ""}${canDecide ? `<button type="button" class="workflow-action workflow-action--primary" data-request-decision="approve" data-request-id="${esc(detail.id)}">อนุมัติคำขอ</button><button type="button" class="workflow-action workflow-action--danger" data-request-decision="reject" data-request-id="${esc(detail.id)}">ปฏิเสธคำขอ</button>` : ""}</div>` : ""}
     </section>
   `;
 }
@@ -1859,14 +1898,17 @@ async function savePlanDraft(program, submit = false) {
     program.revisionYear = academicYear;
     program.code = title;
   }
-  const createResponse = await fetch(`${API_BASE}/api/change-requests`, {
-    method: "POST",
-    headers: draftApiHeaders(),
-    body: JSON.stringify({ curriculumId: state.editorMode === "new" ? null : program.curriculumId, type: state.editorMode === "new" ? "add_curriculum" : "edit_structure", sourceCurriculumId: null, title: state.editorMode === "new" ? `สร้างหลักสูตร ${program.curriculumId}` : `แก้ไขแผนการเรียน ${program.code}`, note: `แก้ไข ${state.planEdit.changes.length} รายการ` })
-  });
-  const created = await createResponse.json().catch(() => ({}));
-  if (!createResponse.ok || !created.data?.id) throw new Error(created.error ?? "สร้างฉบับร่างไม่สำเร็จ");
-  const requestId = created.data.id;
+  let requestId = state.editingDraftRequestId;
+  if (!requestId) {
+    const createResponse = await fetch(`${API_BASE}/api/change-requests`, {
+      method: "POST",
+      headers: draftApiHeaders(),
+      body: JSON.stringify({ curriculumId: state.editorMode === "new" ? null : program.curriculumId, type: state.editorMode === "new" ? "add_curriculum" : "edit_structure", sourceCurriculumId: null, title: state.editorMode === "new" ? `สร้างหลักสูตร ${program.curriculumId}` : `แก้ไขแผนการเรียน ${program.code}`, note: `แก้ไข ${state.planEdit.changes.length} รายการ` })
+    });
+    const created = await createResponse.json().catch(() => ({}));
+    if (!createResponse.ok || !created.data?.id) throw new Error(created.error ?? "สร้างฉบับร่างไม่สำเร็จ");
+    requestId = created.data.id;
+  }
   const itemsResponse = await fetch(`${API_BASE}/api/change-requests/${requestId}/items`, {
     method: "PUT",
     headers: draftApiHeaders(),
@@ -1882,6 +1924,7 @@ async function savePlanDraft(program, submit = false) {
   state.draftRequestsLoaded = false;
   await loadDraftChangeRequests();
   state.planEdit = null;
+  state.editingDraftRequestId = null;
   alert(submit ? "ส่งขออนุมัติแล้ว" : "บันทึกฉบับร่างแล้ว");
   render();
 }
@@ -3456,6 +3499,7 @@ function render() {
     loadEditorActivePlan(state.editorProgram).then(() => {
       if (state.view === "curriculum-editor") {
         state.planEdit.terms = clonePlanForEditing(state.editorProgram);
+        applyDraftRequestToEditor(state.pendingDraftToEdit);
         render();
       }
     });
@@ -3628,6 +3672,45 @@ function bind() {
 
   document.querySelectorAll("[data-request-detail]").forEach(button => {
     button.onclick = () => loadChangeRequestDetail(button.dataset.requestDetail);
+  });
+
+  document.querySelectorAll("[data-request-submit]").forEach(button => {
+    button.onclick = async () => {
+      if (!confirm("ส่งฉบับร่างนี้ขออนุมัติหรือไม่")) return;
+      button.disabled = true;
+      try {
+        const response = await fetch(`${API_BASE}/api/change-requests/${encodeURIComponent(button.dataset.requestSubmit)}/submit`, {
+          method: "POST",
+          headers: draftApiHeaders(),
+          body: "{}"
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? "ส่งขออนุมัติไม่สำเร็จ");
+        state.draftRequestsLoaded = false;
+        state.selectedChangeRequest = null;
+        await loadDraftChangeRequests();
+        alert("ส่งขออนุมัติแล้ว");
+        render();
+      } catch (error) {
+        alert(error.message ?? "ส่งขออนุมัติไม่สำเร็จ");
+        button.disabled = false;
+      }
+    };
+  });
+
+  document.querySelectorAll("[data-request-edit]").forEach(button => {
+    button.onclick = () => {
+      const selected = state.selectedChangeRequest;
+      const detail = selected?.request ?? selected;
+      const program = PROGRAMS.find(item => item.curriculumId === detail?.curriculum_id);
+      if (!program) {
+        alert("ยังไม่พบหลักสูตรสำหรับเปิดแก้ฉบับร่างนี้");
+        return;
+      }
+      state.pendingDraftToEdit = selected;
+      state.editingDraftRequestId = detail.id;
+      go("curriculum-editor", program.id);
+    };
   });
 
   document.querySelectorAll("[data-request-decision]").forEach(button => {
