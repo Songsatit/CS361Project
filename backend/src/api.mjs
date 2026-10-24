@@ -496,6 +496,7 @@ const changeItemActions = new Set([
   'ADD_PREREQ',
   'REMOVE_PREREQ',
   'CREATE_CURRICULUM',
+  'CREATE_COURSE',
 ]);
 
 function canEditDraft(actor) {
@@ -777,13 +778,30 @@ async function decideDraftChangeRequest(event) {
           ORDER BY study_plan_id`,
         [request.curriculum_id],
       );
+      const createdCourseIds = new Map();
+      for (const rawItem of items) {
+        const item = normalizeChangeItem(rawItem);
+        if (item.action !== 'CREATE_COURSE') continue;
+        const value = item.new_value ?? {};
+        const courseCode = String(item.course_code ?? value.code ?? '').trim();
+        const courseId = `COURSE-${requestId}-${item.id}`.slice(0, 80);
+        if (!courseCode || !value.name) throw new Error('New course details are incomplete');
+        await connection.execute(
+          `INSERT INTO course
+            (course_id, course_code, course_code_th, title_th, title_en, credits_total, status, active)
+           VALUES (?, ?, ?, ?, ?, ?, 'active', 1)`,
+          [courseId, courseCode, value.codeTh ?? null, value.name, value.nameEn ?? null, Number(value.credits ?? 0)],
+        );
+        createdCourseIds.set(courseCode.replace(/\s+/g, '').toUpperCase(), courseId);
+      }
       for (const rawItem of items) {
         const item = normalizeChangeItem(rawItem);
         if (item.action !== 'ADD_COURSE' || !item.course_code) continue;
         const value = item.new_value ?? {};
         const selectedPlan = activePlans.find(plan => plan.study_plan_id === value.planId) ?? activePlans[0];
         if (!selectedPlan) throw new Error('Active study plan not found');
-        const courseRows = await queryRows(
+        const createdCourseId = createdCourseIds.get(item.course_code.replace(/\s+/g, '').toUpperCase());
+        const courseRows = createdCourseId ? [{ course_id: createdCourseId, credits_total: null }] : await queryRows(
           'SELECT course_id, credits_total FROM course WHERE course_code = ? OR REPLACE(course_code, \' \', \'\') = REPLACE(?, \' \', \'\') LIMIT 1',
           [item.course_code, item.course_code],
         );
@@ -801,7 +819,7 @@ async function decideDraftChangeRequest(event) {
           `INSERT IGNORE INTO study_plan_item
             (study_plan_id, study_year, semester, item_order, course_id, requirement_text, credits)
            VALUES (?, ?, ?, ?, ?, NULL, ?)`,
-          [selectedPlan.study_plan_id, year, semester, itemOrder, courseId, courseRows[0].credits_total],
+          [selectedPlan.study_plan_id, year, semester, itemOrder, courseId, value.credits == null ? courseRows[0].credits_total : Number(value.credits)],
         );
         const existingPlacement = await queryRows(
           'SELECT curriculum_course_id FROM curriculum_course WHERE curriculum_id = ? AND course_id = ? AND (pathway_id <=> ?)',

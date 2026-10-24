@@ -1,0 +1,13 @@
+USE curriculum;
+
+ALTER TABLE change_items
+  MODIFY COLUMN action ENUM(
+    'ADD_COURSE',
+    'REMOVE_COURSE',
+    'MOVE_COURSE',
+    'EDIT_FIELD',
+    'ADD_PREREQ',
+    'REMOVE_PREREQ',
+    'CREATE_CURRICULUM',
+    'CREATE_COURSE'
+  ) NOT NULL;

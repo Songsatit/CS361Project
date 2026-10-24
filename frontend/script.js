@@ -237,7 +237,8 @@ function changeRequestItemLabel(item) {
     EDIT_FIELD: "แก้รายละเอียดรายวิชา",
     ADD_PREREQ: "เพิ่มวิชาบังคับก่อน",
     REMOVE_PREREQ: "ลบวิชาบังคับก่อน",
-    CREATE_CURRICULUM: "สร้างหลักสูตร"
+    CREATE_CURRICULUM: "สร้างหลักสูตร",
+    CREATE_COURSE: "สร้างรายวิชาใหม่"
   };
   const code = item.course_code || item.courseCode || item.new_value?.courseCode || "";
   const course = code ? COURSES[courseKey(code)] : null;
@@ -1533,7 +1534,8 @@ function initializeEditorState(id) {
     programId: source.id,
     planId: state.editorMode === "new" ? null : (source.activeStudyPlanId ?? `${source.id}-default`),
     terms: state.editorMode === "new" ? clonePlanForEditing({ plan: [] }) : clonePlanForEditing(source),
-    changes: []
+    changes: [],
+    newCourses: {}
   };
   return true;
 }
@@ -1710,7 +1712,7 @@ function renderEditorTermCard(program, term) {
         }).join("") : `<div class="editor-empty-term">ยังไม่มีวิชา</div>`}
         ${state.planEdit.changes.filter(change => change.action === "move" && change.fromYear === term.year && change.fromTerm === term.term).map(change => `<div class="term-course-row plan-course--moved-away"><span class="course-code">${esc(change.code)}</span><span class="term-course-name">ย้ายไปปี ${change.toYear} ภาค ${change.toTerm}</span><span class="term-course-cr">เดิม</span></div>`).join("")}
       </div>
-      <div class="editor-add-course"><input type="text" data-plan-search data-year="${term.year}" data-term="${term.term}" value="${esc(searchValue)}" placeholder="${searchReady ? "ค้นหารหัสหรือชื่อวิชา" : "กำลังโหลดรายการวิชา..."}"><div class="plan-search-results" data-plan-results="${term.year}-${term.term}"></div><button class="plan-add-button" type="button" data-plan-add data-year="${term.year}" data-term="${term.term}">+ เพิ่มวิชา</button></div>
+      <div class="editor-add-course"><input type="text" data-plan-search data-year="${term.year}" data-term="${term.term}" value="${esc(searchValue)}" placeholder="${searchReady ? "ค้นหารหัสหรือชื่อวิชา" : "กำลังโหลดรายการวิชา..."}"><div class="plan-search-results" data-plan-results="${term.year}-${term.term}"></div><button class="plan-add-button" type="button" data-plan-add data-year="${term.year}" data-term="${term.term}">+ เพิ่มวิชาจาก Catalog</button><button class="plan-add-button" type="button" data-plan-create-course data-year="${term.year}" data-term="${term.term}">+ สร้างวิชาใหม่</button></div>
     </article>
   `;
 }
@@ -1817,7 +1819,8 @@ function startPlanEditing(program) {
     programId: program.id,
     planId: program.activeStudyPlanId ?? `${program.id}-default`,
     terms: clonePlanForEditing(program),
-    changes: []
+    changes: [],
+    newCourses: {}
   };
   state.programTab = "plan";
   render();
@@ -1851,6 +1854,11 @@ function draftCourseCode(code) {
 }
 
 function editorChangeItems(program) {
+  const createdCourseItems = Object.entries(state.planEdit.newCourses ?? {}).map(([code, course]) => ({
+    action: "CREATE_COURSE",
+    courseCode: code,
+    newValue: course
+  }));
   const items = state.planEdit.changes.map(change => {
     const courseCodeValue = draftCourseCode(change.code);
     if (change.action === "move") {
@@ -1877,7 +1885,7 @@ function editorChangeItems(program) {
       }
     });
   }
-  return items;
+  return [...createdCourseItems, ...items];
 }
 
 async function savePlanDraft(program, submit = false) {
@@ -4054,6 +4062,30 @@ function bind() {
       } else {
         state.planEdit.changes.push({ action: "move", code, fromYear, fromTerm, toYear, toTerm });
       }
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-plan-create-course]").forEach(button => {
+    button.onclick = () => {
+      const code = courseKey(window.prompt("รหัสวิชาใหม่ เช่น CS999") ?? "");
+      if (!code) return;
+      if (code.length > 30) return alert("รหัสวิชายาวเกิน 30 ตัวอักษร");
+      const name = String(window.prompt("ชื่อวิชาภาษาไทย") ?? "").trim();
+      if (!name) return;
+      const nameEn = String(window.prompt("ชื่อวิชาภาษาอังกฤษ (ถ้ามี)") ?? "").trim();
+      const credits = Number(window.prompt("หน่วยกิต", "3"));
+      if (!Number.isFinite(credits) || credits < 0) return alert("หน่วยกิตไม่ถูกต้อง");
+      const year = Number(button.dataset.year);
+      const term = Number(button.dataset.term);
+      const target = state.planEdit?.terms.find(item => item.year === year && item.term === term);
+      if (!target) return;
+      if (COURSES[code] || target.courses.includes(code)) return alert("รหัสวิชานี้มีอยู่แล้ว");
+      const course = { code, name, nameEn, credits, category: "วิชาเฉพาะ" };
+      COURSES[code] = course;
+      state.planEdit.newCourses[code] = course;
+      target.courses.push(code);
+      state.planEdit.changes.push({ action: "add", code, year, term });
       render();
     };
   });
