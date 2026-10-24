@@ -227,6 +227,12 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/curricula/{curriculumId}/workflow
             Method: POST
+        SetCurriculumVisibility:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/curricula/{curriculumId}/visibility
+            Method: PATCH
         ListCurriculumChanges:
           Type: HttpApi
           Properties:
