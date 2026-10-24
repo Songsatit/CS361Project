@@ -769,6 +769,60 @@ async function decideDraftChangeRequest(event) {
           [studyPlanId, year, semester, itemOrder, courseId, value.requirementText ?? null, value.credits == null ? null : Number(value.credits)],
         );
       }
+    } else if (action === 'approve' && request.type === 'edit_structure') {
+      const activePlans = await queryRows(
+        `SELECT study_plan_id, pathway_id
+           FROM study_plan
+          WHERE curriculum_id = ? AND active = 1
+          ORDER BY study_plan_id`,
+        [request.curriculum_id],
+      );
+      for (const rawItem of items) {
+        const item = normalizeChangeItem(rawItem);
+        if (item.action !== 'ADD_COURSE' || !item.course_code) continue;
+        const value = item.new_value ?? {};
+        const selectedPlan = activePlans.find(plan => plan.study_plan_id === value.planId) ?? activePlans[0];
+        if (!selectedPlan) throw new Error('Active study plan not found');
+        const courseRows = await queryRows(
+          'SELECT course_id, credits_total FROM course WHERE course_code = ? OR REPLACE(course_code, \' \', \'\') = REPLACE(?, \' \', \'\') LIMIT 1',
+          [item.course_code, item.course_code],
+        );
+        if (!courseRows.length) throw new Error(`Course not found: ${item.course_code}`);
+        const courseId = courseRows[0].course_id;
+        const year = Number(item.study_year);
+        const semester = String(item.term ?? '1') === 'S' ? 3 : Number(item.term);
+        if (!Number.isInteger(year) || !Number.isInteger(semester)) continue;
+        const orderRows = await queryRows(
+          'SELECT COALESCE(MAX(item_order), -1) AS max_order FROM study_plan_item WHERE study_plan_id = ? AND study_year = ? AND semester = ?',
+          [selectedPlan.study_plan_id, year, semester],
+        );
+        const itemOrder = Number(orderRows[0]?.max_order ?? -1) + 1;
+        await connection.execute(
+          `INSERT IGNORE INTO study_plan_item
+            (study_plan_id, study_year, semester, item_order, course_id, requirement_text, credits)
+           VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+          [selectedPlan.study_plan_id, year, semester, itemOrder, courseId, courseRows[0].credits_total],
+        );
+        const existingPlacement = await queryRows(
+          'SELECT curriculum_course_id FROM curriculum_course WHERE curriculum_id = ? AND course_id = ? AND (pathway_id <=> ?)',
+          [request.curriculum_id, courseId, selectedPlan.pathway_id ?? null],
+        );
+        if (!existingPlacement.length) {
+          await connection.execute(
+            `INSERT INTO curriculum_course
+              (curriculum_course_id, curriculum_id, pathway_id, course_id, course_group, requirement_type)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [
+              `${request.curriculum_id}-${requestId}-${item.id}`.slice(0, 100),
+              request.curriculum_id,
+              selectedPlan.pathway_id ?? null,
+              courseId,
+              value.courseGroup ?? null,
+              value.requirementType ?? 'required',
+            ],
+          );
+        }
+      }
     } else if (action === 'approve' && request.type === 'edit_course') {
       for (const rawItem of items) {
         const item = normalizeChangeItem(rawItem);
