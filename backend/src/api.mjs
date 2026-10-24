@@ -902,6 +902,10 @@ async function setCurriculumVisibility(event) {
   const actor = actorFromRequest(event, body);
   if (!['staff', 'curriculum_admin'].includes(actor.role)) return response(403, { error: 'Only staff or curriculum admin can change curriculum visibility' });
   if (typeof body.active !== 'boolean') return response(400, { error: 'active must be boolean' });
+  const protectedCurriculumIds = new Set(['BSC-CS-2566', 'BSC-CNC-2568']);
+  if (body.active === false && body.operation === 'delete' && protectedCurriculumIds.has(curriculumId)) {
+    return response(409, { error: 'Core curricula cannot be deleted' });
+  }
   const current = await queryRows('SELECT curriculum_id, academic_year, active FROM curriculum WHERE curriculum_id = ?', [curriculumId]);
   if (!current.length) return response(404, { error: 'Curriculum not found' });
   await pool.execute(
@@ -914,7 +918,9 @@ async function setCurriculumVisibility(event) {
   await writeAuditLog({
     username: actor.username,
     role: actor.role,
-    action: body.active ? 'curriculum_shown' : 'curriculum_hidden',
+    action: body.active
+      ? 'curriculum_shown'
+      : body.operation === 'delete' ? 'curriculum_deleted' : 'curriculum_hidden',
     entityType: 'curriculum',
     entityId: curriculumId,
     oldValue: current[0],

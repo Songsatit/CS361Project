@@ -760,12 +760,14 @@ async function loadApiData() {
 
     const coursesPayload = await coursesResponse.json();
     const courses = coursesPayload?.data ?? [];
+    const liveCurriculumIds = new Set();
 
     try {
       const curriculaResponse = await fetch(`${API_BASE}/api/curricula`);
       if (curriculaResponse.ok) {
         const curriculaPayload = await curriculaResponse.json();
         for (const curriculum of curriculaPayload?.data ?? []) {
+          liveCurriculumIds.add(curriculum.curriculum_id);
           if (PROGRAMS.some(program => program.curriculumId === curriculum.curriculum_id)) continue;
           PROGRAMS.push({
             id: `api-${curriculum.curriculum_id}`,
@@ -822,7 +824,7 @@ async function loadApiData() {
         course.curriculum_id === program.curriculumId ||
         course.pathway_id === program.pathwayId
       );
-      if (!hasLiveCourses) PROGRAMS.splice(index, 1);
+      if (!hasLiveCourses && !liveCurriculumIds.has(program.curriculumId)) PROGRAMS.splice(index, 1);
     }
     PROGRAMS.forEach(program => {
       if (!Array.isArray(program.plan)) return;
@@ -1393,6 +1395,7 @@ function renderPrograms() {
 
 function renderCurriculumManagement() {
   if (!canManageCurricula()) return renderHome();
+  const coreCurriculumIds = new Set(["BSC-CS-2566", "BSC-CNC-2568"]);
   const requests = state.draftRequests ?? [];
   const apiPrograms = (state.managementCurricula ?? [])
     .filter(curriculum => !PROGRAMS.some(program => program.curriculumId === curriculum.curriculum_id))
@@ -1431,6 +1434,9 @@ function renderCurriculumManagement() {
           const isActive = curriculumStatus.has(program.curriculumId)
             ? curriculumStatus.get(program.curriculumId)
             : true;
+          const isCore = coreCurriculumIds.has(program.curriculumId);
+          const visibilityAction = isActive ? (isCore ? "hide" : "delete") : "show";
+          const visibilityLabel = isActive ? (isCore ? "ซ่อนหลักสูตร" : "ลบหลักสูตร") : "แสดงหลักสูตร";
           return `
             <article class="management-program-card">
               <div class="management-program-main">
@@ -1440,7 +1446,7 @@ function renderCurriculumManagement() {
                 <div class="management-program-meta"><span>${esc(program.curriculumId)}</span><span>วิชา ${courses.size} รายการ</span><span>${isActive ? "เผยแพร่" : "ซ่อนอยู่"}</span></div>
                 ${warnings.length ? `<p class="management-warning">มี ${warnings.length} รายการอยู่ในสถานะ ${warnings.some(item => item.status === "pending") ? "รอตรวจสอบ" : "ฉบับร่าง"}</p>` : ""}
               </div>
-              <div class="management-program-actions"><button class="workflow-action workflow-action--primary" type="button" data-go="curriculum-editor" data-id="${esc(program.id)}">แก้ไข</button><button class="workflow-action ${isActive ? "workflow-action--danger" : "workflow-action--primary"}" type="button" data-curriculum-visibility="${isActive ? "hide" : "show"}" data-curriculum-id="${esc(program.curriculumId)}">${isActive ? "ซ่อนหลักสูตร" : "แสดงหลักสูตร"}</button></div>
+              <div class="management-program-actions"><button class="workflow-action workflow-action--primary" type="button" data-go="curriculum-editor" data-id="${esc(program.id)}">แก้ไข</button><button class="workflow-action ${isActive ? "workflow-action--danger" : "workflow-action--primary"}" type="button" data-curriculum-visibility="${visibilityAction}" data-curriculum-id="${esc(program.curriculumId)}">${visibilityLabel}</button></div>
             </article>
           `;
         }).join("")}
@@ -3582,22 +3588,27 @@ function bind() {
     button.onclick = async () => {
       const curriculumId = button.dataset.curriculumId;
       const show = button.dataset.curriculumVisibility === "show";
-      if (!curriculumId || !confirm(`${show ? "แสดง" : "ซ่อน"}หลักสูตร ${curriculumId} ${show ? "ให้ผู้ใช้ทั่วไปเห็นอีกครั้ง" : "จากผู้ใช้ทั่วไป"}หรือไม่`)) return;
+      const deleting = button.dataset.curriculumVisibility === "delete";
+      const actionText = show ? "แสดง" : deleting ? "ลบ" : "ซ่อน";
+      if (!curriculumId || !confirm(`${actionText}หลักสูตร ${curriculumId} ${show ? "ให้ผู้ใช้ทั่วไปเห็นอีกครั้ง" : deleting ? "ออกจากระบบหรือไม่ (ข้อมูลจะถูกเก็บไว้ตรวจสอบย้อนหลัง)" : "จากผู้ใช้ทั่วไปหรือไม่"}`)) return;
       button.disabled = true;
       try {
         const response = await fetch(`${API_BASE}/api/curricula/${encodeURIComponent(curriculumId)}/visibility`, {
           method: "PATCH",
           headers: draftApiHeaders(),
-          body: JSON.stringify({ active: button.dataset.curriculumVisibility !== "hide" })
+          body: JSON.stringify({
+            active: show,
+            operation: deleting ? "delete" : show ? "show" : "hide"
+          })
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload.error ?? `${show ? "แสดง" : "ซ่อน"}หลักสูตรไม่สำเร็จ`);
-        alert(show ? "แสดงหลักสูตรแล้ว" : "ซ่อนหลักสูตรแล้ว");
+        alert(show ? "แสดงหลักสูตรแล้ว" : deleting ? "ลบหลักสูตรออกแล้ว" : "ซ่อนหลักสูตรแล้ว");
         state.managementCurriculaLoaded = false;
         await loadManagementCurricula();
         render();
       } catch (error) {
-        alert(error.message ?? `${show ? "แสดง" : "ซ่อน"}หลักสูตรไม่สำเร็จ`);
+        alert(error.message ?? `${actionText}หลักสูตรไม่สำเร็จ`);
         button.disabled = false;
       }
     };
