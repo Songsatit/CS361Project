@@ -247,6 +247,12 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/curricula/{curriculumId}
             Method: DELETE
+        DeleteCourse:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/courses/{courseCode}
+            Method: DELETE
         ListCurriculumChanges:
           Type: HttpApi
           Properties:

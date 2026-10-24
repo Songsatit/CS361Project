@@ -164,7 +164,10 @@ function pathParameter(event, name) {
 
 async function listCourses(event) {
   const query = event.queryStringParameters ?? {};
-  const conditions = [];
+  const actor = actorFromRequest(event, requestBody(event) ?? {});
+  const includeUnplaced = query.includeUnplaced === '1'
+    && ['staff', 'curriculum_admin'].includes(actor.role);
+  const conditions = ['c.active = 1'];
   const params = [];
 
   if (query.curriculumId) {
@@ -189,9 +192,8 @@ async function listCourses(event) {
             c.credits_total, c.status, c.active, cc.curriculum_course_id,
             cc.curriculum_id, cur.academic_year, cc.pathway_id, cc.course_group,
             cc.requirement_type
-       FROM curriculum_course cc
-       JOIN course c ON c.course_id = cc.course_id
-       JOIN curriculum cur ON cur.curriculum_id = cc.curriculum_id AND cur.active = 1
+       FROM course c
+       ${includeUnplaced ? 'LEFT JOIN curriculum_course cc ON cc.course_id = c.course_id\n       LEFT JOIN curriculum cur ON cur.curriculum_id = cc.curriculum_id AND cur.active = 1' : 'JOIN curriculum_course cc ON cc.course_id = c.course_id\n       JOIN curriculum cur ON cur.curriculum_id = cc.curriculum_id AND cur.active = 1'}
        ${where}
       ORDER BY c.course_code, cc.curriculum_id, cc.pathway_id
       LIMIT ? OFFSET ?`,
@@ -279,6 +281,26 @@ async function getCourse(event) {
   return response(200, {
     data: { ...courses[0], placements: courses, prerequisites, dependents, detail },
   });
+}
+
+async function deleteCourse(event) {
+  const courseCode = pathParameter(event, 'courseCode') ?? pathParameter(event, 'courseId');
+  const actor = actorFromRequest(event, requestBody(event) ?? {});
+  if (!courseCode) return response(400, { error: 'courseCode is required' });
+  if (!['staff', 'curriculum_admin'].includes(actor.role)) return response(403, { error: 'Only staff or curriculum admin can delete courses' });
+  const courses = await queryRows(
+    `SELECT c.course_id, c.course_code
+       FROM course c
+      WHERE c.course_code = ? OR REPLACE(c.course_code, ' ', '') = REPLACE(?, ' ', '')
+      LIMIT 1`,
+    [courseCode, courseCode],
+  );
+  if (!courses.length) return response(404, { error: 'Course not found' });
+  const placements = await queryRows('SELECT curriculum_course_id FROM curriculum_course WHERE course_id = ?', [courses[0].course_id]);
+  if (placements.length) return response(409, { error: 'Course is already used by a curriculum' });
+  await pool.execute('UPDATE course SET active = 0, status = \'inactive\' WHERE course_id = ?', [courses[0].course_id]);
+  await writeAuditLog({ username: actor.username, role: actor.role, action: 'course_deleted', entityType: 'course', entityId: courses[0].course_id, oldValue: courses[0], newValue: { active: 0 } });
+  return response(200, { data: { ...courses[0], active: 0 } });
 }
 
 async function getPrerequisiteChain(courseId) {
@@ -1376,6 +1398,7 @@ export const handler = async (event) => {
     if (route === 'POST /api/curriculum-changes/{changeId}/decision') return await decideCurriculumChange(event);
     if (route === 'PATCH /api/curricula/{curriculumId}/visibility') return await setCurriculumVisibility(event);
     if (route === 'DELETE /api/curricula/{curriculumId}') return await deleteCurriculum(event);
+    if (route === 'DELETE /api/courses/{courseCode}') return await deleteCourse(event);
     if (route === 'POST /api/curricula/{curriculumId}/workflow') return await updateCurriculumWorkflow(event);
     if (method !== 'GET') return response(405, { error: 'Method not allowed' });
     if (route === 'GET /api/courses') return await listCourses(event);
