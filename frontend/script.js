@@ -71,6 +71,7 @@ async function loadStudentProfile() {
 function restoreMockUser() {
   try {
     const saved = localStorage.getItem("cs361-v3-user");
+    state.token = localStorage.getItem("cs361-v3-token");
     state.user = saved ? JSON.parse(saved) : null;
     if (state.user && ["admin", "curriculumadmin"].includes(state.user.role)) {
       state.user.role = "curriculum_admin";
@@ -91,14 +92,15 @@ function mockLogin(username, password) {
 
 function mockLogout() {
   state.user = null;
+  state.token = null;
   localStorage.removeItem("cs361-v3-user");
+  localStorage.removeItem("cs361-v3-token");
 }
 
 function draftApiHeaders() {
   return {
     "Content-Type": "application/json",
-    "x-user": state.user?.username ?? "",
-    "x-role": state.user?.role ?? ""
+    ...(state.token ? { Authorization: `Bearer ${state.token}` } : {})
   };
 }
 
@@ -3795,14 +3797,6 @@ function bind() {
       const password = String(formData.get("password") ?? "");
       const button = loginForm.querySelector("button[type=submit]");
 
-      if (MOCK_USERS[username.trim().toLowerCase()]?.password === password) {
-        mockLogin(username, password);
-        state.loginOpen = false;
-        state.loginError = "";
-        go("home");
-        return;
-      }
-
       button.disabled = true;
       state.loginError = "";
       try {
@@ -3817,7 +3811,9 @@ function bind() {
         const payload = await response.json().catch(() => ({}));
         if (!response.ok || !payload.user) throw new Error(payload.error ?? "Username หรือ Password ไม่ถูกต้อง");
         state.user = payload.user;
+        state.token = payload.token ?? null;
         localStorage.setItem("cs361-v3-user", JSON.stringify(state.user));
+        if (state.token) localStorage.setItem("cs361-v3-token", state.token);
         state.loginOpen = false;
         state.loginError = "";
         go("home");
@@ -3840,12 +3836,8 @@ function bind() {
           `${API_BASE}/api/curricula/${encodeURIComponent(program.curriculumId)}/workflow`,
           {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              action: button.dataset.workflowAction,
-              username: state.user.username,
-              role: state.user.role
-            })
+            headers: draftApiHeaders(),
+            body: JSON.stringify({ action: button.dataset.workflowAction })
           }
         );
         if (!response.ok) throw new Error(`Workflow update failed: ${response.status}`);
@@ -3996,8 +3988,8 @@ function bind() {
     button.onclick = async () => {
       const response = await fetch(`${API_BASE}/api/curriculum-changes/${encodeURIComponent(button.dataset.changeId)}/decision`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: button.dataset.changeAction, username: state.user.username, role: state.user.role })
+        headers: draftApiHeaders(),
+        body: JSON.stringify({ action: button.dataset.changeAction })
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) return alert(payload.error ?? "ดำเนินการกับรายการแก้ไขไม่สำเร็จ");

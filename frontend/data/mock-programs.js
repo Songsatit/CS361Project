@@ -405,6 +405,7 @@ const state = {
 
   homeQuery: "",
   user: null,
+  token: null,
   studentProfile: null,
   studentProfileLoading: false,
   studentProfileAttempted: false,
