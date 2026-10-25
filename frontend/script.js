@@ -18,6 +18,17 @@ const PROGRAMS = window.MOCK_PROGRAMS;
 
 const MOCK_USERS = window.MOCK_USERS;
 
+const nativeFetch = window.fetch.bind(window);
+window.fetch = async (input, init) => {
+  const response = await nativeFetch(input, init);
+  const url = typeof input === "string" ? input : input?.url ?? "";
+  if (response.status === 401 && url.startsWith(API_BASE) && !url.endsWith("/api/auth/login")) {
+    clearAuthSession();
+    if (state.view !== "login") go("login");
+  }
+  return response;
+};
+
 
 function canAccessCurriculumManagement(user = state.user) {
   return ["instructor", "staff", "curriculum_admin"].includes(user?.role);
@@ -32,7 +43,7 @@ function canReviewCurriculumRequests(user = state.user) {
 }
 
 function canViewAuditLogs(user = state.user) {
-  return ["staff", "curriculum_admin"].includes(user?.role);
+  return user?.role === "staff";
 }
 
 function canAccessStudentProfile(user = state.user) {
@@ -73,12 +84,30 @@ function restoreMockUser() {
     const saved = localStorage.getItem("cs361-v3-user");
     state.token = localStorage.getItem("cs361-v3-token");
     state.user = saved ? JSON.parse(saved) : null;
+    if (!state.token) state.user = null;
     if (state.user && ["admin", "curriculumadmin"].includes(state.user.role)) {
       state.user.role = "curriculum_admin";
       state.user.roleLabel = "ผู้ดูแลข้อมูลหลักสูตร";
     }
   } catch {
     state.user = null;
+  }
+}
+
+function clearAuthSession() {
+  state.user = null;
+  state.token = null;
+  localStorage.removeItem("cs361-v3-user");
+  localStorage.removeItem("cs361-v3-token");
+}
+
+function tokenExpired(token = state.token) {
+  if (!token) return true;
+  try {
+    const payload = JSON.parse(atob(token.split(".")[1] ?? ""));
+    return !payload.exp || payload.exp * 1000 <= Date.now();
+  } catch {
+    return true;
   }
 }
 
@@ -91,13 +120,11 @@ function mockLogin(username, password) {
 }
 
 function mockLogout() {
-  state.user = null;
-  state.token = null;
-  localStorage.removeItem("cs361-v3-user");
-  localStorage.removeItem("cs361-v3-token");
+  clearAuthSession();
 }
 
 function draftApiHeaders() {
+  if (state.token && tokenExpired()) clearAuthSession();
   return {
     "Content-Type": "application/json",
     ...(state.token ? { Authorization: `Bearer ${state.token}` } : {})
@@ -361,7 +388,7 @@ async function loadCurriculumWorkflow(curriculumId) {
 
 async function loadAuditLogs() {
   if (auditLogRequests.has("recent")) return auditLogRequests.get("recent");
-  const request = fetch(`${API_BASE}/api/audit-logs?limit=50`)
+  const request = fetch(`${API_BASE}/api/audit-logs?limit=50`, { headers: draftApiHeaders() })
     .then(async response => {
       if (!response.ok) throw new Error(`Audit API returned ${response.status}`);
       const payload = await response.json();
@@ -381,7 +408,7 @@ async function loadAuditLogs() {
 async function loadCurriculumChanges(curriculumId) {
   if (!curriculumId || state.curriculumChangesLoaded) return state.curriculumChanges;
   try {
-    const response = await fetch(`${API_BASE}/api/curriculum-changes?curriculumId=${encodeURIComponent(curriculumId)}`);
+    const response = await fetch(`${API_BASE}/api/curriculum-changes?curriculumId=${encodeURIComponent(curriculumId)}`, { headers: draftApiHeaders() });
     if (!response.ok) throw new Error(`Curriculum changes API returned ${response.status}`);
     const payload = await response.json();
     state.curriculumChanges = payload?.data ?? [];
@@ -939,7 +966,7 @@ async function loadApiData() {
 const icon = (name, size = 18, cls = "") =>
   `<i data-lucide="${name}" width="${size}" height="${size}" class="${cls}"></i>`;
 
-const esc = s =>
+const escapeHtml = s =>
   String(s ?? "").replace(
     /[&<>"']/g,
     m => ({
@@ -950,6 +977,9 @@ const esc = s =>
       "'": "&#039;"
     }[m])
   );
+
+// Keep the existing short name while making the single HTML escaping helper explicit.
+const esc = escapeHtml;
 
 const norm = s =>
   (s || "")
@@ -1045,7 +1075,7 @@ function crumbs(items) {
                     <button
                       class="crumb-link"
                       data-go="${it.view}"
-                      ${it.id ? `data-id="${it.id}"` : ""}
+                      ${it.id ? `data-id="${esc(it.id)}"` : ""}
                     >
                       ${esc(it.label)}
                     </button>
@@ -1077,7 +1107,7 @@ function programCard(p) {
     <button
       class="program-card"
       data-go="program"
-      data-id="${latest.id}"
+      data-id="${esc(latest.id)}"
     >
 
       ${seal(latest.revisionYear)}
@@ -1278,8 +1308,8 @@ function renderHome() {
           r => `
                         <button
                           class="hero-result-row"
-                          data-go="${r[2]}"
-                          data-id="${r[3]}"
+                          data-go="${esc(r[2])}"
+                          data-id="${esc(r[3])}"
                         >
 
                           <span class="hero-result-type">
@@ -2332,7 +2362,7 @@ function renderProgram() {
                           <button
                             class="term-course-row"
                             data-go="course"
-                            data-id="${code}"
+                            data-id="${esc(code)}"
                           >
 
                             ${courseCode(code)}
@@ -2663,7 +2693,7 @@ function renderCourses() {
               <button
                 class="course-card"
                 data-go="course"
-                data-id="${code}"
+                data-id="${esc(code)}"
               >
 
                 <div class="course-card-top">
@@ -4631,7 +4661,7 @@ function bind() {
             <button
               class="search-result-item"
               data-go="program"
-              data-id="${p.id}"
+              data-id="${esc(p.id)}"
             >
               <span class="search-result-type">หลักสูตร</span>
               <span class="search-result-title">
@@ -4659,7 +4689,7 @@ function bind() {
             <button
               class="search-result-item"
               data-go="course"
-              data-id="${code}"
+              data-id="${esc(code)}"
             >
               <span class="search-result-type">รายวิชา</span>
               <span class="search-result-title">

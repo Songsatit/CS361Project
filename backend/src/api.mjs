@@ -1,5 +1,10 @@
 import mysql from 'mysql2/promise';
 import jwt from 'jsonwebtoken';
+import crypto from 'node:crypto';
+
+const allowedRoles = new Set(['student', 'instructor', 'curriculum_admin', 'staff']);
+const jwtIssuer = 'cs361-curriculum-api';
+const jwtAudience = 'cs361-frontend';
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
@@ -10,13 +15,19 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 2,
   queueLimit: 0,
+  ...(process.env.DB_TLS === 'true' ? { ssl: { rejectUnauthorized: false } } : {}),
 });
 
 const response = (statusCode, body) => ({
   statusCode,
   headers: {
     'content-type': 'application/json; charset=utf-8',
-    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Origin': process.env.FRONTEND_ORIGIN ?? 'https://main.d3dm5h9pinlgfm.amplifyapp.com',
+    'Access-Control-Allow-Headers': 'content-type,authorization',
+    'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+    'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
   },
   body: JSON.stringify(body),
 });
@@ -34,9 +45,10 @@ function signAccessToken(user) {
       sub: user.username,
       role: user.role,
       name: user.displayNameTh || user.displayNameEn || user.username,
+      jti: crypto.randomUUID(),
     },
     secret,
-    { expiresIn: '15m', issuer: 'cs361-curriculum-api' },
+    { expiresIn: '15m', issuer: jwtIssuer, audience: jwtAudience, algorithm: 'HS256' },
   );
 }
 
@@ -48,6 +60,7 @@ const demoAccounts = {
 };
 
 function demoLogin(username, password) {
+  if (process.env.ENABLE_DEMO_LOGIN !== 'true') return null;
   const key = username.trim().toLowerCase();
   const account = demoAccounts[key];
   if (!account?.password || account.password !== password) return null;
@@ -124,11 +137,10 @@ async function tuLogin(event) {
 }
 
 async function getStudentProfile(event) {
-  const query = event.queryStringParameters ?? Object.fromEntries(
-    new URLSearchParams(event.rawQueryString ?? ''),
-  );
-  const studentId = String(query.id ?? '').trim();
-  if (!studentId) return response(400, { error: 'student id is required' });
+  const actor = actorFromRequest(event);
+  if (actor.authError) return response(actor.forbidden ? 403 : 401, { error: 'Unauthorized' });
+  if (!actor.authenticated || actor.role !== 'student') return response(403, { error: 'Forbidden' });
+  const studentId = actor.username;
   if (!process.env.TU_APPLICATION_KEY) {
     console.error('TU_APPLICATION_KEY is not configured');
     return response(503, { error: 'TU profile API is not configured' });
@@ -331,7 +343,7 @@ async function deleteCourse(event) {
   const courseCode = pathParameter(event, 'courseCode') ?? pathParameter(event, 'courseId');
   const actor = actorFromRequest(event, requestBody(event) ?? {});
   if (!courseCode) return response(400, { error: 'courseCode is required' });
-  if (!['staff', 'curriculum_admin'].includes(actor.role)) return response(403, { error: 'Only staff or curriculum admin can delete courses' });
+  if (actor.role !== 'staff') return response(403, { error: 'Only staff can delete courses' });
   const courses = await queryRows(
     `SELECT c.course_id, c.course_code
        FROM course c
@@ -517,6 +529,8 @@ async function listDepartments(event) {
 }
 
 async function listAuditLogs(event) {
+  const actor = actorFromRequest(event);
+  if (actor.role !== 'staff') return response(403, { error: 'Only staff can view audit logs' });
   const query = event.queryStringParameters ?? {};
   const limit = Math.max(1, Math.min(Number.parseInt(query.limit ?? '100', 10) || 100, 500));
   const data = await queryRows(
@@ -553,9 +567,12 @@ function actorFromRequest(event, body = {}) {
   if (bearer && process.env.JWT_SECRET) {
     try {
       const claims = jwt.verify(bearer, process.env.JWT_SECRET, {
-        issuer: 'cs361-curriculum-api',
+        algorithms: ['HS256'],
+        issuer: jwtIssuer,
+        audience: jwtAudience,
       });
       if (claims && typeof claims === 'object') {
+        if (!allowedRoles.has(String(claims.role))) return { username: '', role: '', authenticated: false, authError: true, forbidden: true };
         return {
           username: String(claims.sub ?? '').slice(0, 100),
           role: String(claims.role ?? '').slice(0, 30),
@@ -789,6 +806,7 @@ async function decideDraftChangeRequest(event) {
   const requestRows = await queryRows('SELECT * FROM change_requests WHERE id = ?', [requestId]);
   const request = normalizeChangeRequest(requestRows[0]);
   if (!request) return response(404, { error: 'Change request not found' });
+  if (request.created_by === actor.username) return response(403, { error: 'Request owner cannot review their own request' });
   if (request.status !== 'pending') return response(409, { error: 'Only pending requests can be reviewed' });
   const note = String(body.note ?? '').trim() || null;
   if (action === 'reject' && !note) return response(400, { error: 'A rejection reason is required' });
@@ -1082,7 +1100,7 @@ async function setCurriculumVisibility(event) {
   const body = requestBody(event);
   if (!curriculumId || !body) return response(400, { error: 'curriculumId and valid JSON body are required' });
   const actor = actorFromRequest(event, body);
-  if (!['staff', 'curriculum_admin'].includes(actor.role)) return response(403, { error: 'Only staff or curriculum admin can change curriculum visibility' });
+  if (actor.role !== 'staff') return response(403, { error: 'Only staff can change curriculum visibility' });
   if (typeof body.active !== 'boolean') return response(400, { error: 'active must be boolean' });
   const protectedCurriculumIds = new Set(['BSC-CS-2566', 'BSC-CNC-2568']);
   if (body.active === false && body.operation === 'delete' && protectedCurriculumIds.has(curriculumId)) {
@@ -1115,7 +1133,7 @@ async function deleteCurriculum(event) {
   const curriculumId = pathParameter(event, 'curriculumId');
   const actor = actorFromRequest(event, requestBody(event) ?? {});
   if (!curriculumId) return response(400, { error: 'curriculumId is required' });
-  if (!['staff', 'curriculum_admin'].includes(actor.role)) return response(403, { error: 'Only staff or curriculum admin can delete curricula' });
+  if (actor.role !== 'staff') return response(403, { error: 'Only staff can delete curricula' });
   if (new Set(['BSC-CS-2566', 'BSC-CNC-2568']).has(curriculumId)) {
     return response(409, { error: 'Core curricula cannot be deleted' });
   }
@@ -1179,8 +1197,8 @@ async function updateCurriculumWorkflow(event) {
   }
 
   const actor = actorFromRequest(event, body);
-  if (!['instructor', 'staff', 'curriculum_admin'].includes(actor.role)) {
-    return response(403, { error: 'Only instructor, staff, or curriculum admin can update curriculum workflow' });
+  if (actor.role !== 'staff') {
+    return response(403, { error: 'Only staff can update curriculum workflow' });
   }
 
   const current = await queryRows(
@@ -1350,14 +1368,15 @@ async function decideCurriculumChange(event) {
   const body = requestBody(event);
   if (!changeId || !body) return response(400, { error: 'changeId and valid JSON body are required' });
   const actor = actorFromRequest(event, body);
-  if (!['staff', 'curriculum_admin'].includes(actor.role)) {
-    return response(403, { error: 'Only staff or curriculum admin can review changes' });
+  if (actor.role !== 'staff') {
+    return response(403, { error: 'Only staff can review changes' });
   }
   const action = String(body.action ?? '').toLowerCase();
   if (!['approve', 'reject'].includes(action)) return response(400, { error: 'action must be approve or reject' });
   const rows = await queryRows('SELECT * FROM curriculum_change_request WHERE change_id = ?', [changeId]);
   const change = parseChangePayload(rows[0]);
   if (!change) return response(404, { error: 'Change request not found' });
+  if (change.requested_by === actor.username) return response(403, { error: 'Request owner cannot review their own request' });
   if (change.status !== 'pending') return response(409, { error: 'Change request has already been reviewed' });
 
   if (action === 'approve') {
@@ -1451,6 +1470,23 @@ export const handler = async (event) => {
     const route = event.routeKey ?? `${method} ${event.rawPath ?? event.path ?? ''}`;
 
     if (route === 'POST /api/auth/login') return await tuLogin(event);
+    if (method === 'OPTIONS') return response(204, null);
+    const publicRoutes = new Set([
+      'GET /api/courses',
+      'GET /api/curricula',
+      'GET /api/faculties',
+      'GET /api/departments',
+      'GET /api/study-plans',
+    ]);
+    const isPublic = publicRoutes.has(route)
+      || (method === 'GET' && route.startsWith('GET /api/courses/'))
+      || route === 'GET /api/curricula/{curriculumId}/graduation-conditions'
+      || route === 'GET /api/curricula/{curriculumId}/workflow';
+    if (!isPublic) {
+      const actor = actorFromRequest(event);
+      if (actor.authError) return response(actor.forbidden ? 403 : 401, { error: actor.forbidden ? 'Forbidden' : 'Unauthorized' });
+      if (!actor.authenticated) return response(401, { error: 'Unauthorized' });
+    }
     if (route === 'POST /api/change-requests') return await createDraftChangeRequest(event);
     if (route === 'PUT /api/change-requests/{requestId}/items') return await saveDraftChangeItems(event);
     if (route === 'POST /api/change-requests/{requestId}/submit') return await submitDraftChangeRequest(event);

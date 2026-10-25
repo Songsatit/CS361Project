@@ -42,6 +42,9 @@ Parameters:
   TuAuthUrl:
     Type: String
     Default: https://restapi.tu.ac.th/api/v1/auth/Ad/verify2
+  FrontendOrigin:
+    Type: String
+    Default: https://main.d3dm5h9pinlgfm.amplifyapp.com
   JwtSecret:
     Type: String
     NoEcho: true
@@ -62,6 +65,10 @@ Parameters:
     Type: String
     NoEcho: true
     Default: admin123
+  EnableDemoLogin:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
 
 Globals:
   Function:
@@ -77,11 +84,16 @@ Globals:
         DB_PASSWORD: !Ref DbPassword
         TU_APPLICATION_KEY: !Ref TuApplicationKey
         TU_AUTH_URL: !Ref TuAuthUrl
+        FRONTEND_ORIGIN: !Ref FrontendOrigin
         JWT_SECRET: !Ref JwtSecret
+        JWT_ISSUER: cs361-curriculum-api
+        JWT_AUDIENCE: cs361-frontend
+        DB_TLS: 'true'
         DEMO_TEACHER_PASSWORD: !Ref DemoTeacherPassword
         DEMO_INSTRUCTOR_PASSWORD: !Ref DemoInstructorPassword
         DEMO_STAFF_PASSWORD: !Ref DemoStaffPassword
         DEMO_ADMIN_PASSWORD: !Ref DemoAdminPassword
+        ENABLE_DEMO_LOGIN: !Ref EnableDemoLogin
 
 Resources:
   CurriculumDbSecret:
@@ -103,7 +115,7 @@ Resources:
       VpcSubnetIds: !Ref VpcSubnetIds
       VpcSecurityGroupIds:
         - !Ref RdsProxySecurityGroupId
-      RequireTLS: false
+      RequireTLS: true
 
   CurriculumDbProxyTargetGroup:
     Type: AWS::RDS::DBProxyTargetGroup
@@ -122,7 +134,7 @@ Resources:
       StageName: "$default"
       CorsConfiguration:
         AllowOrigins:
-          - "*"
+          - !Ref FrontendOrigin
         AllowMethods:
           - GET
           - POST
@@ -132,8 +144,10 @@ Resources:
           - OPTIONS
         AllowHeaders:
           - content-type
-          - x-user
-          - x-role
+          - authorization
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 50
+        ThrottlingRateLimit: 20
 
   CurriculumReadFunction:
     Type: AWS::Serverless::Function
