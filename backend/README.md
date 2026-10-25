@@ -65,7 +65,7 @@ Successful responses use `{ "data": ... }`; list endpoints return an array in `d
 
 ### Deploy
 
-Install AWS SAM CLI and configure AWS credentials for the target account. The deployment needs an existing VPC, private subnets with a route to RDS, a Lambda security group, and an RDS security group rule allowing inbound MySQL (3306) from that Lambda security group. The Lambda must be able to reach RDS; public subnet placement alone does not provide that access. Database tables must match the entities in `../docs/v2-data-model-erd.md`, including `prerequisite`. Run `migrations/001_curriculum_graduation_conditions.sql` and `migrations/002_course_catalog_details.sql` once against the target RDS before deploying. The included seed covers `BSC-CS-2566`; add verified conditions for other curricula before using that endpoint for them.
+Install AWS SAM CLI and configure AWS credentials for the target account. The deployment needs an existing VPC, private subnets with a route to RDS, a Lambda security group, and an RDS security group rule allowing inbound MySQL (3306) from that Lambda security group. The Lambda must be able to reach RDS; public subnet placement alone does not provide that access. Database tables must match the entities in `../docs/v2-data-model-erd.md`, including `prerequisite`. Run all migration files, including `migrations/009_login_attempts.sql`, once against the target RDS before deploying. The included seed covers `BSC-CS-2566`; add verified conditions for other curricula before using that endpoint for them.
 
 From this directory, validate and deploy with the database and network values for your environment:
 
@@ -75,7 +75,17 @@ sam build
 sam deploy --guided
 ```
 
-Provide `DbHost`, `DbInstanceIdentifier`, `DbName`, `DbUser`, `DbPassword`, `DbPort`, `VpcSubnetIds`, `LambdaSecurityGroupId`, `RdsProxySecurityGroupId`, and an existing `RdsProxyRoleArn` when prompted. In AWS Academy, `LabRole` can be used when its trust policy includes `rds.amazonaws.com` and it can read the generated Secrets Manager secret. `DbPassword` is marked `NoEcho`. The deployment creates an RDS Proxy and points Lambda to its endpoint; the proxy security group must allow inbound TCP 3306 from the Lambda security group, and the RDS security group must allow TCP 3306 from the proxy security group. Use at least two subnets in different Availability Zones. Do not put database credentials in source control or the SAM template. The stack outputs `ApiUrl` and `RdsProxyEndpoint`.
+Provide `DbHost`, `DbInstanceIdentifier`, `DbName`, `DbUser`, `DbPassword`, `DbPort`, `VpcSubnetIds`, `LambdaSecurityGroupId`, `RdsProxySecurityGroupId`, and an existing `RdsProxyRoleArn` when prompted. In AWS Academy, `LabRole` can be used when its trust policy includes `rds.amazonaws.com` and it can read the generated Secrets Manager secret. `DbPassword` and demo password hash parameters are marked `NoEcho`. Keep `EnableDemoLogin` as `false`; if a temporary demo is required, pass scrypt hashes through the hash parameters and never commit the original passwords or hashes. The deployment creates an RDS Proxy and points Lambda to its endpoint; the proxy security group must allow inbound TCP 3306 from the Lambda security group, and the RDS security group must allow TCP 3306 from the proxy security group. Use at least two subnets in different Availability Zones. Do not put database credentials in source control or the SAM template. The stack outputs `ApiUrl` and `RdsProxyEndpoint`.
+
+To generate a demo password hash in CloudShell without putting the plaintext in the repository:
+
+```bash
+read -s DEMO_PASSWORD
+node -e 'const c=require("crypto"); const s=c.randomBytes(16); const h=c.scryptSync(process.argv[1],s,64,{N:16384,r:8,p:1}); console.log(`scrypt$${s.toString("hex")}$${h.toString("hex")}`)' "$DEMO_PASSWORD"
+unset DEMO_PASSWORD
+```
+
+Pass the output as `DemoStaffPasswordHash` or the matching role parameter only when intentionally enabling demos. The login endpoint is throttled to 2 requests/second with burst 5, and five failed attempts for the same username/IP within 15 minutes produce HTTP 429.
 
 Example calls after deployment:
 

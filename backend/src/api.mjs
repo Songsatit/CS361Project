@@ -18,7 +18,7 @@ const pool = mysql.createPool({
   ...(process.env.DB_TLS === 'true' ? { ssl: { rejectUnauthorized: false } } : {}),
 });
 
-const response = (statusCode, body) => ({
+const response = (statusCode, body, extraHeaders = {}) => ({
   statusCode,
   headers: {
     'content-type': 'application/json; charset=utf-8',
@@ -28,6 +28,7 @@ const response = (statusCode, body) => ({
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'strict-origin-when-cross-origin',
     'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+    ...extraHeaders,
   },
   body: JSON.stringify(body),
 });
@@ -53,18 +54,112 @@ function signAccessToken(user) {
 }
 
 const demoAccounts = {
-  teacher: { password: process.env.DEMO_TEACHER_PASSWORD, role: 'instructor', roleLabel: 'อาจารย์ผู้สอน', name: 'ผู้ใช้งานอาจารย์' },
-  instructor: { password: process.env.DEMO_INSTRUCTOR_PASSWORD, role: 'instructor', roleLabel: 'อาจารย์ผู้สอน', name: 'ผู้ใช้งานอาจารย์' },
-  staff: { password: process.env.DEMO_STAFF_PASSWORD, role: 'staff', roleLabel: 'เจ้าหน้าที่', name: 'ผู้ใช้งานเจ้าหน้าที่' },
-  curriculumadmin: { password: process.env.DEMO_ADMIN_PASSWORD, role: 'curriculum_admin', roleLabel: 'ผู้ดูแลข้อมูลหลักสูตร', name: 'ผู้ดูแลข้อมูลหลักสูตร' },
+  teacher: { passwordHash: process.env.DEMO_TEACHER_PASSWORD_HASH, role: 'instructor', roleLabel: 'อาจารย์ผู้สอน', name: 'ผู้ใช้งานอาจารย์' },
+  instructor: { passwordHash: process.env.DEMO_INSTRUCTOR_PASSWORD_HASH, role: 'instructor', roleLabel: 'อาจารย์ผู้สอน', name: 'ผู้ใช้งานอาจารย์' },
+  staff: { passwordHash: process.env.DEMO_STAFF_PASSWORD_HASH, role: 'staff', roleLabel: 'เจ้าหน้าที่', name: 'ผู้ใช้งานเจ้าหน้าที่' },
+  curriculumadmin: { passwordHash: process.env.DEMO_ADMIN_PASSWORD_HASH, role: 'curriculum_admin', roleLabel: 'ผู้ดูแลข้อมูลหลักสูตร', name: 'ผู้ดูแลข้อมูลหลักสูตร' },
 };
+const demoUsernames = new Set(Object.keys(demoAccounts));
+const invalidLoginResponse = () => response(401, { error: 'Invalid username or password' });
+
+function verifyPassword(password, encodedHash) {
+  const [algorithm, saltHex, digestHex] = String(encodedHash ?? '').split('$');
+  if (algorithm !== 'scrypt' || !saltHex || !digestHex || !/^[0-9a-f]+$/i.test(saltHex) || !/^[0-9a-f]+$/i.test(digestHex)) return false;
+  try {
+    const salt = Buffer.from(saltHex, 'hex');
+    const expected = Buffer.from(digestHex, 'hex');
+    const derived = crypto.scryptSync(password, salt, expected.length, { N: 16384, r: 8, p: 1 });
+    return expected.length === derived.length && crypto.timingSafeEqual(expected, derived);
+  } catch {
+    return false;
+  }
+}
 
 function demoLogin(username, password) {
   if (process.env.ENABLE_DEMO_LOGIN !== 'true') return null;
   const key = username.trim().toLowerCase();
   const account = demoAccounts[key];
-  if (!account?.password || account.password !== password) return null;
+  if (!account?.passwordHash || !verifyPassword(password, account.passwordHash)) return null;
   return { username: key, displayNameTh: account.name, displayNameEn: '', email: '', type: 'demo', role: account.role, roleLabel: account.roleLabel };
+}
+
+const loginWindowMs = 15 * 60 * 1000;
+const loginMaxFailures = 5;
+
+function requestIp(event) {
+  return String(event.requestContext?.http?.sourceIp ?? event.requestContext?.identity?.sourceIp ?? 'unknown').slice(0, 64);
+}
+
+function loginAttemptKey(username, ip) {
+  return `${username.trim().toLowerCase()}|${ip}`.slice(0, 255);
+}
+
+async function isLoginLocked(event, username) {
+  const key = loginAttemptKey(username, requestIp(event));
+  const rows = await queryRows('SELECT locked_until FROM login_attempts WHERE attempt_key = ?', [key]);
+  if (!rows.length || !rows[0].locked_until) return 0;
+  const remaining = Math.ceil((new Date(rows[0].locked_until).getTime() - Date.now()) / 1000);
+  return remaining > 0 ? remaining : 0;
+}
+
+async function recordLoginFailure(event, username) {
+  const key = loginAttemptKey(username, requestIp(event));
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [rows] = await connection.execute(
+      'SELECT failed_count, window_started_at, locked_until FROM login_attempts WHERE attempt_key = ? FOR UPDATE',
+      [key],
+    );
+    const current = rows[0];
+    const windowExpired = !current || (Date.now() - new Date(current.window_started_at).getTime()) >= loginWindowMs;
+    const failedCount = windowExpired ? 1 : Number(current.failed_count) + 1;
+    const locked = failedCount >= loginMaxFailures;
+    await connection.execute(
+      `INSERT INTO login_attempts
+        (attempt_key, username, ip_address, failed_count, window_started_at, locked_until, last_attempt_at)
+       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ${locked ? 'DATE_ADD(CURRENT_TIMESTAMP, INTERVAL 15 MINUTE)' : 'NULL'}, CURRENT_TIMESTAMP)
+       ON DUPLICATE KEY UPDATE
+        failed_count = VALUES(failed_count),
+        window_started_at = IF(VALUES(failed_count) = 1, CURRENT_TIMESTAMP, window_started_at),
+        locked_until = VALUES(locked_until),
+        last_attempt_at = CURRENT_TIMESTAMP`,
+      [key, username.slice(0, 100), requestIp(event), failedCount],
+    );
+    await connection.commit();
+    return { locked, retryAfter: locked ? 15 * 60 : 0 };
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+async function resetLoginAttempts(event, username) {
+  await pool.execute('DELETE FROM login_attempts WHERE attempt_key = ?', [loginAttemptKey(username, requestIp(event))]);
+}
+
+async function safeLoginAudit({ username, action, event, newValue = null }) {
+  try {
+    await writeAuditLog({
+      username: username.slice(0, 100) || 'unknown',
+      role: 'anonymous',
+      action,
+      entityType: 'authentication',
+      entityId: username.slice(0, 100) || 'unknown',
+      newValue: newValue == null ? { ip: requestIp(event) } : { ...newValue, ip: requestIp(event) },
+    });
+  } catch (error) {
+    console.error('Login audit write failed', error);
+  }
+}
+
+async function failedLogin(event, username) {
+  const result = await recordLoginFailure(event, username);
+  await safeLoginAudit({ username, action: result.locked ? 'login_locked' : 'login_failed', event, newValue: { locked: result.locked } });
+  if (result.locked) return response(429, { error: 'Too many failed login attempts. Try again later.' }, { 'Retry-After': String(result.retryAfter) });
+  return invalidLoginResponse();
 }
 
 async function tuLogin(event) {
@@ -80,15 +175,24 @@ async function tuLogin(event) {
   if (!username || !password) {
     return response(400, { error: 'username and password are required' });
   }
+  const retryAfter = await isLoginLocked(event, username);
+  if (retryAfter > 0) {
+    await safeLoginAudit({ username, action: 'login_locked', event, newValue: { locked: true } });
+    return response(429, { error: 'Too many failed login attempts. Try again later.' }, { 'Retry-After': String(retryAfter) });
+  }
   const demoUser = demoLogin(username, password);
   if (demoUser) {
     try {
-      return response(200, { token: signAccessToken(demoUser), user: demoUser });
+      await resetLoginAttempts(event, username);
+      const token = signAccessToken(demoUser);
+      await safeLoginAudit({ username, action: 'login_success', event, newValue: { role: demoUser.role } });
+      return response(200, { token, user: demoUser });
     } catch (error) {
       console.error('JWT signing failed for demo login', error);
       return response(503, { error: 'JWT authentication is not configured' });
     }
   }
+  if (demoUsernames.has(username.toLowerCase())) return failedLogin(event, username);
 
   if (!process.env.TU_APPLICATION_KEY) {
     console.error('TU_APPLICATION_KEY is not configured');
@@ -108,9 +212,7 @@ async function tuLogin(event) {
   );
   const payload = await authResponse.json().catch(() => ({}));
   if (!authResponse.ok || payload.status !== true) {
-    return response(authResponse.status === 401 || authResponse.status === 403 ? authResponse.status : 401, {
-      error: payload.message ?? 'TU authentication failed',
-    });
+    return failedLogin(event, username);
   }
 
   const user = {
@@ -129,7 +231,10 @@ async function tuLogin(event) {
   };
 
   try {
-    return response(200, { token: signAccessToken(user), user });
+    await resetLoginAttempts(event, username);
+    const token = signAccessToken(user);
+    await safeLoginAudit({ username, action: 'login_success', event, newValue: { role: user.role } });
+    return response(200, { token, user });
   } catch (error) {
     console.error('JWT signing failed', error);
     return response(503, { error: 'JWT authentication is not configured' });
