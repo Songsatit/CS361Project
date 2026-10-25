@@ -1582,6 +1582,7 @@ export const handler = async (event) => {
       'GET /api/faculties',
       'GET /api/departments',
       'GET /api/study-plans',
+      'GET /api/study-plans/{studyPlanId}',
     ]);
     const isPublic = publicRoutes.has(route)
       || (method === 'GET' && route.startsWith('GET /api/courses/'))
