@@ -42,6 +42,26 @@ Parameters:
   TuAuthUrl:
     Type: String
     Default: https://restapi.tu.ac.th/api/v1/auth/Ad/verify2
+  JwtSecret:
+    Type: String
+    NoEcho: true
+    Description: Secret used to sign short-lived API access tokens
+  DemoTeacherPassword:
+    Type: String
+    NoEcho: true
+    Default: teacher123
+  DemoInstructorPassword:
+    Type: String
+    NoEcho: true
+    Default: instructor123
+  DemoStaffPassword:
+    Type: String
+    NoEcho: true
+    Default: staff123
+  DemoAdminPassword:
+    Type: String
+    NoEcho: true
+    Default: admin123
 
 Globals:
   Function:
@@ -57,6 +77,11 @@ Globals:
         DB_PASSWORD: !Ref DbPassword
         TU_APPLICATION_KEY: !Ref TuApplicationKey
         TU_AUTH_URL: !Ref TuAuthUrl
+        JWT_SECRET: !Ref JwtSecret
+        DEMO_TEACHER_PASSWORD: !Ref DemoTeacherPassword
+        DEMO_INSTRUCTOR_PASSWORD: !Ref DemoInstructorPassword
+        DEMO_STAFF_PASSWORD: !Ref DemoStaffPassword
+        DEMO_ADMIN_PASSWORD: !Ref DemoAdminPassword
 
 Resources:
   CurriculumDbSecret:

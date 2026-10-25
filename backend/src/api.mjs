@@ -1,4 +1,5 @@
 import mysql from 'mysql2/promise';
+import jwt from 'jsonwebtoken';
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
@@ -25,6 +26,34 @@ const queryRows = async (sql, params = []) => {
   return rows;
 };
 
+function signAccessToken(user) {
+  const secret = String(process.env.JWT_SECRET ?? '');
+  if (!secret) throw new Error('JWT_SECRET is not configured');
+  return jwt.sign(
+    {
+      sub: user.username,
+      role: user.role,
+      name: user.displayNameTh || user.displayNameEn || user.username,
+    },
+    secret,
+    { expiresIn: '15m', issuer: 'cs361-curriculum-api' },
+  );
+}
+
+const demoAccounts = {
+  teacher: { password: process.env.DEMO_TEACHER_PASSWORD, role: 'instructor', roleLabel: 'อาจารย์ผู้สอน', name: 'ผู้ใช้งานอาจารย์' },
+  instructor: { password: process.env.DEMO_INSTRUCTOR_PASSWORD, role: 'instructor', roleLabel: 'อาจารย์ผู้สอน', name: 'ผู้ใช้งานอาจารย์' },
+  staff: { password: process.env.DEMO_STAFF_PASSWORD, role: 'staff', roleLabel: 'เจ้าหน้าที่', name: 'ผู้ใช้งานเจ้าหน้าที่' },
+  curriculumadmin: { password: process.env.DEMO_ADMIN_PASSWORD, role: 'curriculum_admin', roleLabel: 'ผู้ดูแลข้อมูลหลักสูตร', name: 'ผู้ดูแลข้อมูลหลักสูตร' },
+};
+
+function demoLogin(username, password) {
+  const key = username.trim().toLowerCase();
+  const account = demoAccounts[key];
+  if (!account?.password || account.password !== password) return null;
+  return { username: key, displayNameTh: account.name, displayNameEn: '', email: '', type: 'demo', role: account.role, roleLabel: account.roleLabel };
+}
+
 async function tuLogin(event) {
   let body;
   try {
@@ -38,6 +67,16 @@ async function tuLogin(event) {
   if (!username || !password) {
     return response(400, { error: 'username and password are required' });
   }
+  const demoUser = demoLogin(username, password);
+  if (demoUser) {
+    try {
+      return response(200, { token: signAccessToken(demoUser), user: demoUser });
+    } catch (error) {
+      console.error('JWT signing failed for demo login', error);
+      return response(503, { error: 'JWT authentication is not configured' });
+    }
+  }
+
   if (!process.env.TU_APPLICATION_KEY) {
     console.error('TU_APPLICATION_KEY is not configured');
     return response(503, { error: 'TU authentication is not configured' });
@@ -61,8 +100,7 @@ async function tuLogin(event) {
     });
   }
 
-  return response(200, {
-    user: {
+  const user = {
       username: payload.username ?? username,
       displayNameTh: payload.displayname_th ?? '',
       displayNameEn: payload.displayname_en ?? '',
@@ -75,8 +113,14 @@ async function tuLogin(event) {
       department: payload.department ?? null,
       faculty: payload.faculty ?? null,
       organization: payload.organization ?? null,
-    },
-  });
+  };
+
+  try {
+    return response(200, { token: signAccessToken(user), user });
+  } catch (error) {
+    console.error('JWT signing failed', error);
+    return response(503, { error: 'JWT authentication is not configured' });
+  }
 }
 
 async function getStudentProfile(event) {
@@ -503,10 +547,27 @@ function actorFromRequest(event, body = {}) {
   const normalized = Object.fromEntries(
     Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]),
   );
-  return {
-    username: String(body.username ?? normalized['x-user'] ?? 'demo-user').slice(0, 100),
-    role: String(body.role ?? normalized['x-role'] ?? 'instructor').slice(0, 30),
-  };
+
+  const authorization = String(normalized.authorization ?? '');
+  const bearer = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
+  if (bearer && process.env.JWT_SECRET) {
+    try {
+      const claims = jwt.verify(bearer, process.env.JWT_SECRET, {
+        issuer: 'cs361-curriculum-api',
+      });
+      if (claims && typeof claims === 'object') {
+        return {
+          username: String(claims.sub ?? '').slice(0, 100),
+          role: String(claims.role ?? '').slice(0, 30),
+          authenticated: true,
+        };
+      }
+    } catch {
+      return { username: '', role: '', authenticated: false, authError: true };
+    }
+  }
+
+  return { username: 'anonymous', role: 'public', authenticated: false };
 }
 
 const draftEditorRoles = new Set(['staff', 'curriculum_admin']);
