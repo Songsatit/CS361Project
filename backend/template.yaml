@@ -49,26 +49,26 @@ Parameters:
     Type: String
     NoEcho: true
     Description: Secret used to sign short-lived API access tokens
-  DemoTeacherPassword:
+  DemoTeacherPasswordHash:
     Type: String
     NoEcho: true
-    Default: teacher123
-  DemoInstructorPassword:
+    Default: ''
+  DemoInstructorPasswordHash:
     Type: String
     NoEcho: true
-    Default: instructor123
-  DemoStaffPassword:
+    Default: ''
+  DemoStaffPasswordHash:
     Type: String
     NoEcho: true
-    Default: staff123
-  DemoAdminPassword:
+    Default: ''
+  DemoAdminPasswordHash:
     Type: String
     NoEcho: true
-    Default: admin123
+    Default: ''
   EnableDemoLogin:
     Type: String
     AllowedValues: ['true', 'false']
-    Default: 'true'
+    Default: 'false'
 
 Globals:
   Function:
@@ -89,10 +89,10 @@ Globals:
         JWT_ISSUER: cs361-curriculum-api
         JWT_AUDIENCE: cs361-frontend
         DB_TLS: 'true'
-        DEMO_TEACHER_PASSWORD: !Ref DemoTeacherPassword
-        DEMO_INSTRUCTOR_PASSWORD: !Ref DemoInstructorPassword
-        DEMO_STAFF_PASSWORD: !Ref DemoStaffPassword
-        DEMO_ADMIN_PASSWORD: !Ref DemoAdminPassword
+        DEMO_TEACHER_PASSWORD_HASH: !Ref DemoTeacherPasswordHash
+        DEMO_INSTRUCTOR_PASSWORD_HASH: !Ref DemoInstructorPasswordHash
+        DEMO_STAFF_PASSWORD_HASH: !Ref DemoStaffPasswordHash
+        DEMO_ADMIN_PASSWORD_HASH: !Ref DemoAdminPasswordHash
         ENABLE_DEMO_LOGIN: !Ref EnableDemoLogin
 
 Resources:
@@ -317,6 +317,10 @@ Resources:
       Role: !Ref LambdaExecutionRoleArn
       CodeUri: .
       Handler: src/api.authHandler
+      VpcConfig:
+        SubnetIds: !Ref VpcSubnetIds
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroupId
       Events:
         TuLogin:
           Type: HttpApi
@@ -324,6 +328,9 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/auth/login
             Method: POST
+            RouteSettings:
+              ThrottlingRateLimit: 2
+              ThrottlingBurstLimit: 5
         StudentProfile:
           Type: HttpApi
           Properties:
