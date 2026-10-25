@@ -704,6 +704,13 @@ const changeItemActions = new Set([
   'CREATE_COURSE',
 ]);
 
+function normalizeChangeTerm(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const term = String(value).trim().toUpperCase();
+  if (term === '3' || term === 'S' || term === 'SUM' || term === 'SUMMER' || term === 'ภาคฤดูร้อน') return 'S';
+  return term;
+}
+
 function canEditDraft(actor) {
   return draftEditorRoles.has(actor.role);
 }
@@ -813,7 +820,7 @@ async function saveDraftChangeItems(event) {
     action: String(item.action ?? '').trim().toUpperCase(),
     courseCode: String(item.courseCode ?? item.course_code ?? '').trim() || null,
     studyYear: item.studyYear ?? item.study_year ?? null,
-    term: item.term ?? item.semester ?? null,
+    term: normalizeChangeTerm(item.term ?? item.semester),
     oldValue: item.oldValue ?? item.old_value ?? null,
     newValue: item.newValue ?? item.new_value ?? null,
     sortOrder: Number.isInteger(Number(item.sortOrder ?? item.sort_order))

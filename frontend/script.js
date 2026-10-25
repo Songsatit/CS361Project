@@ -16,8 +16,6 @@ const COURSES = window.MOCK_COURSES;
 
 const PROGRAMS = window.MOCK_PROGRAMS;
 
-const MOCK_USERS = window.MOCK_USERS;
-
 const nativeFetch = window.fetch.bind(window);
 window.fetch = async (input, init = {}) => {
   const url = typeof input === "string" ? input : input?.url ?? "";
@@ -117,15 +115,7 @@ function tokenExpired(token = state.token) {
   }
 }
 
-function mockLogin(username, password) {
-  const account = MOCK_USERS[username.trim().toLowerCase()];
-  if (!account || account.password !== password) return false;
-  state.user = { username: username.trim().toLowerCase(), role: account.role, roleLabel: account.roleLabel, name: account.name };
-  localStorage.setItem("cs361-v3-user", JSON.stringify(state.user));
-  return true;
-}
-
-function mockLogout() {
+function logout() {
   clearAuthSession();
 }
 
@@ -1892,6 +1882,10 @@ function draftCourseCode(code) {
   return value.startsWith("__REQ__") ? null : value;
 }
 
+function apiTerm(value) {
+  return Number(value) === 3 ? "S" : String(value ?? "");
+}
+
 function editorChangeItems(program) {
   const createdCourseItems = Object.entries(state.planEdit.newCourses ?? {}).map(([code, course]) => ({
     action: "CREATE_COURSE",
@@ -1901,18 +1895,18 @@ function editorChangeItems(program) {
   const items = state.planEdit.changes.map(change => {
     const courseCodeValue = draftCourseCode(change.code);
     if (change.action === "move") {
-      return { action: "MOVE_COURSE", courseCode: courseCodeValue, studyYear: change.fromYear, term: String(change.fromTerm), oldValue: { year: change.fromYear, term: change.fromTerm }, newValue: { year: change.toYear, term: change.toTerm, requirementText: courseCodeValue ? null : String(change.code).replace(/^__REQ__/, "") } };
+      return { action: "MOVE_COURSE", courseCode: courseCodeValue, studyYear: change.fromYear, term: apiTerm(change.fromTerm), oldValue: { year: change.fromYear, term: apiTerm(change.fromTerm) }, newValue: { year: change.toYear, term: apiTerm(change.toTerm), requirementText: courseCodeValue ? null : String(change.code).replace(/^__REQ__/, "") } };
     }
     if (change.action === "remove") {
-      return { action: "REMOVE_COURSE", courseCode: courseCodeValue, studyYear: change.year, term: String(change.term), oldValue: { year: change.year, term: String(change.term), requirementText: courseCodeValue ? null : String(change.code).replace(/^__REQ__/, "") } };
+      return { action: "REMOVE_COURSE", courseCode: courseCodeValue, studyYear: change.year, term: apiTerm(change.term), oldValue: { year: change.year, term: apiTerm(change.term), requirementText: courseCodeValue ? null : String(change.code).replace(/^__REQ__/, "") } };
     }
     if (change.action === "edit") {
-      return { action: "EDIT_FIELD", courseCode: courseCodeValue, studyYear: change.year, term: String(change.term), oldValue: change.oldValue, newValue: change.newValue };
+      return { action: "EDIT_FIELD", courseCode: courseCodeValue, studyYear: change.year, term: apiTerm(change.term), oldValue: change.oldValue, newValue: change.newValue };
     }
     if (change.action === "prereq") {
-      return { action: change.newValue?.removePrerequisite ? "REMOVE_PREREQ" : "ADD_PREREQ", courseCode: courseCodeValue, studyYear: change.year, term: String(change.term), newValue: change.newValue };
+      return { action: change.newValue?.removePrerequisite ? "REMOVE_PREREQ" : "ADD_PREREQ", courseCode: courseCodeValue, studyYear: change.year, term: apiTerm(change.term), newValue: change.newValue };
     }
-    return { action: "ADD_COURSE", courseCode: courseCodeValue, studyYear: change.year, term: String(change.term), newValue: { year: change.year, term: change.term, planId: state.editorPlanId, requirementText: courseCodeValue ? null : String(change.code).replace(/^__REQ__/, "") } };
+    return { action: "ADD_COURSE", courseCode: courseCodeValue, studyYear: change.year, term: apiTerm(change.term), newValue: { year: change.year, term: apiTerm(change.term), planId: state.editorPlanId, requirementText: courseCodeValue ? null : String(change.code).replace(/^__REQ__/, "") } };
   });
   if (state.editorMode === "new") {
     items.unshift({
@@ -3812,7 +3806,7 @@ function bind() {
         state.loginOpen = false;
         state.loginError = "";
       } else if (button.dataset.authAction === "logout") {
-        mockLogout();
+        logout();
         state.studentProfile = null;
         state.studentProfileAttempted = false;
         state.studentProfileError = "";
