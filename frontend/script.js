@@ -19,9 +19,15 @@ const PROGRAMS = window.MOCK_PROGRAMS;
 const MOCK_USERS = window.MOCK_USERS;
 
 const nativeFetch = window.fetch.bind(window);
-window.fetch = async (input, init) => {
-  const response = await nativeFetch(input, init);
+window.fetch = async (input, init = {}) => {
   const url = typeof input === "string" ? input : input?.url ?? "";
+  const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined));
+  const isApiRequest = url.startsWith(API_BASE);
+  const hasToken = typeof state !== "undefined" && state.token && isApiRequest && !url.endsWith("/api/auth/login");
+  if (hasToken && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${state.token}`);
+  }
+  const response = await nativeFetch(input, { ...init, headers });
   if (response.status === 401 && url.startsWith(API_BASE) && !url.endsWith("/api/auth/login")) {
     clearAuthSession();
     if (state.view !== "login") go("login");
