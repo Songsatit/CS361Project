@@ -1997,6 +1997,9 @@ function renderProgram() {
   const termSlots = editing
     ? [1, 2, 3].map(term => terms.find(item => item.term === term) ?? { year: state.year, term, courses: [] })
     : terms;
+  const curriculumStructure = Array.isArray(p.structure) ? p.structure : [];
+  const totalCredits = Number(p.totalCredits) || visiblePlan.reduce((sum, term) =>
+    sum + (term.courses ?? []).reduce((termSum, code) => termSum + (COURSES[code]?.credits ?? (code === "FREE3" ? 3 : 0)), 0), 0);
 
 
   let content = "";
@@ -2045,7 +2048,7 @@ function renderProgram() {
       <div class="panel">
 
         <p class="program-summary">
-          ${esc(p.summary)}
+          ${esc(p.summary || "ข้อมูลหลักสูตรและแผนการเรียน")}
         </p>
 
 
@@ -2054,7 +2057,7 @@ function renderProgram() {
           <div class="stat-box">
 
             <div class="stat-num">
-              ${p.totalCredits}
+              ${totalCredits || "—"}
             </div>
 
             <div class="stat-label">
@@ -2099,7 +2102,8 @@ function renderProgram() {
 
         <div class="structure">
 
-          ${p.structure
+          ${curriculumStructure.length
+        ? curriculumStructure
         .map(
           s => `
                 <div class="structure-row">
@@ -2113,7 +2117,7 @@ function renderProgram() {
                     <div
                       class="structure-fill"
                       style="width:${(s.credits /
-              p.totalCredits) *
+              (totalCredits || 1)) *
             100
             }%"
                     ></div>
@@ -2127,7 +2131,8 @@ function renderProgram() {
                 </div>
               `
         )
-        .join("")}
+        .join("")
+        : `<p class="audit-empty">ดูรายวิชาของหลักสูตรนี้ได้ที่แท็บ “แผนการเรียน”</p>`}
 
         </div>
 
@@ -2202,7 +2207,7 @@ function renderProgram() {
           </div>
         </div>
 
-        <div class="year-tabs">
+        ${years.length ? `<div class="year-tabs">
 
           ${years
         .map(
@@ -2220,10 +2225,10 @@ function renderProgram() {
         )
         .join("")}
 
-        </div>
+        </div>` : ""}
 
 
-        <div class="term-grid">
+        ${termSlots.length ? `<div class="term-grid">
 
           ${termSlots
         .map(t => {
@@ -2392,7 +2397,7 @@ function renderProgram() {
         })
         .join("")}
 
-        </div>
+        </div>` : `<div class="audit-empty">ยังไม่มีรายวิชาในแผนการเรียนของหลักสูตรนี้</div>`}
         ${editing ? `<div class="plan-edit-summary-bar"><span>มีการเปลี่ยนแปลง ${editorChangeCount(p)} รายการ</span><button type="button" class="workflow-action workflow-action--muted" data-plan-summary>ดูสรุปการเปลี่ยนแปลง</button><button type="button" class="workflow-action workflow-action--muted" data-plan-save ${editorChangeCount(p) ? "" : "disabled"}>บันทึกฉบับร่าง</button><button type="button" class="workflow-action workflow-action--primary" data-plan-submit ${editorChangeCount(p) ? "" : "disabled"}>ส่งขออนุมัติ</button><button type="button" class="workflow-action workflow-action--danger" data-plan-cancel>ยกเลิก</button></div>` : ""}
 
       </div>
