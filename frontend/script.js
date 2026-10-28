@@ -984,7 +984,6 @@ async function loadApiData() {
             nameEn: curriculum.title_en || "",
             revisionYear: Number(curriculum.academic_year),
             totalCredits: Number(curriculum.total_credits) || 0,
->>>>>>> 1753813 (fix: display and open newly created curricula)
             plan: [],
             studyPlans: []
           });
@@ -1633,7 +1632,7 @@ function renderCurriculumManagement() {
       code: curriculum.title_th || curriculum.curriculum_id,
       nameEn: curriculum.title_en || "",
       revisionYear: Number(curriculum.academic_year),
-      totalCredits: Number(curriculum.total_credits) || 0, 1753813 (fix: display and open newly created curricula)
+      totalCredits: Number(curriculum.total_credits) || 0,
       plan: [],
       studyPlans: []
     };
