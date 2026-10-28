@@ -205,6 +205,18 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/change-requests/{requestId}/submit
             Method: POST
+        DeleteDraftChangeRequest:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/change-requests/{requestId}
+            Method: DELETE
+        CancelDraftChangeRequest:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/change-requests/{requestId}/cancel
+            Method: POST
         DecideDraftChangeRequest:
           Type: HttpApi
           Properties:

@@ -366,9 +366,20 @@ function renderChangeRequestDetail(request) {
       ${detail.note ? `<p class="change-request-note">${esc(detail.note)}</p>` : ""}
       <div class="change-request-items">${items.length ? [...groupedItems.entries()].map(([group, groupItems], groupIndex) => `<details class="change-request-group" ${groupIndex === 0 ? "open" : ""}><summary><strong>${esc(group)}</strong><span>${groupItems.length} รายการ</span></summary><div class="change-request-group-items">${groupItems.map((item, index) => `<article class="change-request-item"><strong>${index + 1}. ${esc(changeRequestItemLabel(item))}</strong>${changeRequestReadableDiff(item)}</article>`).join("")}</div></details>`).join("") : `<p class="audit-empty">คำขอนี้ยังไม่มีรายการเปลี่ยนแปลง</p>`}</div>
       ${detail.review_note ? `<div class="change-request-review-note"><strong>หมายเหตุผู้ตรวจ</strong><p>${esc(detail.review_note)}</p></div>` : ""}
-      ${canEditDraft || canDecide || (isRequestOwner && detail.status === "pending") ? `<div class="change-request-decision">${canEditDraft ? `<button type="button" class="workflow-action workflow-action--muted" data-request-edit="${esc(detail.id)}">แก้ไขฉบับร่าง</button><button type="button" class="workflow-action workflow-action--primary" data-request-submit="${esc(detail.id)}">ส่งขออนุมัติ</button>` : ""}${canDecide ? `<button type="button" class="workflow-action workflow-action--primary" data-request-decision="approve" data-request-id="${esc(detail.id)}">อนุมัติคำขอ</button><button type="button" class="workflow-action workflow-action--danger" data-request-decision="reject" data-request-id="${esc(detail.id)}">ปฏิเสธคำขอ</button>` : ""}${isRequestOwner && detail.status === "pending" ? `<p class="change-request-owner-notice">คำขอนี้ส่งโดยคุณ ให้ผู้ตรวจอีกคนพิจารณา</p>` : ""}</div>` : ""}
+      ${canEditDraft || canDecide || (isRequestOwner && detail.status === "pending") ? `<div class="change-request-decision">${canEditDraft ? `<button type="button" class="workflow-action workflow-action--muted" data-request-edit="${esc(detail.id)}">แก้ไขฉบับร่าง</button><button type="button" class="workflow-action workflow-action--primary" data-request-submit="${esc(detail.id)}">ส่งขออนุมัติ</button>` : ""}${isRequestOwner && detail.status === "draft" ? `<button type="button" class="workflow-action workflow-action--danger" data-request-delete="${esc(detail.id)}">ลบฉบับร่าง</button>` : ""}${canDecide ? `<button type="button" class="workflow-action workflow-action--primary" data-request-decision="approve" data-request-id="${esc(detail.id)}">อนุมัติคำขอ</button><button type="button" class="workflow-action workflow-action--danger" data-request-decision="reject" data-request-id="${esc(detail.id)}">ปฏิเสธคำขอ</button>` : ""}${isRequestOwner && detail.status === "pending" ? `<button type="button" class="workflow-action workflow-action--muted" data-request-cancel="${esc(detail.id)}">ยกเลิกคำขอ</button><p class="change-request-owner-notice">คำขอนี้ส่งโดยคุณ ให้ผู้ตรวจอีกคนพิจารณา</p>` : ""}</div>` : ""}
     </section>
   `;
+}
+
+function renderChangeRequestListActions(request) {
+  if (request.created_by !== state.user?.username) return "";
+  if (request.status === "draft") {
+    return `<button type="button" class="link-btn" data-request-delete="${esc(request.id)}">ลบฉบับร่าง</button>`;
+  }
+  if (request.status === "pending") {
+    return `<button type="button" class="link-btn" data-request-cancel="${esc(request.id)}">ยกเลิกคำขอ</button>`;
+  }
+  return "";
 }
 
 function renderChangeRequestsPage(review = false) {
@@ -382,7 +393,7 @@ function renderChangeRequestsPage(review = false) {
       <div class="management-page-head"><div><span class="workflow-kicker">CURRICULUM WORKFLOW</span><h1 class="page-title">${review ? "ตรวจคำขอหลักสูตร" : "คำขอของฉัน"}</h1><p class="page-sub">ติดตามว่าคำขออยู่ขั้นตอนไหน และดูรายละเอียดก่อน–หลังได้จากหน้านี้</p></div></div>
       <section class="change-request-summary audit-log-card"><strong>ภาพรวมคำขอ</strong><span>${esc(counts)}</span></section>
       <div class="change-request-tabs">${[["all", "ทั้งหมด"], ["draft", "ฉบับร่าง"], ["pending", "รอตรวจสอบ"], ["approved", "อนุมัติแล้ว"], ["rejected", "ถูกปฏิเสธ"]].map(([value, label]) => `<button type="button" class="${state.changeRequestFilter === value ? "is-active" : ""}" data-request-filter="${value}">${label} (${value === "all" ? all.length : all.filter(item => item.status === value).length})</button>`).join("")}</div>
-      <div class="change-request-layout"><section class="change-request-list">${filtered.length ? filtered.map(item => `<button type="button" class="change-request-row ${state.selectedChangeRequest?.request?.id === item.id || state.selectedChangeRequest?.id === item.id ? "is-selected" : ""}" data-request-detail="${esc(item.id)}"><span><strong>#${esc(item.id)} · ${esc(item.title ?? "คำขอแก้ไขหลักสูตร")}</strong><small>${esc(item.created_by ?? "-")} · ${esc(item.created_at ?? "-")} · ${esc(item.item_count ?? 0)} รายการ</small></span><span class="${changeRequestStatusClass(item.status)}">${esc(changeRequestStatusLabel(item.status))}</span></button>`).join("") : `<p class="audit-empty">ยังไม่มีคำขอในสถานะนี้</p>`}</section><section class="change-request-detail-column">${state.changeRequestLoading ? `<div class="management-placeholder"><p>กำลังโหลดรายละเอียด...</p></div>` : state.changeRequestError ? `<div class="management-placeholder"><p class="error-text">${esc(state.changeRequestError)}</p></div>` : renderChangeRequestDetail(state.selectedChangeRequest)}</section></div>
+      <div class="change-request-layout"><section class="change-request-list">${filtered.length ? filtered.map(item => `<div class="change-request-row ${state.selectedChangeRequest?.request?.id === item.id || state.selectedChangeRequest?.id === item.id ? "is-selected" : ""}"><button type="button" class="change-request-row-main" data-request-detail="${esc(item.id)}"><span><strong>#${esc(item.id)} · ${esc(item.title ?? "คำขอแก้ไขหลักสูตร")}</strong><small>${esc(item.created_by ?? "-")} · ${esc(item.created_at ?? "-")} · ${esc(item.item_count ?? 0)} รายการ</small></span><span class="${changeRequestStatusClass(item.status)}">${esc(changeRequestStatusLabel(item.status))}</span></button><div class="change-request-row-actions">${renderChangeRequestListActions(item)}</div></div>`).join("") : `<p class="audit-empty">ยังไม่มีคำขอในสถานะนี้</p>`}</section><section class="change-request-detail-column">${state.changeRequestLoading ? `<div class="management-placeholder"><p>กำลังโหลดรายละเอียด...</p></div>` : state.changeRequestError ? `<div class="management-placeholder"><p class="error-text">${esc(state.changeRequestError)}</p></div>` : renderChangeRequestDetail(state.selectedChangeRequest)}</section></div>
     </div>
   `;
 }
@@ -4010,6 +4021,55 @@ function bind() {
     };
   });
 
+  document.querySelectorAll("[data-request-delete]").forEach(button => {
+    button.onclick = async () => {
+      const requestId = button.dataset.requestDelete;
+      if (!requestId || !confirm("ลบฉบับร่างนี้หรือไม่ ข้อมูลรายการแก้ไขจะถูกลบด้วย")) return;
+      button.disabled = true;
+      try {
+        const response = await fetch(`${API_BASE}/api/change-requests/${encodeURIComponent(requestId)}`, {
+          method: "DELETE",
+          headers: draftApiHeaders()
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? "ลบฉบับร่างไม่สำเร็จ");
+        state.draftRequestsLoaded = false;
+        state.selectedChangeRequest = null;
+        await loadDraftChangeRequests();
+        alert("ลบฉบับร่างแล้ว");
+        render();
+      } catch (error) {
+        alert(error.message ?? "ลบฉบับร่างไม่สำเร็จ");
+        button.disabled = false;
+      }
+    };
+  });
+
+  document.querySelectorAll("[data-request-cancel]").forEach(button => {
+    button.onclick = async () => {
+      const requestId = button.dataset.requestCancel;
+      if (!requestId || !confirm("ถอนคำขอนี้กลับเป็นฉบับร่างหรือไม่")) return;
+      button.disabled = true;
+      try {
+        const response = await fetch(`${API_BASE}/api/change-requests/${encodeURIComponent(requestId)}/cancel`, {
+          method: "POST",
+          headers: draftApiHeaders(),
+          body: "{}"
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? "ยกเลิกคำขอไม่สำเร็จ");
+        state.draftRequestsLoaded = false;
+        state.selectedChangeRequest = null;
+        await loadDraftChangeRequests();
+        alert("ยกเลิกคำขอแล้ว และเปลี่ยนกลับเป็นฉบับร่าง");
+        render();
+      } catch (error) {
+        alert(error.message ?? "ยกเลิกคำขอไม่สำเร็จ");
+        button.disabled = false;
+      }
+    };
+  });
+
   document.querySelectorAll("[data-request-decision]").forEach(button => {
     button.onclick = async () => {
       const action = button.dataset.requestDecision;
@@ -4384,26 +4444,20 @@ function bind() {
       if (!confirm(`ส่งคำขอสร้างวิชา ${code} เพื่อให้ Staff อนุมัติหรือไม่`)) return;
       button.disabled = true;
       try {
-        const createResponse = await fetch(`${API_BASE}/api/change-requests`, {
-          method: "POST",
-          headers: draftApiHeaders(),
-          body: JSON.stringify({
-            curriculumId: null,
-            type: "edit_course",
-            title: `สร้างรายวิชา ${code}`,
-            note: "คำขอสร้างรายวิชาใหม่"
-          })
+        const requestId = await findOrCreateOwnedDraft({
+          curriculumId: null,
+          type: "edit_course",
+          title: `สร้างรายวิชา ${code}`,
+          note: "คำขอสร้างรายวิชาใหม่"
         });
-        const created = await createResponse.json().catch(() => ({}));
-        if (!createResponse.ok || !created.data?.id) throw new Error(created.error ?? "สร้างคำขอไม่สำเร็จ");
-        const itemsResponse = await fetch(`${API_BASE}/api/change-requests/${created.data.id}/items`, {
+        const itemsResponse = await fetch(`${API_BASE}/api/change-requests/${requestId}/items`, {
           method: "PUT",
           headers: draftApiHeaders(),
           body: JSON.stringify({ items: [{ action: "CREATE_COURSE", courseCode: code, newValue: { code, name, nameEn, credits } }] })
         });
         const saved = await itemsResponse.json().catch(() => ({}));
         if (!itemsResponse.ok) throw new Error(saved.error ?? "บันทึกรายการสร้างวิชาไม่สำเร็จ");
-        const submitResponse = await fetch(`${API_BASE}/api/change-requests/${created.data.id}/submit`, { method: "POST", headers: draftApiHeaders(), body: "{}" });
+        const submitResponse = await fetch(`${API_BASE}/api/change-requests/${requestId}/submit`, { method: "POST", headers: draftApiHeaders(), body: "{}" });
         const submitted = await submitResponse.json().catch(() => ({}));
         if (!submitResponse.ok) throw new Error(submitted.error ?? "ส่งคำขอไม่สำเร็จ");
         alert("ส่งคำขอสร้างวิชาแล้ว รอ Staff อนุมัติ");
@@ -4576,26 +4630,20 @@ function bind() {
       if (state.courseEditorStandalone) {
         const program = editorCurrentProgram() || PROGRAMS[0];
         try {
-          const createResponse = await fetch(`${API_BASE}/api/change-requests`, {
-            method: "POST",
-            headers: draftApiHeaders(),
-            body: JSON.stringify({
-              curriculumId: program.curriculumId,
-              type: "edit_course",
-              title: `แก้ไขรายวิชา ${oldCode}`,
-              note: `แก้ไขข้อมูลรายวิชา ${oldCode}`
-            })
+          const requestId = await findOrCreateOwnedDraft({
+            curriculumId: program.curriculumId,
+            type: "edit_course",
+            title: `แก้ไขรายวิชา ${oldCode}`,
+            note: `แก้ไขข้อมูลรายวิชา ${oldCode}`
           });
-          const created = await createResponse.json().catch(() => ({}));
-          if (!createResponse.ok || !created.data?.id) throw new Error(created.error ?? "สร้างคำขอแก้รายวิชาไม่สำเร็จ");
-          const itemsResponse = await fetch(`${API_BASE}/api/change-requests/${created.data.id}/items`, {
+          const itemsResponse = await fetch(`${API_BASE}/api/change-requests/${requestId}/items`, {
             method: "PUT",
             headers: draftApiHeaders(),
             body: JSON.stringify({ items: [{ action: "EDIT_FIELD", courseCode: oldCode, oldValue, newValue }] })
           });
           const saved = await itemsResponse.json().catch(() => ({}));
           if (!itemsResponse.ok) throw new Error(saved.error ?? "บันทึกรายการแก้ไขไม่สำเร็จ");
-          const submitResponse = await fetch(`${API_BASE}/api/change-requests/${created.data.id}/submit`, { method: "POST", headers: draftApiHeaders(), body: "{}" });
+          const submitResponse = await fetch(`${API_BASE}/api/change-requests/${requestId}/submit`, { method: "POST", headers: draftApiHeaders(), body: "{}" });
           const submitted = await submitResponse.json().catch(() => ({}));
           if (!submitResponse.ok) throw new Error(submitted.error ?? "ส่งคำขอแก้รายวิชาไม่สำเร็จ");
           state.draftRequestsLoaded = false;
