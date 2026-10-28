@@ -1184,18 +1184,15 @@ async function ensureActiveStudyPlan(program) {
 }
 
 function studyPlanLabel(planId, planName, planNameEn = "") {
-  if (planName && planNameEn) return `${planName} · ${planNameEn}`;
-  const planText = `${planId ?? ""} ${planName ?? ""}`;
+  const planText = `${planId ?? ""} ${planName ?? ""} ${planNameEn ?? ""}`;
+  // Prefer the meaningful plan type over a generic duration. Some API plan
+  // names contain both, for example "4 ปี - สหกิจศึกษา".
+  if (/สหกิจ|co-?operative|\bcoop\b/i.test(planText)) return "แผนสหกิจศึกษา";
+  if (/โครงงาน|project/i.test(planText)) return "แผนโครงงานพิเศษ";
+  if (/สายโท|minor/i.test(planText)) return "แผนเลือกสายโท";
   if (/3\s*[.]?\s*5\s*ปี|3\s*ปีครึ่ง|สามปีครึ่ง/i.test(planText)) return "แผน 3.5 ปี";
   if (/4\s*ปี|สี่ปี/i.test(planText)) return "แผน 4 ปี";
-  if (planName) {
-    if (/สหกิจ|co-?operative/i.test(planName)) return "แผนสหกิจศึกษา";
-    if (/โครงงาน|project/i.test(planName)) return "แผนโครงงานพิเศษ";
-    if (/สายโท|minor/i.test(planName)) return "แผนเลือกสายโท";
-  }
-  if (/COOP$/i.test(planId)) return "แผนสหกิจศึกษา";
-  if (/PROJECT$/i.test(planId)) return "แผนโครงงานพิเศษ";
-  if (/MINOR|สายโท/i.test(planId)) return "แผนเลือกสายโท";
+  if (planName && planNameEn) return `${planName} · ${planNameEn}`;
   return [planName, planNameEn].filter(Boolean).join(" · ") || planId;
 }
 
