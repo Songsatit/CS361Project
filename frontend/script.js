@@ -3414,11 +3414,13 @@ function shell(content) {
 
 
   const nav = [
-    ["home", "หน้าแรก"],
     ["programs", "หลักสูตร"],
-    ["courses", "ค้นหารายวิชา"],
-    ["faq", "คำถามที่พบบ่อย"]
+    ["courses", "ค้นหารายวิชา"]
   ];
+  if (["student", "instructor", "staff"].includes(state.user?.role)) {
+    nav.push(["graduation", "ตรวจสอบการจบ"]);
+  }
+  nav.push(["faq", "คำถามที่พบบ่อย"]);
 
 
   return `
