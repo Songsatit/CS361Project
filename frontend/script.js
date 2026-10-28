@@ -350,16 +350,47 @@ function renderChangeRequestDetail(request) {
 
 function renderChangeRequestsPage(review = false) {
   if (!canManageCurricula()) return renderHome();
-  const all = state.draftRequests ?? [];
-  const filtered = state.changeRequestFilter === "all" ? all : all.filter(item => item.status === state.changeRequestFilter);
-  const counts = ["draft", "pending", "approved", "rejected"].map(status => `${changeRequestStatusLabel(status)} ${all.filter(item => item.status === status).length}`).join(" · ");
+  const username = state.user?.username;
+  const all = (state.draftRequests ?? []).filter(item => review
+    ? item.created_by !== username
+    : item.created_by === username
+  );
+  const reviewTab = state.reviewTab ?? "pending";
+  const requests = review
+    ? all.filter(item => item.status === "pending")
+      .sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")))
+    : all;
+  const filtered = !review && state.changeRequestFilter !== "all"
+    ? requests.filter(item => item.status === state.changeRequestFilter)
+    : requests;
+  const counts = ["draft", "pending", "approved", "rejected"]
+    .map(status => `${changeRequestStatusLabel(status)} ${all.filter(item => item.status === status).length}`)
+    .join(" · ");
+  const curriculumOptions = [...new Map(PROGRAMS
+    .filter(program => program.curriculumId)
+    .map(program => [program.curriculumId, program]))
+    .values()];
+  const historyCurriculumId = state.curriculumHistoryCurriculumId ?? curriculumOptions[0]?.curriculumId ?? "";
+  const historyChanges = state.curriculumChanges ?? [];
+  const historyPanel = review && reviewTab === "history" ? `
+    <section class="audit-log-card curriculum-change-list">
+      <div class="audit-log-head"><h2>ประวัติเวอร์ชันหลักสูตร</h2><span>${historyChanges.length} รายการ</span></div>
+      <label class="history-curriculum-picker">เลือกหลักสูตร
+        <select data-review-curriculum>
+          ${curriculumOptions.map(program => `<option value="${esc(program.curriculumId)}" ${program.curriculumId === historyCurriculumId ? "selected" : ""}>${esc(program.code)} · พ.ศ. ${esc(program.revisionYear ?? "-")}</option>`).join("")}
+        </select>
+      </label>
+      ${historyChanges.length ? `<div class="audit-log-table-wrap"><table class="audit-log-table"><thead><tr><th>รายการ</th><th>สถานะ</th><th>ผู้ส่ง</th><th>เวลา</th></tr></thead><tbody>${historyChanges.map(change => `<tr><td><strong>${esc(change.change_type ?? change.title ?? "การเปลี่ยนแปลงหลักสูตร")}</strong><small>${esc(change.curriculum_id ?? historyCurriculumId)}</small></td><td>${esc(change.status ?? "-")}</td><td>${esc(change.requested_by ?? change.created_by ?? "-")}</td><td>${esc(change.created_at ?? change.updated_at ?? "-")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="audit-empty">ยังไม่มีประวัติเวอร์ชันของหลักสูตรนี้</p>`}
+    </section>
+  ` : "";
   return `
     <div class="page change-requests-page">
       ${crumbs([{ label: "หน้าแรก", view: "home" }, { label: review ? "ตรวจคำขอ" : "คำขอของฉัน" }])}
       <div class="management-page-head"><div><span class="workflow-kicker">CURRICULUM WORKFLOW</span><h1 class="page-title">${review ? "ตรวจคำขอหลักสูตร" : "คำขอของฉัน"}</h1><p class="page-sub">ติดตามว่าคำขออยู่ขั้นตอนไหน และดูรายละเอียดก่อน–หลังได้จากหน้านี้</p></div></div>
       <section class="change-request-summary audit-log-card"><strong>ภาพรวมคำขอ</strong><span>${esc(counts)}</span></section>
-      <div class="change-request-tabs">${[["all", "ทั้งหมด"], ["draft", "ฉบับร่าง"], ["pending", "รอตรวจสอบ"], ["approved", "อนุมัติแล้ว"], ["rejected", "ถูกปฏิเสธ"]].map(([value, label]) => `<button type="button" class="${state.changeRequestFilter === value ? "is-active" : ""}" data-request-filter="${value}">${label} (${value === "all" ? all.length : all.filter(item => item.status === value).length})</button>`).join("")}</div>
-      <div class="change-request-layout"><section class="change-request-list">${filtered.length ? filtered.map(item => `<button type="button" class="change-request-row ${state.selectedChangeRequest?.request?.id === item.id || state.selectedChangeRequest?.id === item.id ? "is-selected" : ""}" data-request-detail="${esc(item.id)}"><span><strong>#${esc(item.id)} · ${esc(item.title ?? "คำขอแก้ไขหลักสูตร")}</strong><small>${esc(item.created_by ?? "-")} · ${esc(item.created_at ?? "-")} · ${esc(item.item_count ?? 0)} รายการ</small></span><span class="${changeRequestStatusClass(item.status)}">${esc(changeRequestStatusLabel(item.status))}</span></button>`).join("") : `<p class="audit-empty">ยังไม่มีคำขอในสถานะนี้</p>`}</section><section class="change-request-detail-column">${state.changeRequestLoading ? `<div class="management-placeholder"><p>กำลังโหลดรายละเอียด...</p></div>` : state.changeRequestError ? `<div class="management-placeholder"><p class="error-text">${esc(state.changeRequestError)}</p></div>` : renderChangeRequestDetail(state.selectedChangeRequest)}</section></div>
+      ${review ? `<div class="change-request-tabs review-request-tabs"><button type="button" class="${reviewTab === "pending" ? "is-active" : ""}" data-review-tab="pending">คำขอรอตรวจ (${all.filter(item => item.status === "pending").length})</button><button type="button" class="${reviewTab === "history" ? "is-active" : ""}" data-review-tab="history">ประวัติเวอร์ชัน</button></div>` : `<div class="change-request-tabs">${[["all", "ทั้งหมด"], ["draft", "ฉบับร่าง"], ["pending", "รอตรวจสอบ"], ["approved", "อนุมัติแล้ว"], ["rejected", "ถูกปฏิเสธ"]].map(([value, label]) => `<button type="button" class="${state.changeRequestFilter === value ? "is-active" : ""}" data-request-filter="${value}">${label} (${value === "all" ? all.length : all.filter(item => item.status === value).length})</button>`).join("")}</div>`}
+      ${historyPanel}
+      ${!review || reviewTab === "pending" ? `<div class="change-request-layout"><section class="change-request-list">${filtered.length ? filtered.map(item => `<button type="button" class="change-request-row ${state.selectedChangeRequest?.request?.id === item.id || state.selectedChangeRequest?.id === item.id ? "is-selected" : ""}" data-request-detail="${esc(item.id)}"><span><strong>#${esc(item.id)} · ${esc(item.title ?? "คำขอแก้ไขหลักสูตร")}</strong><small>${esc(item.created_by ?? "-")} · ${esc(item.created_at ?? "-")} · ${esc(item.item_count ?? 0)} รายการ</small></span><span class="${changeRequestStatusClass(item.status)}">${esc(changeRequestStatusLabel(item.status))}</span></button>`).join("") : `<p class="audit-empty">${review ? "ยังไม่มีคำขอจากผู้ใช้อื่นที่รอตรวจ" : "ยังไม่มีคำขอในสถานะนี้"}</p>`}</section><section class="change-request-detail-column">${state.changeRequestLoading ? `<div class="management-placeholder"><p>กำลังโหลดรายละเอียด...</p></div>` : state.changeRequestError ? `<div class="management-placeholder"><p class="error-text">${esc(state.changeRequestError)}</p></div>` : renderChangeRequestDetail(state.selectedChangeRequest)}</section></div>` : ""}
     </div>
   `;
 }
@@ -3471,7 +3502,7 @@ function shell(content) {
             ${canAccessStudentProfile() ? `<button data-go="profile" role="menuitem">ข้อมูลส่วนตัว</button>` : ""}
             <button data-go="programs" role="menuitem">หลักสูตร</button>
             <button data-go="courses" role="menuitem">ค้นหารายวิชา</button>
-            ${canManageCurricula() ? `<button data-go="curriculum-management" role="menuitem">จัดการหลักสูตร</button><button data-go="my-change-requests" role="menuitem">คำขอของฉัน</button>` : ""}
+            ${canManageCurricula() ? `<button data-go="curriculum-management" role="menuitem">จัดการหลักสูตร</button><button data-go="course-editor" role="menuitem">แก้ไขรายวิชา</button><button data-go="my-change-requests" role="menuitem">คำขอของฉัน</button>` : ""}
             ${canReviewCurriculumRequests() ? `<button data-go="review-requests" role="menuitem">ตรวจคำขอ + ประวัติเวอร์ชัน</button>` : ""}
             ${canAccessCurriculumManagement() ? `<button data-go="workflow" data-id="${esc(state.programId || PROGRAMS[0].id)}" role="menuitem">ตรวจสอบข้อมูลหลักสูตร</button>` : ""}
             ${["student", "instructor", "staff"].includes(state.user.role) ? `<button data-go="graduation" role="menuitem">ตรวจสอบการจบ</button>` : ""}
@@ -3696,6 +3727,14 @@ function render() {
       if (["curriculum-management", "my-change-requests", "review-requests"].includes(state.view)) render();
     });
   }
+  if (state.view === "review-requests" && state.reviewTab === "history" && !state.curriculumChangesLoaded) {
+    const historyCurriculumId = state.curriculumHistoryCurriculumId ?? PROGRAMS.find(program => program.curriculumId)?.curriculumId;
+    if (historyCurriculumId) {
+      loadCurriculumChanges(historyCurriculumId).then(() => {
+        if (state.view === "review-requests" && state.reviewTab === "history") render();
+      });
+    }
+  }
   if (state.view === "curriculum-management" && canManageCurricula() && !state.managementCurriculaLoaded) {
     loadManagementCurricula().then(() => {
       if (state.view === "curriculum-management") render();
@@ -3790,6 +3829,11 @@ function go(v, id, addHistory = true) {
     state.selectedChangeRequest = null;
     state.changeRequestFilter = "all";
     state.changeRequestError = "";
+    if (v === "review-requests") {
+      state.reviewTab = "pending";
+      state.curriculumHistoryCurriculumId = null;
+      state.curriculumChangesLoaded = false;
+    }
   }
 
   state.navOpen = false;
@@ -3937,6 +3981,27 @@ function bind() {
     button.onclick = () => {
       state.changeRequestFilter = button.dataset.requestFilter || "all";
       state.selectedChangeRequest = null;
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-review-tab]").forEach(button => {
+    button.onclick = () => {
+      state.reviewTab = button.dataset.reviewTab || "pending";
+      state.selectedChangeRequest = null;
+      state.changeRequestError = "";
+      if (state.reviewTab === "history") {
+        state.curriculumHistoryCurriculumId = state.curriculumHistoryCurriculumId ?? PROGRAMS.find(program => program.curriculumId)?.curriculumId ?? "";
+        state.curriculumChangesLoaded = false;
+      }
+      render();
+    };
+  });
+
+  document.querySelectorAll("[data-review-curriculum]").forEach(select => {
+    select.onchange = () => {
+      state.curriculumHistoryCurriculumId = select.value;
+      state.curriculumChangesLoaded = false;
       render();
     };
   });
