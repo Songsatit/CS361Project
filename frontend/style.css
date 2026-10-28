@@ -444,6 +444,47 @@
   color: #5e5055;
 }
 
+.api-supplemental-notice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  margin: 18px auto;
+  width: min(100% - 32px, 1120px);
+  padding: 12px 16px;
+  border: 1px solid #ead9a5;
+  border-radius: 12px;
+  background: #fff9e8;
+  color: #6e5712;
+  font-size: 13px;
+}
+
+.api-supplemental-notice strong,
+.api-supplemental-notice span,
+.api-supplemental-notice small {
+  flex: 1 1 100%;
+}
+
+.api-supplemental-notice small {
+  color: #88794c;
+}
+
+.api-supplemental-notice button {
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 7px 12px;
+  background: #fff;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.api-supplemental-notice--error {
+  border-color: #f0c4cf;
+  background: #fff5f6;
+  color: #8f263c;
+}
+
 .login-page {
   display: grid;
   min-height: 62vh;
