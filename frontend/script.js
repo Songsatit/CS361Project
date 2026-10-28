@@ -1137,6 +1137,7 @@ async function loadStudyPlans() {
     const availablePlans = pathwayPlans.map(plan => ({
       id: plan.study_plan_id,
       label: studyPlanLabel(plan.study_plan_id, plan.plan_name_th ?? plan.plan_name, plan.plan_name_en),
+      sourceText: `${plan.study_plan_id ?? ""} ${plan.plan_name_th ?? plan.plan_name ?? ""} ${plan.plan_name_en ?? ""}`,
       plan: [],
       loaded: false,
       loading: false,
@@ -1144,8 +1145,7 @@ async function loadStudyPlans() {
     }));
     if (program.curriculumId === "BSC-CNC-2568" && availablePlans.length === 2) {
       availablePlans.forEach((availablePlan, index) => {
-        if (availablePlan.label.includes(" · ")) return;
-        const planText = `${availablePlan.id} ${availablePlan.label}`;
+        const planText = `${availablePlan.sourceText} ${availablePlan.label}`;
         availablePlan.label = /3\s*[._-]?\s*5|สามปีครึ่ง/i.test(planText)
           ? "แผน 3.5 ปี"
           : /4\s*ปี|(^|[-_])4($|[-_])/i.test(planText)
