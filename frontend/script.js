@@ -1199,6 +1199,17 @@ function studyPlanLabel(planId, planName, planNameEn = "") {
   return [planName, planNameEn].filter(Boolean).join(" · ") || planId;
 }
 
+function compactStudyPlanLabel(program, label) {
+  const text = String(label ?? "แผนหลัก").trim();
+  const major = String(studyPlanMajorLabel(program) ?? "").trim();
+  if (!major || !text) return text || "แผนหลัก";
+  const escapedMajor = major.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text.replace(
+    new RegExp(`^${escapedMajor}\\s*[-–—:]\\s*${escapedMajor}(?=\\s|·|$)`, "i"),
+    major
+  );
+}
+
 function studyPlanMajorLabel(program) {
   if (program.pathwayId?.endsWith("-ACS")) return "วิชาเอกคอมพิวเตอร์ประยุกต์";
   if (program.pathwayId?.endsWith("-CIS")) return "วิชาเอกคอมพิวเตอร์และวิทยาการสารสนเทศ";
@@ -2430,7 +2441,7 @@ function renderProgram() {
     : [{ id: `${p.id}-default`, label: "แผนหลัก", plan: p.plan }]
   ).map(plan => ({
     id: plan.id,
-    label: `${studyPlanMajorLabel(p)} — ${plan.label}`,
+    label: compactStudyPlanLabel(p, plan.label),
     programId: p.id
   }));
 
@@ -2577,7 +2588,7 @@ function renderProgram() {
         <div class="study-plan-heading">
           <div class="study-plan-heading-row">
             <div>
-              <h2>${esc(studyPlanMajorLabel(p))} — ${esc(p.studyPlans?.find(plan => plan.id === activePlanId)?.label ?? "แผนหลัก")}</h2>
+              <h2>${esc(studyPlanMajorLabel(p))} — ${esc(compactStudyPlanLabel(p, p.studyPlans?.find(plan => plan.id === activePlanId)?.label ?? "แผนหลัก"))}</h2>
               <p>แผนการศึกษาจากหลักสูตรปรับปรุง พ.ศ. ${esc(p.revisionYear)}</p>
             </div>
           </div>
