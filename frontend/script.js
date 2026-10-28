@@ -145,6 +145,29 @@ async function loadDraftChangeRequests() {
   return state.draftRequests;
 }
 
+async function findOrCreateOwnedDraft({ curriculumId, type, title, sourceCurriculumId = null, note = "" }) {
+  await loadDraftChangeRequests();
+  const existing = (state.draftRequests ?? []).find(request =>
+    request.status === "draft"
+      && request.created_by === state.user?.username
+      && (request.curriculum_id ?? null) === (curriculumId ?? null)
+      && request.type === type
+      && request.title === title
+  );
+  if (existing?.id) return existing.id;
+
+  const response = await fetch(`${API_BASE}/api/change-requests`, {
+    method: "POST",
+    headers: draftApiHeaders(),
+    body: JSON.stringify({ curriculumId, sourceCurriculumId, type, title, note })
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload.data?.id) {
+    throw new Error(payload.error ?? "สร้างฉบับร่างไม่สำเร็จ");
+  }
+  return payload.data.id;
+}
+
 async function loadManagementCurricula() {
   if (!canManageCurricula() || state.managementCurriculaLoaded) return state.managementCurricula;
   try {
@@ -2107,14 +2130,17 @@ async function savePlanDraft(program, submit = false) {
   }
   let requestId = state.editingDraftRequestId;
   if (!requestId) {
-    const createResponse = await fetch(`${API_BASE}/api/change-requests`, {
-      method: "POST",
-      headers: draftApiHeaders(),
-      body: JSON.stringify({ curriculumId: state.editorMode === "new" ? null : program.curriculumId, type: state.editorMode === "new" ? "add_curriculum" : "edit_structure", sourceCurriculumId: null, title: state.editorMode === "new" ? `สร้างหลักสูตร ${program.curriculumId}` : `แก้ไขแผนการเรียน ${program.code}`, note: `แก้ไข ${state.planEdit.changes.length} รายการ` })
+    const isNewCurriculum = state.editorMode === "new";
+    const title = isNewCurriculum
+      ? `สร้างหลักสูตร ${program.curriculumId}`
+      : `แก้ไขแผนการเรียน ${program.code}`;
+    requestId = await findOrCreateOwnedDraft({
+      curriculumId: isNewCurriculum ? null : program.curriculumId,
+      type: isNewCurriculum ? "add_curriculum" : "edit_structure",
+      sourceCurriculumId: null,
+      title,
+      note: `แก้ไข ${state.planEdit.changes.length} รายการ`
     });
-    const created = await createResponse.json().catch(() => ({}));
-    if (!createResponse.ok || !created.data?.id) throw new Error(created.error ?? "สร้างฉบับร่างไม่สำเร็จ");
-    requestId = created.data.id;
   }
   const itemsResponse = await fetch(`${API_BASE}/api/change-requests/${requestId}/items`, {
     method: "PUT",
@@ -4192,20 +4218,16 @@ function bind() {
 
       const submitButton = event.submitter?.value === "submit";
       try {
-        const createResponse = await fetch(`${API_BASE}/api/change-requests`, {
-          method: "POST",
-          headers: draftApiHeaders(),
-          body: JSON.stringify({
-            curriculumId: isNewCurriculum ? null : program?.curriculumId,
-            sourceCurriculumId: isNewCurriculum ? program?.curriculumId : null,
-            type,
-            title: isNewCurriculum ? `เพิ่มหลักสูตร ${newCurriculumId}` : `แก้ไขหลักสูตร ${program?.code ?? ""}`,
-            note: `รายการแก้ไข: ${changeType}`
-          })
+        const title = isNewCurriculum
+          ? `เพิ่มหลักสูตร ${newCurriculumId}`
+          : `แก้ไขหลักสูตร ${program?.code ?? ""}`;
+        const requestId = await findOrCreateOwnedDraft({
+          curriculumId: isNewCurriculum ? null : program?.curriculumId,
+          sourceCurriculumId: isNewCurriculum ? program?.curriculumId : null,
+          type,
+          title,
+          note: `รายการแก้ไข: ${changeType}`
         });
-        const created = await createResponse.json().catch(() => ({}));
-        if (!createResponse.ok || !created.data?.id) throw new Error(created.error ?? "สร้างฉบับร่างไม่สำเร็จ");
-        const requestId = created.data.id;
         const itemsResponse = await fetch(`${API_BASE}/api/change-requests/${encodeURIComponent(requestId)}/items`, {
           method: "PUT",
           headers: draftApiHeaders(),
