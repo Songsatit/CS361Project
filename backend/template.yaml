@@ -337,6 +337,12 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/graduation/students
             Method: GET
+        AssignGraduationStudent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/graduation/assignments
+            Method: POST
         GetStudentGraduationCheck:
           Type: HttpApi
           Properties:

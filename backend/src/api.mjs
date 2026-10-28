@@ -68,6 +68,8 @@ const demoAccounts = {
   // V4 demo students. studentId must match the synthetic IDs in backend/fixtures/v4-demo.
   demostudent01: { passwordHash: process.env.DEMO_STUDENT_01_PASSWORD_HASH, role: 'student', roleLabel: 'นักศึกษา (Demo)', name: 'นักศึกษาทดลอง 1', studentId: 'DEMO0001' },
   demostudent02: { passwordHash: process.env.DEMO_STUDENT_02_PASSWORD_HASH, role: 'student', roleLabel: 'นักศึกษา (Demo)', name: 'นักศึกษาทดลอง 2', studentId: 'DEMO0002' },
+  demostudent03: { passwordHash: process.env.DEMO_STUDENT_01_PASSWORD_HASH, role: 'student', roleLabel: 'นักศึกษา (Demo)', name: 'นักศึกษาทดลอง 3', studentId: 'DEMO0003' },
+  demostudent04: { passwordHash: process.env.DEMO_STUDENT_01_PASSWORD_HASH, role: 'student', roleLabel: 'นักศึกษา (Demo)', name: 'นักศึกษาทดลอง 4', studentId: 'DEMO0004' },
 };
 const demoUsernames = new Set(Object.keys(demoAccounts));
 const invalidLoginResponse = () => response(401, { error: 'Invalid username or password' });
@@ -1594,7 +1596,15 @@ const graduationStudentIdPattern = /^[A-Za-z0-9]{1,20}$/;
 async function buildGraduationResult(studentId) {
   const records = await queryRows(
     `SELECT g.student_id, g.curriculum_id, g.academic_year, g.semester, g.course_code,
-            g.credits, g.grade, b.batch_id, b.data_mode, b.exported_at
+            g.credits, g.grade, b.batch_id, b.data_mode, b.exported_at,
+            (SELECT c.title_th FROM course c
+              WHERE c.course_code = g.course_code
+                 OR REPLACE(c.course_code, ' ', '') = REPLACE(g.course_code, ' ', '')
+              ORDER BY c.active DESC, c.course_id LIMIT 1) AS course_name_th,
+            (SELECT c.title_en FROM course c
+              WHERE c.course_code = g.course_code
+                 OR REPLACE(c.course_code, ' ', '') = REPLACE(g.course_code, ' ', '')
+              ORDER BY c.active DESC, c.course_id LIMIT 1) AS course_name_en
        FROM graduation_grade_record g
        JOIN graduation_import_batch b ON b.batch_id = g.batch_id
       WHERE g.student_id = ?`,
@@ -1650,6 +1660,14 @@ async function buildGraduationResult(studentId) {
 
   const curriculumId = pickCurriculum(records);
   const curriculumRecords = records.filter((record) => record.curriculum_id === curriculumId);
+  const [studentMeta = {}] = await queryRows(
+    `SELECT student_id, display_name, student_year
+       FROM graduation_student_assignment
+      WHERE student_id = ?
+      ORDER BY student_year DESC, assignment_id
+      LIMIT 1`,
+    [studentId],
+  );
   const conditions = await queryRows(
     `SELECT display_order, condition_text
        FROM curriculum_graduation_condition
@@ -1675,14 +1693,75 @@ async function buildGraduationResult(studentId) {
     dataSource,
   });
 
+  const [studyPlan = null] = await queryRows(
+    `SELECT study_plan_id, plan_name, pathway_id
+       FROM study_plan
+      WHERE curriculum_id = ? AND active = 1
+      ORDER BY pathway_id IS NOT NULL, study_plan_id
+      LIMIT 1`,
+    [curriculumId],
+  );
+  let plan = [];
+  if (studyPlan) {
+    plan = await queryRows(
+      `SELECT spi.study_year, spi.semester, spi.item_order, spi.credits,
+              c.course_code, c.title_th AS course_name_th, c.title_en AS course_name_en
+         FROM study_plan_item spi
+         LEFT JOIN course c ON c.course_id = spi.course_id
+        WHERE spi.study_plan_id = ?
+        ORDER BY spi.study_year, spi.semester, spi.item_order`,
+      [studyPlan.study_plan_id],
+    );
+  }
+  const latestByCourse = new Map();
+  for (const record of curriculumRecords) {
+    const code = String(record.course_code ?? '').replace(/\s+/g, '').toUpperCase();
+    const current = latestByCourse.get(code);
+    const attempt = Number(record.academic_year) * 10 + Number(record.semester);
+    if (!current || attempt > current.attempt) latestByCourse.set(code, { ...record, attempt });
+  }
+  const progressPlan = plan.map((item) => {
+    const code = String(item.course_code ?? '').replace(/\s+/g, '').toUpperCase();
+    const taken = latestByCourse.get(code);
+    return {
+      studyYear: Number(item.study_year),
+      semester: Number(item.semester),
+      itemOrder: Number(item.item_order ?? 0),
+      courseCode: item.course_code ?? null,
+      courseNameTh: item.course_name_th ?? null,
+      courseNameEn: item.course_name_en ?? null,
+      credits: item.credits == null ? null : Number(item.credits),
+      status: taken ? (['F', 'U', 'W', 'I'].includes(String(taken.grade)) ? 'failed_or_incomplete' : 'completed') : 'not_taken',
+      grade: taken?.grade ?? null,
+      takenAcademicYear: taken?.academic_year ?? null,
+      takenSemester: taken?.semester ?? null,
+    };
+  });
+
   return {
     studentId,
+    student: {
+      studentId,
+      displayName: studentMeta.display_name ?? null,
+      studyYear: studentMeta.student_year == null ? null : Number(studentMeta.student_year),
+    },
     dataMode: records.some((record) => record.data_mode === 'demo') ? 'demo' : 'live',
     curriculum: { curriculumId },
     verdict: evaluation.verdict,
     dataSource,
     totals: evaluation.totals,
     conditions: evaluation.conditions,
+    records: curriculumRecords.map((record) => ({
+      courseCode: record.course_code,
+      courseNameTh: record.course_name_th ?? null,
+      courseNameEn: record.course_name_en ?? null,
+      academicYear: Number(record.academic_year),
+      semester: Number(record.semester),
+      credits: Number(record.credits),
+      grade: record.grade,
+      dataMode: record.data_mode,
+    })),
+    plan: progressPlan,
   };
 }
 
@@ -1728,14 +1807,47 @@ async function listAssignedGraduationStudents(event) {
   const actor = actorFromRequest(event);
   if (!['instructor', 'staff'].includes(actor.role)) return response(403, { error: 'Forbidden' });
   const rows = await queryRows(
-    `SELECT a.student_id,
+    `SELECT a.student_id, a.display_name, a.student_year,
             EXISTS (SELECT 1 FROM graduation_grade_record g WHERE g.student_id = a.student_id) AS has_data
        FROM graduation_student_assignment a
       WHERE a.assignee_username = ?
       ORDER BY a.student_id`,
     [actor.username],
   );
-  return response(200, { data: rows.map((row) => ({ studentId: row.student_id, hasData: Boolean(row.has_data) })) });
+  return response(200, { data: rows.map((row) => ({
+    studentId: row.student_id,
+    displayName: row.display_name ?? null,
+    studyYear: row.student_year == null ? null : Number(row.student_year),
+    hasData: Boolean(row.has_data),
+  })) });
+}
+
+async function assignGraduationStudent(event) {
+  const actor = actorFromRequest(event);
+  if (actor.role !== 'staff') return response(403, { error: 'Only staff can assign students' });
+  const body = requestBody(event);
+  if (!body) return response(400, { error: 'Request body must be valid JSON' });
+  const studentId = String(body.studentId ?? '').trim();
+  const displayName = String(body.displayName ?? '').trim().slice(0, 255) || null;
+  const studentYear = Number(body.studentYear);
+  if (!graduationStudentIdPattern.test(studentId)) return response(400, { error: 'studentId is invalid' });
+  if (!Number.isInteger(studentYear) || studentYear < 1 || studentYear > 4) return response(400, { error: 'studentYear must be 1, 2, 3, or 4' });
+  await pool.execute(
+    `INSERT INTO graduation_student_assignment
+      (assignee_username, student_id, assigned_by, display_name, student_year)
+     VALUES (?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), student_year = VALUES(student_year)`,
+    [actor.username, studentId, actor.username, displayName, studentYear],
+  );
+  await writeAuditLog({
+    username: actor.username,
+    role: actor.role,
+    action: 'graduation_student_assigned',
+    entityType: 'student_graduation',
+    entityId: studentId,
+    newValue: { studentYear },
+  });
+  return response(201, { data: { studentId, displayName, studyYear: studentYear, assigneeUsername: actor.username } });
 }
 
 async function listGraduationImportBatches(event) {
@@ -1785,6 +1897,7 @@ export const handler = async (event) => {
     if (route === 'DELETE /api/curricula/{curriculumId}') return await deleteCurriculum(event);
     if (route === 'DELETE /api/courses/{courseCode}') return await deleteCourse(event);
     if (route === 'POST /api/curricula/{curriculumId}/workflow') return await updateCurriculumWorkflow(event);
+    if (route === 'POST /api/graduation/assignments') return await assignGraduationStudent(event);
     if (method !== 'GET') return response(405, { error: 'Method not allowed' });
     if (route === 'GET /api/courses') return await listCourses(event);
     if (route.endsWith('/prerequisites') && route.startsWith('GET /api/courses/')) return await listPrerequisites(event);

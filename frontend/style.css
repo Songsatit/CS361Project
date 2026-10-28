@@ -3404,6 +3404,58 @@
   font-size: 13px;
 }
 
+.graduation-student-meta {
+  margin: -0.35rem 0 1rem;
+  color: #7b6870;
+}
+
+.graduation-history,
+.graduation-plan-progress {
+  margin-top: 1.5rem;
+}
+
+.graduation-history h3,
+.graduation-plan-progress h3 {
+  margin: 0 0 0.7rem;
+  font-size: 1.05rem;
+}
+
+.graduation-assignment-form {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid #eadfe3;
+  border-radius: 14px;
+  background: #fffafa;
+}
+
+.graduation-assignment-form h3 {
+  margin: 0 0 0.7rem;
+  font-size: 0.98rem;
+}
+
+.graduation-assignment-form > div {
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.graduation-assignment-form input,
+.graduation-assignment-form select {
+  min-height: 40px;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #ded2d7;
+  border-radius: 9px;
+  background: #fff;
+}
+
+@media (max-width: 700px) {
+  .graduation-assignment-form input,
+  .graduation-assignment-form select,
+  .graduation-assignment-form button {
+    width: 100%;
+  }
+}
+
 @media (max-width: 700px) {
   .graduation-result-card,
   .graduation-student-list,
