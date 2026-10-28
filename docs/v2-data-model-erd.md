@@ -1,5 +1,7 @@
 # [Architecture] Data Model / ERD สำหรับ V2
 
+> เอกสารนี้เริ่มจาก ERD ของ V2 และมีภาคผนวก V4 ด้านล่างเพื่อให้เห็นตารางตรวจสอบการสำเร็จการศึกษาและ data flow ที่เพิ่มเข้ามา
+
 ## Goal
 
 ออกแบบ Data Model สำหรับข้อมูลหลักสูตร รายวิชา และวิชาบังคับก่อน เพื่อรองรับข้อมูลหลายปีหลักสูตร การค้นหา และการกรองข้อมูลใน V2
@@ -140,3 +142,90 @@ erDiagram
 - รองรับการค้นหารายวิชาและกรองตามหลักสูตร/หมวดวิชา
 - รองรับการแสดงวิชาบังคับก่อน
 - ระบุ Mapping ระหว่างข้อมูลจาก API กับ Entity ในระบบ
+
+## ภาคผนวก V4: ตรวจสอบการสำเร็จการศึกษา (Demo เท่านั้น)
+
+Migration `010_graduation_verification.sql` เพิ่มตาราง 5 ตารางสำหรับรับผลการเรียนแบบ CSV ประเมินเงื่อนไขจบ และจำกัดการตรวจสอบตามผู้ได้รับมอบหมาย ตารางชุดนี้ยังไม่ใช่การเชื่อมต่อทะเบียนจริง และ fixture ที่ใช้ทดสอบเป็นข้อมูลสังเคราะห์เท่านั้น
+
+### ERD ของตาราง V4
+
+เส้นทึบด้านล่างแสดง foreign key ที่ migration สร้างจริง ส่วนความสัมพันธ์กับ `student_id`, `assignee_username` และ `curriculum_id` ในบางตารางเป็นการอ้างอิงเชิงข้อมูลเท่านั้น เพราะ migration นี้ยังไม่ได้สร้าง foreign key ไปยังตารางผู้ใช้หรือตารางหลักสูตรสำหรับคอลัมน์เหล่านั้น
+
+```mermaid
+erDiagram
+    CURRICULUM ||--o{ GRADUATION_RULE : defines
+    GRADUATION_IMPORT_BATCH ||--o{ GRADUATION_IMPORT_ERROR : records
+    GRADUATION_IMPORT_BATCH ||--o{ GRADUATION_GRADE_RECORD : supplies
+
+    GRADUATION_IMPORT_BATCH {
+        bigint batch_id PK
+        string source_key
+        enum data_mode
+        string source_batch_id
+        string file_sha256
+        datetime exported_at
+        enum status
+        int row_total
+        int row_inserted
+        int row_updated
+        int row_unchanged
+        int row_rejected
+        json error_summary
+        string imported_by
+    }
+    GRADUATION_IMPORT_ERROR {
+        bigint error_id PK
+        bigint batch_id FK
+        int line_no
+        string student_id
+        string error_code
+    }
+    GRADUATION_GRADE_RECORD {
+        bigint grade_record_id PK
+        string student_id
+        string curriculum_id
+        smallint academic_year
+        tinyint semester
+        string course_code
+        decimal credits
+        string grade
+        string row_hash
+        bigint batch_id FK
+    }
+    GRADUATION_RULE {
+        bigint rule_id PK
+        string curriculum_id FK
+        int condition_order
+        enum rule_type
+        json params
+        string note
+    }
+    GRADUATION_STUDENT_ASSIGNMENT {
+        bigint assignment_id PK
+        string assignee_username
+        string student_id
+        string assigned_by
+        timestamp assigned_at
+    }
+```
+
+`GRADUATION_STUDENT_ASSIGNMENT` จำกัดว่าอาจารย์หรือเจ้าหน้าที่คนใดดูผลของนักศึกษาคนใดได้ แต่ใน migration นี้ไม่มี FK ไปยังตารางบัญชีผู้ใช้ และไม่มี FK ของ `student_id` ไปยังทะเบียนนักศึกษา `GRADUATION_GRADE_RECORD` ใช้ unique key จากนักศึกษา หลักสูตร ปี ภาคเรียน และรหัสวิชาเพื่อให้การนำเข้าซ้ำอัปเดตแถวเดิม
+
+### Data flow ของ V4
+
+```mermaid
+flowchart LR
+    CSV["CSV ผลการเรียน<br/>ปัจจุบันใช้ fixture สังเคราะห์"] --> ADAPTER["CSV adapter<br/>ตรวจ header และแถว"]
+    ADAPTER --> CLI["graduation-import.mjs<br/>Demo mode"]
+    CLI --> BATCH[("graduation_import_batch")]
+    CLI --> ERROR[("graduation_import_error")]
+    CLI --> GRADE[("graduation_grade_record")]
+    WEB["Frontend<br/>ตรวจการสำเร็จการศึกษา"] --> API["API Lambda<br/>อ่านข้อมูลตามสิทธิ์"]
+    API --> EVAL["evaluate.mjs<br/>ประเมิน graduation_rule"]
+    EVAL --> RULE[("graduation_rule")]
+    EVAL --> GRADE
+    API --> ASSIGN[("graduation_student_assignment")]
+    API --> CONDITION[("curriculum_graduation_condition")]
+```
+
+V4 เพิ่ม route ใน Lambda เดิมและ frontend เรียก API สำหรับอ่านผล ส่วน CLI ใช้นำเข้า CSV ใน Demo เท่านั้น ปัจจุบันไม่มีการเชื่อมต่อทะเบียนจริง สถานะ migration บน RDS ที่ deploy อยู่ยังไม่ทราบ จึงห้ามรัน migration หรือ importer กับ RDS จนกว่าจะตรวจสอบสถานะ อนุมัติ data contract และมีแผน deploy แยกต่างหาก
