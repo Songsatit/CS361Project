@@ -899,7 +899,7 @@ async function loadStudyPlans() {
       if (grouped.size) {
         loadedPlans.push({
           id: plan.study_plan_id,
-          label: studyPlanLabel(plan.study_plan_id, plan.plan_name),
+          label: studyPlanLabel(plan.study_plan_id, plan.plan_name_th ?? plan.plan_name, plan.plan_name_en),
           plan: [...grouped.values()].sort(
             (a, b) => a.year - b.year || a.term - b.term
           )
@@ -910,6 +910,7 @@ async function loadStudyPlans() {
     if (loadedPlans.length) {
       if (program.curriculumId === "BSC-CNC-2568" && loadedPlans.length === 2) {
         loadedPlans.forEach((loadedPlan, index) => {
+          if (loadedPlan.label.includes(" · ")) return;
           const planText = `${loadedPlan.id} ${loadedPlan.label}`;
           loadedPlan.label = /3\s*[._-]?\s*5|สามปีครึ่ง/i.test(planText)
             ? "แผน 3.5 ปี"
@@ -926,7 +927,8 @@ async function loadStudyPlans() {
   }
 }
 
-function studyPlanLabel(planId, planName) {
+function studyPlanLabel(planId, planName, planNameEn = "") {
+  if (planName && planNameEn) return `${planName} · ${planNameEn}`;
   const planText = `${planId ?? ""} ${planName ?? ""}`;
   if (/3\s*[.]?\s*5\s*ปี|3\s*ปีครึ่ง|สามปีครึ่ง/i.test(planText)) return "แผน 3.5 ปี";
   if (/4\s*ปี|สี่ปี/i.test(planText)) return "แผน 4 ปี";
@@ -938,7 +940,7 @@ function studyPlanLabel(planId, planName) {
   if (/COOP$/i.test(planId)) return "แผนสหกิจศึกษา";
   if (/PROJECT$/i.test(planId)) return "แผนโครงงานพิเศษ";
   if (/MINOR|สายโท/i.test(planId)) return "แผนเลือกสายโท";
-  return planId;
+  return [planName, planNameEn].filter(Boolean).join(" · ") || planId;
 }
 
 function studyPlanMajorLabel(program) {
@@ -1706,7 +1708,7 @@ function editorCurrentProgram() {
 function initializeEditorState(id) {
   state.editorMode = id === "new" ? "new" : "edit";
   const source = id === "new"
-    ? { id: "new", code: "", nameEn: "", revisionYear: "", curriculumId: null, plan: [] }
+    ? { id: "new", code: "", nameTh: "", nameEn: "", revisionYear: "", curriculumId: null, plan: [] }
     : PROGRAMS.find(program => program.id === id);
   if (!source) return false;
   state.editorProgram = { ...source, plan: state.editorMode === "new" ? [] : [...(source.plan ?? [])] };
@@ -1781,7 +1783,7 @@ async function loadEditorActivePlan(program) {
     state.editorPlanId = selectedPlan.study_plan_id;
     program.studyPlans = plans.map(plan => ({
       id: plan.study_plan_id,
-      label: studyPlanLabel(plan.study_plan_id, plan.plan_name),
+      label: studyPlanLabel(plan.study_plan_id, plan.plan_name_th ?? plan.plan_name, plan.plan_name_en),
       plan: []
     }));
     const detailResponse = await fetch(`${API_BASE}/api/study-plans/${encodeURIComponent(selectedPlan.study_plan_id)}`);
@@ -1923,7 +1925,7 @@ function renderCurriculumEditor() {
         <div class="editor-topbar-actions"><button class="workflow-action workflow-action--muted" type="button" data-go="curriculum-management">กลับไปจัดการหลักสูตร</button><button class="workflow-action workflow-action--muted" type="button" data-editor-copy-level="curriculum">คัดลอกจากหลักสูตรอื่น</button></div>
       </div>
       <section class="editor-header-card">
-        ${isNew ? `<label>รหัสหลักสูตร<input data-editor-field="curriculumId" placeholder="เช่น BSC-CS-2569" value="${esc(program.curriculumId ?? "")}"></label><label>ปีหลักสูตร<input data-editor-field="academicYear" type="number" value="${esc(program.revisionYear ?? "")}"></label><label>ชื่อหลักสูตร<input data-editor-field="title" placeholder="ชื่อหลักสูตร" value="${esc(program.code ?? "")}"></label>` : `<div><small>หลักสูตร</small><strong>${esc(program.code)}</strong></div><div><small>รหัส</small><strong>${esc(program.curriculumId)}</strong></div><div><small>ปีหลักสูตร</small><strong>พ.ศ. ${esc(program.revisionYear)}</strong></div><label><small>แผนย่อยที่กำลังแก้ไข</small><select data-editor-plan-select>${(program.studyPlans ?? []).map(plan => `<option value="${esc(plan.id)}" ${plan.id === state.editorPlanId ? "selected" : ""}>${esc(plan.label)}</option>`).join("")}</select></label>`}
+        ${isNew ? `<label>รหัสหลักสูตร<input data-editor-field="curriculumId" placeholder="เช่น BSC-CS-2569" value="${esc(program.curriculumId ?? "")}"></label><label>ปีหลักสูตร<input data-editor-field="academicYear" type="number" value="${esc(program.revisionYear ?? "")}"></label><label>ชื่อหลักสูตรภาษาไทย<input data-editor-field="titleTh" placeholder="เช่น วท.บ. วิทยาการคอมพิวเตอร์" value="${esc(program.nameTh ?? program.code ?? "")}"></label><label>ชื่อหลักสูตรภาษาอังกฤษ<input data-editor-field="titleEn" placeholder="เช่น Computer Science" value="${esc(program.nameEn ?? "")}"></label>` : `<div><small>หลักสูตร</small><strong>${esc(program.code)}</strong></div><div><small>รหัส</small><strong>${esc(program.curriculumId)}</strong></div><div><small>ปีหลักสูตร</small><strong>พ.ศ. ${esc(program.revisionYear)}</strong></div><label><small>แผนย่อยที่กำลังแก้ไข</small><select data-editor-plan-select>${(program.studyPlans ?? []).map(plan => `<option value="${esc(plan.id)}" ${plan.id === state.editorPlanId ? "selected" : ""}>${esc(plan.label)}</option>`).join("")}</select></label>`}
       </section>
       ${state.editorLoading ? `<section class="editor-state-card">กำลังโหลดแผนการเรียน...</section>` : ""}
       ${state.editorError ? `<section class="editor-state-card editor-state-card--error">${esc(state.editorError)} <button type="button" data-editor-retry>ลองใหม่</button></section>` : ""}
@@ -2072,7 +2074,9 @@ function editorChangeItems(program) {
       newValue: {
         curriculumId: program.curriculumId,
         academicYear: Number(program.revisionYear),
-        title: program.code
+        title: program.code,
+        titleTh: program.nameTh ?? program.code,
+        titleEn: program.nameEn ?? ""
       }
     });
   }
@@ -2089,13 +2093,16 @@ async function savePlanDraft(program, submit = false) {
   if (state.editorMode === "new") {
     const curriculumId = document.querySelector('[data-editor-field="curriculumId"]')?.value.trim();
     const academicYear = Number(document.querySelector('[data-editor-field="academicYear"]')?.value);
-    const title = document.querySelector('[data-editor-field="title"]')?.value.trim();
-    if (!curriculumId || !/^BSC-[A-Z0-9-]+$/i.test(curriculumId) || !Number.isInteger(academicYear) || !title) {
-      throw new Error("กรุณากรอกรหัสหลักสูตร ปีหลักสูตร และชื่อหลักสูตรให้ครบ");
+    const titleTh = document.querySelector('[data-editor-field="titleTh"]')?.value.trim();
+    const titleEn = document.querySelector('[data-editor-field="titleEn"]')?.value.trim();
+    if (!curriculumId || !/^BSC-[A-Z0-9-]+$/i.test(curriculumId) || !Number.isInteger(academicYear) || !titleTh || !titleEn) {
+      throw new Error("กรุณากรอกรหัสหลักสูตร ปีหลักสูตร และชื่อหลักสูตรทั้งภาษาไทย/อังกฤษให้ครบ");
     }
     program.curriculumId = curriculumId;
     program.revisionYear = academicYear;
-    program.code = title;
+    program.code = titleTh;
+    program.nameTh = titleTh;
+    program.nameEn = titleEn;
   }
   let requestId = state.editingDraftRequestId;
   if (!requestId) {

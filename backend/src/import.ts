@@ -270,11 +270,15 @@ async function importStudyPlans(rows: CourseRow[]) {
       const planId = pick(plan, ['study_plan_id', 'id', 'plan_id']);
       if (!planId) continue;
       await db.execute(
-        `INSERT INTO study_plan (study_plan_id, curriculum_id, pathway_id, plan_name, active, raw_json)
-         VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO study_plan (study_plan_id, curriculum_id, pathway_id, plan_name, plan_name_th, plan_name_en, active, raw_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE curriculum_id = VALUES(curriculum_id), pathway_id = VALUES(pathway_id),
-           plan_name = VALUES(plan_name), active = VALUES(active), raw_json = VALUES(raw_json)`,
-        [planId, context.curriculumId, context.pathwayId, pick(plan, ['plan_name', 'name', 'title']) ?? null,
+           plan_name = VALUES(plan_name), plan_name_th = VALUES(plan_name_th),
+           plan_name_en = VALUES(plan_name_en), active = VALUES(active), raw_json = VALUES(raw_json)`,
+        [planId, context.curriculumId, context.pathwayId,
+          pick(plan, ['plan_name', 'name', 'title', 'plan_name_th', 'name_th', 'title_th']) ?? null,
+          pick(plan, ['plan_name_th', 'name_th', 'title_th', 'plan_name', 'name', 'title']) ?? null,
+          pick(plan, ['plan_name_en', 'name_en', 'title_en']) ?? null,
           pick(plan, ['active']) ?? true, JSON.stringify(plan)],
       );
 
