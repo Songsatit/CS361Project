@@ -625,7 +625,7 @@ async function listCurricula(event) {
   const includeInactive = event.queryStringParameters?.includeInactive === '1'
     && ['staff', 'curriculum_admin'].includes(actor.role);
   const data = await queryRows(
-    `SELECT curriculum_id, academic_year, active
+    `SELECT curriculum_id, title_th, title_en, academic_year, active
        FROM curriculum
       ${includeInactive ? '' : 'WHERE active = 1'}
       ORDER BY academic_year DESC, curriculum_id`,
@@ -944,12 +944,13 @@ async function decideDraftChangeRequest(event) {
       const value = createItem?.new_value ?? {};
       const curriculumId = String(value.curriculumId ?? request.curriculum_id ?? '').trim();
       const academicYear = Number(value.academicYear);
+      const title = String(value.title ?? '').trim() || curriculumId;
       if (!curriculumId || !Number.isInteger(academicYear)) throw new Error('New curriculum details are incomplete');
       await connection.execute(
-        `INSERT INTO curriculum (curriculum_id, academic_year, active)
-         VALUES (?, ?, 1)
-         ON DUPLICATE KEY UPDATE academic_year = VALUES(academic_year), active = 1`,
-        [curriculumId, academicYear],
+        `INSERT INTO curriculum (curriculum_id, title_th, academic_year, active)
+         VALUES (?, ?, ?, 1)
+         ON DUPLICATE KEY UPDATE title_th = VALUES(title_th), academic_year = VALUES(academic_year), active = 1`,
+        [curriculumId, title, academicYear],
       );
       const studyPlanId = `${curriculumId}-MAIN`;
       await connection.execute(
