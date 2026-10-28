@@ -978,9 +978,11 @@ async function loadApiData() {
           PROGRAMS.push({
             id: `api-${curriculum.curriculum_id}`,
             curriculumId: curriculum.curriculum_id,
-            code: curriculum.curriculum_id,
-            nameEn: curriculum.curriculum_id,
+            code: curriculum.title_th ?? curriculum.curriculum_id,
+            nameEn: curriculum.title_en ?? curriculum.curriculum_id,
             revisionYear: Number(curriculum.academic_year),
+            totalCredits: curriculum.total_credits ?? null,
+            duration: curriculum.duration ?? "หลักสูตร",
             plan: [],
             studyPlans: []
           });
@@ -1011,6 +1013,19 @@ async function loadApiData() {
         createdCourse: course.curriculum_id == null
       };
     }
+
+    // API-created curricula may not have bundled metadata. Derive the card
+    // summary from the live course placements so it never renders undefined.
+    PROGRAMS.forEach(program => {
+      const liveCourses = courses.filter(course =>
+        course.curriculum_id === program.curriculumId || course.pathway_id === program.pathwayId
+      );
+      if (program.totalCredits == null) {
+        const uniqueCourses = new Map(liveCourses.map(course => [course.course_id ?? course.course_code, course]));
+        program.totalCredits = [...uniqueCourses.values()].reduce((sum, course) => sum + Number(course.credits_total ?? 0), 0);
+      }
+      if (!program.duration) program.duration = "หลักสูตร";
+    });
 
     // Keep the course cards in sync with the backend instead of showing
     // prerequisite labels from the bundled fallback data.
@@ -1613,9 +1628,11 @@ function renderCurriculumManagement() {
       return {
       id: `api-${curriculum.curriculum_id}`,
       curriculumId: curriculum.curriculum_id,
-      code: curriculum.curriculum_id,
-      nameEn: curriculum.curriculum_id,
+      code: curriculum.title_th ?? curriculum.curriculum_id,
+      nameEn: curriculum.title_en ?? curriculum.curriculum_id,
       revisionYear: Number(curriculum.academic_year),
+      totalCredits: curriculum.total_credits ?? null,
+      duration: curriculum.duration ?? "หลักสูตร",
       plan: [],
       studyPlans: []
     };
