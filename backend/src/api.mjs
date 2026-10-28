@@ -1,6 +1,13 @@
 import mysql from 'mysql2/promise';
 import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
+import {
+  DEFAULT_SNAPSHOT_MAX_AGE_DAYS,
+  canViewGraduation,
+  evaluateGraduation,
+  pickCurriculum,
+  resolveDataSource,
+} from './graduation/evaluate.mjs';
 
 const allowedRoles = new Set(['student', 'instructor', 'curriculum_admin', 'staff']);
 const jwtIssuer = 'cs361-curriculum-api';
@@ -58,6 +65,9 @@ const demoAccounts = {
   instructor: { passwordHash: process.env.DEMO_INSTRUCTOR_PASSWORD_HASH, role: 'instructor', roleLabel: 'อาจารย์ผู้สอน', name: 'ผู้ใช้งานอาจารย์' },
   staff: { passwordHash: process.env.DEMO_STAFF_PASSWORD_HASH, role: 'staff', roleLabel: 'เจ้าหน้าที่', name: 'ผู้ใช้งานเจ้าหน้าที่' },
   curriculumadmin: { passwordHash: process.env.DEMO_ADMIN_PASSWORD_HASH, role: 'curriculum_admin', roleLabel: 'ผู้ดูแลข้อมูลหลักสูตร', name: 'ผู้ดูแลข้อมูลหลักสูตร' },
+  // V4 demo students. studentId must match the synthetic IDs in backend/fixtures/v4-demo.
+  demostudent01: { passwordHash: process.env.DEMO_STUDENT_01_PASSWORD_HASH, role: 'student', roleLabel: 'นักศึกษา (Demo)', name: 'นักศึกษาทดลอง 1', studentId: 'DEMO0001' },
+  demostudent02: { passwordHash: process.env.DEMO_STUDENT_02_PASSWORD_HASH, role: 'student', roleLabel: 'นักศึกษา (Demo)', name: 'นักศึกษาทดลอง 2', studentId: 'DEMO0002' },
 };
 const demoUsernames = new Set(Object.keys(demoAccounts));
 const invalidLoginResponse = () => response(401, { error: 'Invalid username or password' });
@@ -80,7 +90,7 @@ function demoLogin(username, password) {
   const key = username.trim().toLowerCase();
   const account = demoAccounts[key];
   if (!account?.passwordHash || !verifyPassword(password, account.passwordHash)) return null;
-  return { username: key, displayNameTh: account.name, displayNameEn: '', email: '', type: 'demo', role: account.role, roleLabel: account.roleLabel };
+  return { username: account.studentId ?? key, displayNameTh: account.name, displayNameEn: '', email: '', type: 'demo', role: account.role, roleLabel: account.roleLabel };
 }
 
 const loginWindowMs = 15 * 60 * 1000;
@@ -1576,6 +1586,171 @@ async function decideCurriculumChange(event) {
   return response(200, { data: { ...change, status: action === 'approve' ? 'approved' : 'rejected', reviewed_by: actor.username } });
 }
 
+// ---- V4 graduation verification ----
+// Reads only. Grade data is written by the CLI import, never through this API.
+const GRADUATION_SOURCE_KEY = 'registrar-demo';
+const graduationStudentIdPattern = /^[A-Za-z0-9]{1,20}$/;
+
+async function buildGraduationResult(studentId) {
+  const records = await queryRows(
+    `SELECT g.student_id, g.curriculum_id, g.academic_year, g.semester, g.course_code,
+            g.credits, g.grade, b.batch_id, b.data_mode, b.exported_at
+       FROM graduation_grade_record g
+       JOIN graduation_import_batch b ON b.batch_id = g.batch_id
+      WHERE g.student_id = ?`,
+    [studentId],
+  );
+  const [latestBatch = null] = await queryRows(
+    `SELECT batch_id, status, source_batch_id, exported_at, finished_at, row_rejected
+       FROM graduation_import_batch
+      WHERE source_key = ? AND finished_at IS NOT NULL
+      ORDER BY finished_at DESC, batch_id DESC
+      LIMIT 1`,
+    [GRADUATION_SOURCE_KEY],
+  );
+
+  let studentRejected = 0;
+  let unidentifiedRejected = 0;
+  if (latestBatch) {
+    const [counts] = await queryRows(
+      `SELECT COALESCE(SUM(student_id = ?), 0) AS mine,
+              COALESCE(SUM(student_id IS NULL), 0) AS unidentified
+         FROM graduation_import_error
+        WHERE batch_id = ?`,
+      [studentId, latestBatch.batch_id],
+    );
+    studentRejected = Number(counts?.mine ?? 0);
+    unidentifiedRejected = Number(counts?.unidentified ?? 0);
+  }
+
+  const asOf = records.reduce((latest, record) => {
+    const value = new Date(record.exported_at);
+    return !latest || value > latest ? value : latest;
+  }, null);
+  const dataSource = resolveDataSource({
+    latestBatch,
+    studentRejectedInLatest: studentRejected,
+    unidentifiedRejectedInLatest: unidentifiedRejected,
+    asOf,
+    now: new Date(),
+    maxAgeDays: Number(process.env.GRADUATION_SNAPSHOT_MAX_AGE_DAYS ?? DEFAULT_SNAPSHOT_MAX_AGE_DAYS),
+  });
+
+  if (!records.length) {
+    return {
+      studentId,
+      dataMode: latestBatch ? 'demo' : null,
+      curriculum: null,
+      verdict: 'no_data',
+      dataSource,
+      totals: null,
+      conditions: [],
+    };
+  }
+
+  const curriculumId = pickCurriculum(records);
+  const curriculumRecords = records.filter((record) => record.curriculum_id === curriculumId);
+  const conditions = await queryRows(
+    `SELECT display_order, condition_text
+       FROM curriculum_graduation_condition
+      WHERE curriculum_id = ?
+      ORDER BY display_order`,
+    [curriculumId],
+  );
+  const rules = await queryRows(
+    `SELECT condition_order, rule_type, params
+       FROM graduation_rule
+      WHERE curriculum_id = ?`,
+    [curriculumId],
+  );
+
+  const evaluation = evaluateGraduation({
+    conditions: conditions.map((row) => ({ order: Number(row.display_order), text: row.condition_text })),
+    rules: rules.map((row) => ({
+      condition_order: Number(row.condition_order),
+      rule_type: row.rule_type,
+      params: parseJsonValue(row.params, {}),
+    })),
+    records: curriculumRecords,
+    dataSource,
+  });
+
+  return {
+    studentId,
+    dataMode: records.some((record) => record.data_mode === 'demo') ? 'demo' : 'live',
+    curriculum: { curriculumId },
+    verdict: evaluation.verdict,
+    dataSource,
+    totals: evaluation.totals,
+    conditions: evaluation.conditions,
+  };
+}
+
+async function assignedGraduationStudentIds(username) {
+  const rows = await queryRows(
+    'SELECT student_id FROM graduation_student_assignment WHERE assignee_username = ?',
+    [username],
+  );
+  return new Set(rows.map((row) => row.student_id));
+}
+
+async function graduationForStudent(event) {
+  const actor = actorFromRequest(event);
+  if (actor.role !== 'student') return response(403, { error: 'Only students can open their own graduation check' });
+  return response(200, { data: await buildGraduationResult(actor.username) });
+}
+
+async function graduationForStudentId(event) {
+  const actor = actorFromRequest(event);
+  const studentId = String(pathParameter(event, 'studentId') ?? '').trim();
+  if (!graduationStudentIdPattern.test(studentId)) return response(400, { error: 'studentId is invalid' });
+
+  const assigned = ['instructor', 'staff'].includes(actor.role)
+    ? await assignedGraduationStudentIds(actor.username)
+    : new Set();
+  const decision = canViewGraduation(actor, studentId, assigned);
+  if (!decision.allowed) return response(403, { error: 'Forbidden' });
+
+  if (!decision.own) {
+    // Record who viewed another person's record. The log holds no grade values.
+    await writeAuditLog({
+      username: actor.username,
+      role: actor.role,
+      action: 'graduation_viewed',
+      entityType: 'student_graduation',
+      entityId: studentId,
+    });
+  }
+  return response(200, { data: await buildGraduationResult(studentId) });
+}
+
+async function listAssignedGraduationStudents(event) {
+  const actor = actorFromRequest(event);
+  if (!['instructor', 'staff'].includes(actor.role)) return response(403, { error: 'Forbidden' });
+  const rows = await queryRows(
+    `SELECT a.student_id,
+            EXISTS (SELECT 1 FROM graduation_grade_record g WHERE g.student_id = a.student_id) AS has_data
+       FROM graduation_student_assignment a
+      WHERE a.assignee_username = ?
+      ORDER BY a.student_id`,
+    [actor.username],
+  );
+  return response(200, { data: rows.map((row) => ({ studentId: row.student_id, hasData: Boolean(row.has_data) })) });
+}
+
+async function listGraduationImportBatches(event) {
+  const actor = actorFromRequest(event);
+  if (actor.role !== 'staff') return response(403, { error: 'Only staff can view import history' });
+  const rows = await queryRows(
+    `SELECT batch_id, source_key, data_mode, source_batch_id, status, exported_at, started_at, finished_at,
+            row_total, row_inserted, row_updated, row_unchanged, row_rejected, error_summary, imported_by
+       FROM graduation_import_batch
+      ORDER BY batch_id DESC
+      LIMIT 50`,
+  );
+  return response(200, { data: rows.map((row) => ({ ...row, error_summary: parseJsonValue(row.error_summary, {}) })) });
+}
+
 export const handler = async (event) => {
   try {
     const method = event.requestContext?.http?.method ?? event.httpMethod;
@@ -1626,6 +1801,10 @@ export const handler = async (event) => {
     if (route === 'GET /api/departments') return await listDepartments(event);
     if (route === 'GET /api/audit-logs') return await listAuditLogs(event);
     if (route === 'GET /api/curriculum-changes') return await listCurriculumChanges(event);
+    if (route === 'GET /api/graduation/me') return await graduationForStudent(event);
+    if (route === 'GET /api/graduation/students') return await listAssignedGraduationStudents(event);
+    if (route === 'GET /api/graduation/students/{studentId}') return await graduationForStudentId(event);
+    if (route === 'GET /api/graduation/import-batches') return await listGraduationImportBatches(event);
     return response(404, { error: 'Route not found' });
   } catch (error) {
     console.error('API request failed', error);

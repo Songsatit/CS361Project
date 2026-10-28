@@ -69,6 +69,18 @@ Parameters:
     Type: String
     AllowedValues: ['true', 'false']
     Default: 'false'
+  DemoStudent01PasswordHash:
+    Type: String
+    NoEcho: true
+    Default: ''
+  DemoStudent02PasswordHash:
+    Type: String
+    NoEcho: true
+    Default: ''
+  GraduationSnapshotMaxAgeDays:
+    Type: Number
+    Default: 30
+    Description: Days after which graduation grade data counts as stale (V4)
 
 Globals:
   Function:
@@ -94,6 +106,9 @@ Globals:
         DEMO_STAFF_PASSWORD_HASH: !Ref DemoStaffPasswordHash
         DEMO_ADMIN_PASSWORD_HASH: !Ref DemoAdminPasswordHash
         ENABLE_DEMO_LOGIN: !Ref EnableDemoLogin
+        DEMO_STUDENT_01_PASSWORD_HASH: !Ref DemoStudent01PasswordHash
+        DEMO_STUDENT_02_PASSWORD_HASH: !Ref DemoStudent02PasswordHash
+        GRADUATION_SNAPSHOT_MAX_AGE_DAYS: !Ref GraduationSnapshotMaxAgeDays
 
 Resources:
   CurriculumDbSecret:
@@ -310,6 +325,30 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/curriculum-changes/{changeId}/decision
             Method: POST
+        GetMyGraduationCheck:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/graduation/me
+            Method: GET
+        ListAssignedGraduationStudents:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/graduation/students
+            Method: GET
+        GetStudentGraduationCheck:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/graduation/students/{studentId}
+            Method: GET
+        ListGraduationImportBatches:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/graduation/import-batches
+            Method: GET
 
   AuthFunction:
     Type: AWS::Serverless::Function

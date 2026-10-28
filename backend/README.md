@@ -101,3 +101,65 @@ GET {ApiUrl}/api/study-plans/{studyPlanId}
 ```
 
 Import `postman/CS361Project-API.postman_collection.json` into Postman and set `baseUrl`, `courseCode`, and `curriculumId` to exercise the endpoints. The collection includes basic status and response-shape checks.
+
+## V4: ตรวจสอบการสำเร็จการศึกษา (Demo เท่านั้น)
+
+ปัจจุบัน V4 ประเมินผลการเรียน **สังเคราะห์สำหรับ Demo เท่านั้น** ใน repository ไม่มีข้อกำหนดการส่งออกเกรดจากสำนักทะเบียนหรือการเชื่อมต่อกับทะเบียนจริง โปรดอ่าน[สัญญาข้อมูลฉบับร่าง](../docs/v4-data-contract.md)ก่อนเตรียม fixture และอ่าน[คู่มือ migration สำหรับ RDS](../docs/v4-rds-migration-runbook.md)ก่อนดำเนินการกับฐานข้อมูล สถานะ migration ที่ apply แล้วบน RDS ซึ่ง deploy อยู่ยังไม่ทราบ ห้ามใช้คำสั่งเหล่านี้กับ RDS
+
+### ลำดับ deploy เมื่อเตรียมพร้อมแล้ว
+
+ไฟล์ `.mjs` ไม่ได้ deploy แยกทีละไฟล์: `src/api.mjs` และโมดูลที่ import เช่น `src/graduation/evaluate.mjs` จะถูกรวมเป็น Lambda package ด้วย AWS SAM ส่วน `src/graduation-import.mjs` เป็น CLI สำหรับนำเข้า Demo ไม่ใช่ Lambda route และห้ามชี้ไป RDS production ส่วน frontend เป็นการ deploy แยกผ่าน Amplify ตาม branch ที่ตั้งค่าไว้
+
+ก่อน deploy V4 ไปยัง environment ที่ใช้จริง ต้องทำตามลำดับนี้:
+
+1. ทดสอบ unit tests, CSV dry-run และ `sam validate --lint`/`sam build` ในเครื่อง
+2. ให้ผู้ดูแลฐานข้อมูลตรวจสถานะ migration `001`–`009` บน RDS แบบอ่านอย่างเดียว เทียบ schema และสำรอง/ยืนยันการกู้คืนก่อนวางแผนเปลี่ยนฐานข้อมูล หากสถานะใดไม่ทราบหรือ apply ไปบางส่วน ให้หยุดและตรวจสอบก่อน
+3. ทบทวนและอนุมัติ migration `010_graduation_verification.sql` แล้วให้ผู้ดูแล apply เฉพาะ migration ที่ตรวจแล้วว่ายังไม่เคย apply ตามแผนที่อนุมัติ ห้ามรัน migration ทั้งชุดโดยเดา และห้ามใช้ `fixtures/v4-demo/seed-demo.sql` บน RDS
+4. เมื่อ schema พร้อมแล้ว จึง deploy Lambda ด้วย `sam build` และ `sam deploy` จาก `backend/` โดยใช้ stack parameters ของ environment ที่อนุมัติ การ deploy นี้จะส่ง routes V4 ไปกับ Lambda เดิม
+5. deploy frontend ผ่าน Amplify เฉพาะ branch ที่เชื่อมกับ environment นั้น จากนั้นตรวจ API และหน้าจอด้วยบัญชี/ข้อมูล Demo ที่ได้รับอนุมัติ
+
+คำสั่ง deploy ที่อยู่ในส่วนทั่วไปด้านบนเป็นตัวอย่างการ deploy stack และอาจแก้ทรัพยากร AWS จริง ห้ามรันจนกว่าจะยืนยัน account/region/stack, สถานะ migration, backup และแผน deploy ครบถ้วนแล้ว
+
+### ฐานข้อมูลชั่วคราวในเครื่อง
+
+`test:db` จะปฏิเสธ host ที่ไม่ใช่ loopback และฐานข้อมูลที่มีตารางอยู่แล้ว อีกทั้งไม่ลบข้อมูล โดยจะสร้างฐานข้อมูลในเครื่องชื่อ `curriculum` ใช้ base-schema stub สำหรับทดสอบ จากนั้น apply migration 001–010 ตามลำดับ โหลด seed สังเคราะห์ V4 แล้วทดสอบ importer และ API ให้ใช้ credential MySQL ชั่วคราวในเครื่องที่มีสิทธิ์สร้างฐานข้อมูลเท่านั้น base-schema stub ใช้เป็น fixture สำหรับทดสอบ migration และไม่ได้แทน schema ของ RDS production
+
+รันจากโฟลเดอร์นี้:
+
+```bash
+npm test
+V4_TEST_DB_HOST=127.0.0.1 V4_TEST_DB_PORT=3306 V4_TEST_DB_USER=root V4_TEST_DB_PASSWORD=... npm run test:db
+```
+
+ตัวอย่างสำหรับ PowerShell:
+
+```powershell
+$env:V4_TEST_DB_HOST = "127.0.0.1"
+$env:V4_TEST_DB_PORT = "3306"
+$env:V4_TEST_DB_USER = "root"
+$env:V4_TEST_DB_PASSWORD = "your-local-scratch-password"
+npm run test:db
+Remove-Item Env:V4_TEST_DB_HOST, Env:V4_TEST_DB_PORT, Env:V4_TEST_DB_USER, Env:V4_TEST_DB_PASSWORD
+```
+
+หากฐานข้อมูล `curriculum` มีอยู่แล้วและมีตารางใด ๆ การทดสอบจะหยุดก่อน apply migration ห้ามกำหนดตัวแปรทดสอบให้ชี้ไป AWS, ฐานข้อมูลพัฒนาที่ใช้ร่วมกัน หรือ production
+
+### นำเข้า CSV สำหรับ Demo
+
+CLI ไม่มีโหมดใช้งานจริง ตัวแปรฐานข้อมูลต้องชี้ไปยังฐานข้อมูลชั่วคราวในเครื่องที่แยกไว้ และต้องเตรียมหลักสูตร Demo สังเคราะห์ที่ยังไม่เปิดใช้งานจาก `fixtures/v4-demo/seed-demo.sql`
+
+```bash
+node src/graduation-import.mjs --file fixtures/v4-demo/batch-001-demo-success.csv --mode demo --dry-run
+node src/graduation-import.mjs --file fixtures/v4-demo/batch-001-demo-success.csv --mode demo
+```
+
+### API สำหรับอ่านข้อมูล V4
+
+| Method และ path | สิทธิ์ |
+| --- | --- |
+| `GET /api/graduation/me` | เฉพาะนักศึกษา: อ่านผลของบัญชีที่เข้าสู่ระบบอยู่ |
+| `GET /api/graduation/students` | อาจารย์/เจ้าหน้าที่: แสดงรายชื่อนักศึกษาสังเคราะห์หรือนักศึกษาที่ได้รับมอบหมาย |
+| `GET /api/graduation/students/{studentId}` | นักศึกษาอ่านผลของตนเองได้ หรืออาจารย์/เจ้าหน้าที่อ่านได้เมื่อได้รับมอบหมาย ผู้ดูแลหลักสูตรไม่มีสิทธิ์ |
+| `GET /api/graduation/import-batches` | เฉพาะเจ้าหน้าที่: ดูประวัติการนำเข้าแบบสรุป ไม่มีแถวผลการเรียนหรือรหัสนักศึกษา |
+
+ชื่อบัญชีนักศึกษา Demo คือ `demostudent01` และ `demostudent02` หากต้องการสาธิตในเครื่องโดยตั้งใจ ให้กำหนดค่า `DemoStudent01PasswordHash` และ `DemoStudent02PasswordHash` เป็น hash แบบ scrypt repository นี้ไม่มีรหัสผ่านให้ รหัสนักศึกษาที่ API ส่งกลับเป็นค่าจำลองรูปแบบ `DEMO*` ปิดการเข้าสู่ระบบ Demo ในระบบที่ใช้ร่วมกันหรือ production
