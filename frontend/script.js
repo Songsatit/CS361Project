@@ -980,11 +980,18 @@ async function loadApiData() {
           PROGRAMS.push({
             id: `api-${curriculum.curriculum_id}`,
             curriculumId: curriculum.curriculum_id,
+<<<<<<< HEAD
             code: curriculum.title_th ?? curriculum.curriculum_id,
             nameEn: curriculum.title_en ?? curriculum.curriculum_id,
             revisionYear: Number(curriculum.academic_year),
             totalCredits: curriculum.total_credits ?? null,
             duration: curriculum.duration ?? "หลักสูตร",
+=======
+            code: curriculum.title_th || curriculum.curriculum_id,
+            nameEn: curriculum.title_en || "",
+            revisionYear: Number(curriculum.academic_year),
+            totalCredits: Number(curriculum.total_credits) || 0,
+>>>>>>> 1753813 (fix: display and open newly created curricula)
             plan: [],
             studyPlans: []
           });
@@ -1288,7 +1295,7 @@ function programCard(p) {
           </span>
 
           <span>
-            ${courseCode(`${latest.totalCredits ?? "—"} นก.`)}
+            ${courseCode(`${Number(latest.totalCredits) > 0 ? latest.totalCredits : "—"} นก.`)}
           </span>
 
           ${versions.length > 1 ? `
@@ -1630,11 +1637,18 @@ function renderCurriculumManagement() {
       return {
       id: `api-${curriculum.curriculum_id}`,
       curriculumId: curriculum.curriculum_id,
+<<<<<<< HEAD
       code: curriculum.title_th ?? curriculum.curriculum_id,
       nameEn: curriculum.title_en ?? curriculum.curriculum_id,
       revisionYear: Number(curriculum.academic_year),
       totalCredits: curriculum.total_credits ?? null,
       duration: curriculum.duration ?? "หลักสูตร",
+=======
+      code: curriculum.title_th || curriculum.curriculum_id,
+      nameEn: curriculum.title_en || "",
+      revisionYear: Number(curriculum.academic_year),
+      totalCredits: Number(curriculum.total_credits) || 0,
+>>>>>>> 1753813 (fix: display and open newly created curricula)
       plan: [],
       studyPlans: []
     };
