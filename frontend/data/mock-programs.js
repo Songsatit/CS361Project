@@ -405,7 +405,6 @@ const state = {
 
   homeQuery: "",
   user: null,
-  token: null,
   studentProfile: null,
   studentProfileLoading: false,
   studentProfileAttempted: false,
@@ -450,7 +449,10 @@ const state = {
   apiError: ""
 };
 
-const API_BASE = "https://qowe6iixr6.execute-api.us-east-1.amazonaws.com";
+// API is reached same-origin through the Amplify /api/* rewrite, so the base is empty
+// and every call becomes a relative /api/... path. This lets the HttpOnly auth cookie
+// (scoped to the frontend origin) travel with each request.
+const API_BASE = "";
 const CURRICULUM_ID = "BSC-CS-2566";
 const COURSE_CATALOG_API = "https://script.google.com/a/macros/dome.tu.ac.th/s/AKfycbw75ktHQ9wrWMNcMBq1rd0OnNCi3OOJwwNS0kTT5OQDYGiBA1Up7B-Ufbhtu603HZcZ/exec";
 const courseDetailRequests = new Map();

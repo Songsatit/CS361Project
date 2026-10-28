@@ -53,11 +53,21 @@ Script จะดึง Faculty, Department และ Course Catalog แล้ว
 | `GET /api/faculties` | List faculties. |
 | `GET /api/departments` | List departments. Optional `facultyId` filters by faculty. |
 | `GET /api/audit-logs` | List recent audit logs. Optional `limit` (1–500, default 100). |
-| `POST /api/auth/login` | Authenticate a TU account through the TU Authentication API. |
+| `POST /api/auth/login` | Authenticate a TU account through the TU Authentication API. On success the access token is set as an `HttpOnly; Secure; SameSite=Lax` cookie (and still returned in the body during the transition). |
+| `POST /api/auth/logout` | Clear the auth cookie. Requires the `X-CS361-CSRF: 1` header. |
+| `GET /api/auth/me` | Return the current session user from the cookie (or Bearer during the transition), or 401 when not signed in. |
 | `GET /api/curricula/{curriculumId}/workflow` | Read the curriculum workflow status. |
 | `POST /api/curricula/{curriculumId}/workflow` | Demo teacher/staff workflow action (`submit`, `approve`, `reject`, `reset`) and write an audit log. |
 
 The workflow endpoint currently uses the V3 mock identity (`username` and `role` in the JSON body, or `x-user`/`x-role` headers). It is for the demo only; production should validate the TU Auth token in the backend before allowing mutations.
+
+### Authentication cookie and CSRF
+
+The access token is delivered as an `HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=900` cookie, so browser JavaScript never reads it. `actorFromRequest` reads the token from this cookie first and falls back to an `Authorization: Bearer` header during the transition. The frontend sends `credentials: "include"` on every API call.
+
+Every state-changing request (`POST`, `PUT`, `PATCH`, `DELETE`) must carry the header `X-CS361-CSRF: 1`; the backend returns `403` without it. `POST /api/auth/login` is exempt because it has no cookie yet. CORS responses include `Access-Control-Allow-Credentials: true`, a specific origin (never `*`), and the CSRF header name in `Access-Control-Allow-Headers`.
+
+The cookie uses `SameSite=Lax` rather than `None` because the frontend reaches the API same-origin through an Amplify `/api/*` rewrite (see `docs/amplify-api-rewrite.md`). Set the `FRONTEND_ORIGIN` environment variable to the exact frontend origin on the Lambda.
 
 Set `TuApplicationKey` during deployment. The key is sent only from Lambda to TU and is never placed in the frontend.
 

@@ -17,16 +17,35 @@ const COURSES = window.MOCK_COURSES;
 const PROGRAMS = window.MOCK_PROGRAMS;
 
 const nativeFetch = window.fetch.bind(window);
+
+// A request targets our API when its path starts with /api. With API_BASE now empty the
+// calls are same-origin (served through the Amplify /api/* rewrite), so this matches the
+// relative URLs the app builds while ignoring external URLs such as the course catalog.
+function isApiUrl(url) {
+  if (url.startsWith("/api")) return true;
+  if (API_BASE && url.startsWith(`${API_BASE}/api`)) return true;
+  return false;
+}
+
 window.fetch = async (input, init = {}) => {
   const url = typeof input === "string" ? input : input?.url ?? "";
   const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined));
-  const isApiRequest = url.startsWith(API_BASE);
-  const hasToken = typeof state !== "undefined" && state.token && isApiRequest && !url.endsWith("/api/auth/login");
-  if (hasToken && !headers.has("Authorization")) {
-    headers.set("Authorization", `Bearer ${state.token}`);
+  const isApiRequest = isApiUrl(url);
+  const method = String(init.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+  const isLogin = url.endsWith("/api/auth/login");
+
+  const requestInit = { ...init, headers };
+  if (isApiRequest) {
+    // Send the HttpOnly auth cookie with every API call.
+    requestInit.credentials = "include";
+    // CSRF: the backend requires this header on state-changing requests. Login is exempt.
+    if (!isLogin && ["POST", "PUT", "PATCH", "DELETE"].includes(method) && !headers.has("X-CS361-CSRF")) {
+      headers.set("X-CS361-CSRF", "1");
+    }
   }
-  const response = await nativeFetch(input, { ...init, headers });
-  if (response.status === 401 && url.startsWith(API_BASE) && !url.endsWith("/api/auth/login")) {
+
+  const response = await nativeFetch(input, requestInit);
+  if (response.status === 401 && isApiRequest && !isLogin) {
     clearAuthSession();
   }
   return response;
@@ -166,16 +185,22 @@ async function loadStudentProfile() {
   }
 }
 
-function restoreMockUser() {
+// Restores the session from the HttpOnly cookie by asking the backend who we are.
+// The token is never visible to JavaScript, so storage is no longer used.
+async function restoreSession() {
   try {
-    const saved = localStorage.getItem("cs361-v3-user");
-    state.token = localStorage.getItem("cs361-v3-token");
-    state.user = saved ? JSON.parse(saved) : null;
-    if (!state.token) state.user = null;
-    if (state.user && ["admin", "curriculumadmin"].includes(state.user.role)) {
-      state.user.role = "curriculum_admin";
-      state.user.roleLabel = "ผู้ดูแลข้อมูลหลักสูตร";
+    const response = await fetch(`${API_BASE}/api/auth/me`);
+    if (!response.ok) {
+      state.user = null;
+      return;
     }
+    const payload = await response.json().catch(() => ({}));
+    const user = payload.data?.user ?? null;
+    if (user && ["admin", "curriculumadmin"].includes(user.role)) {
+      user.role = "curriculum_admin";
+      user.roleLabel = "ผู้ดูแลข้อมูลหลักสูตร";
+    }
+    state.user = user;
   } catch {
     state.user = null;
   }
@@ -183,7 +208,6 @@ function restoreMockUser() {
 
 function clearAuthSession() {
   state.user = null;
-  state.token = null;
   state.view = "home";
   state.draftRequests = [];
   state.draftRequestsLoaded = false;
@@ -213,31 +237,25 @@ function clearAuthSession() {
   state.editorProgramLoaded = false;
   state.editorLoading = false;
   state.accountMenuOpen = false;
-  localStorage.removeItem("cs361-v3-user");
-  localStorage.removeItem("cs361-v3-token");
   render();
   void loadApiData();
 }
 
-function tokenExpired(token = state.token) {
-  if (!token) return true;
+// Clears the server cookie, then resets local state. Used by the logout button.
+async function logout() {
   try {
-    const payload = JSON.parse(atob(token.split(".")[1] ?? ""));
-    return !payload.exp || payload.exp * 1000 <= Date.now();
+    await fetch(`${API_BASE}/api/auth/logout`, { method: "POST" });
   } catch {
-    return true;
+    // Ignore network errors: the local session is cleared regardless.
   }
-}
-
-function logout() {
   clearAuthSession();
 }
 
+// Headers for API requests that send a JSON body. Auth travels in the HttpOnly cookie,
+// and the CSRF header is added by the fetch wrapper for state-changing requests.
 function draftApiHeaders() {
-  if (state.token && tokenExpired()) clearAuthSession();
   return {
-    "Content-Type": "application/json",
-    ...(state.token ? { Authorization: `Bearer ${state.token}` } : {})
+    "Content-Type": "application/json"
   };
 }
 
@@ -4420,10 +4438,8 @@ function bind() {
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok || !payload.user) throw new Error(payload.error ?? "Username หรือ Password ไม่ถูกต้อง");
+        // The token is set as an HttpOnly cookie by the backend; JS never stores it.
         state.user = payload.user;
-        state.token = payload.token ?? null;
-        localStorage.setItem("cs361-v3-user", JSON.stringify(state.user));
-        if (state.token) localStorage.setItem("cs361-v3-token", state.token);
         state.loginOpen = false;
         state.loginError = "";
         await loadApiData();
@@ -5596,7 +5612,7 @@ window.addEventListener("popstate", event => {
 });
 
 async function bootstrap() {
-  restoreMockUser();
+  await restoreSession();
   const pageState = history.state;
   if (pageState?.view) {
     state.view = pageState.view;
