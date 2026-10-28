@@ -567,7 +567,8 @@ async function listStudyPlans(event) {
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const data = await queryRows(
-    `SELECT sp.study_plan_id, sp.curriculum_id, sp.pathway_id, sp.plan_name, sp.active
+    `SELECT sp.study_plan_id, sp.curriculum_id, sp.pathway_id, sp.plan_name,
+            sp.plan_name_th, sp.plan_name_en, sp.active
        FROM study_plan sp
        JOIN curriculum cur ON cur.curriculum_id = sp.curriculum_id AND cur.active = 1
        ${where}
@@ -581,7 +582,8 @@ async function getStudyPlan(event) {
   const studyPlanId = event.queryStringParameters?.studyPlanId ?? pathParameter(event, 'studyPlanId');
   if (!studyPlanId) return response(400, { error: 'studyPlanId is required' });
   const plans = await queryRows(
-    `SELECT sp.study_plan_id, sp.curriculum_id, sp.pathway_id, sp.plan_name, sp.active
+    `SELECT sp.study_plan_id, sp.curriculum_id, sp.pathway_id, sp.plan_name,
+            sp.plan_name_th, sp.plan_name_en, sp.active
        FROM study_plan sp
        JOIN curriculum cur ON cur.curriculum_id = sp.curriculum_id AND cur.active = 1
       WHERE sp.study_plan_id = ?`,
@@ -944,18 +946,23 @@ async function decideDraftChangeRequest(event) {
       const value = createItem?.new_value ?? {};
       const curriculumId = String(value.curriculumId ?? request.curriculum_id ?? '').trim();
       const academicYear = Number(value.academicYear);
-      const title = String(value.title ?? '').trim() || curriculumId;
+      const titleTh = String(value.titleTh ?? value.title ?? '').trim() || curriculumId;
+      const titleEn = String(value.titleEn ?? '').trim() || null;
       if (!curriculumId || !Number.isInteger(academicYear)) throw new Error('New curriculum details are incomplete');
       await connection.execute(
         `INSERT INTO curriculum (curriculum_id, title_th, academic_year, active)
          VALUES (?, ?, ?, 1)
          ON DUPLICATE KEY UPDATE title_th = VALUES(title_th), academic_year = VALUES(academic_year), active = 1`,
-        [curriculumId, title, academicYear],
+        [curriculumId, titleTh, academicYear],
+      );
+      await connection.execute(
+        'UPDATE curriculum SET title_en = ? WHERE curriculum_id = ?',
+        [titleEn, curriculumId],
       );
       const studyPlanId = `${curriculumId}-MAIN`;
       await connection.execute(
-        `INSERT INTO study_plan (study_plan_id, curriculum_id, plan_name, active)
-         VALUES (?, ?, 'แผนหลัก', 1)
+        `INSERT INTO study_plan (study_plan_id, curriculum_id, plan_name, plan_name_th, plan_name_en, active)
+         VALUES (?, ?, 'แผนหลัก', 'แผนหลัก', 'Main Plan', 1)
          ON DUPLICATE KEY UPDATE active = 1`,
         [studyPlanId, curriculumId],
       );
@@ -1188,7 +1195,8 @@ async function getActivePlanForDraft(event) {
     params.push(Number.parseInt(query.term, 10));
   }
   const plans = await queryRows(
-    `SELECT sp.study_plan_id, sp.curriculum_id, sp.pathway_id, sp.plan_name, sp.active
+    `SELECT sp.study_plan_id, sp.curriculum_id, sp.pathway_id, sp.plan_name,
+            sp.plan_name_th, sp.plan_name_en, sp.active
        FROM study_plan sp
       WHERE sp.curriculum_id = ? AND sp.active = 1
       ORDER BY sp.study_plan_id`,
@@ -1695,7 +1703,7 @@ async function buildGraduationResult(studentId) {
   });
 
   const [studyPlan = null] = await queryRows(
-    `SELECT study_plan_id, plan_name, pathway_id
+    `SELECT study_plan_id, plan_name, plan_name_th, plan_name_en, pathway_id
        FROM study_plan
       WHERE curriculum_id = ? AND active = 1
       ORDER BY pathway_id IS NOT NULL, study_plan_id
