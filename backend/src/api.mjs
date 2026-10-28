@@ -13,6 +13,34 @@ const allowedRoles = new Set(['student', 'instructor', 'curriculum_admin', 'staf
 const jwtIssuer = 'cs361-curriculum-api';
 const jwtAudience = 'cs361-frontend';
 
+// Name of the HttpOnly cookie that carries the access token.
+const AUTH_COOKIE_NAME = 'token';
+// Access token lifetime in seconds. Must match signAccessToken's expiresIn (15m).
+const AUTH_COOKIE_MAX_AGE = 15 * 60;
+// Custom header the frontend sends on every state-changing request. Because a cross-site
+// attacker cannot set a custom header on a simple form/img request, requiring it blocks CSRF.
+const CSRF_HEADER = 'x-cs361-csrf';
+
+// SameSite=Lax is safe here: the frontend is served same-origin with the API through the
+// Amplify /api/* rewrite, so the cookie travels with same-site requests. Secure keeps it
+// HTTPS-only; HttpOnly hides it from JavaScript so XSS cannot read the token.
+export function authCookie(token, maxAgeSeconds) {
+  return `${AUTH_COOKIE_NAME}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}`;
+}
+export { AUTH_COOKIE_MAX_AGE };
+
+// Reads the access token from the request cookies, or null when it is absent.
+function cookieToken(normalizedHeaders) {
+  const raw = normalizedHeaders.cookie;
+  if (!raw) return null;
+  for (const part of String(raw).split(';')) {
+    const eq = part.indexOf('=');
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() === AUTH_COOKIE_NAME) return part.slice(eq + 1).trim();
+  }
+  return null;
+}
+
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
   port: Number(process.env.DB_PORT ?? 3306),
@@ -30,8 +58,9 @@ const response = (statusCode, body, extraHeaders = {}) => ({
   headers: {
     'content-type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': process.env.FRONTEND_ORIGIN ?? 'https://main.d3dm5h9pinlgfm.amplifyapp.com',
-    'Access-Control-Allow-Headers': 'content-type,authorization',
+    'Access-Control-Allow-Headers': 'content-type,authorization,x-cs361-csrf',
     'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+    'Access-Control-Allow-Credentials': 'true',
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'strict-origin-when-cross-origin',
     'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
@@ -198,7 +227,8 @@ async function tuLogin(event) {
       await resetLoginAttempts(event, username);
       const token = signAccessToken(demoUser);
       await safeLoginAudit({ username, action: 'login_success', event, newValue: { role: demoUser.role } });
-      return response(200, { token, user: demoUser });
+      // Token is set as an HttpOnly cookie. It stays in the body too for the transition.
+      return response(200, { token, user: demoUser }, { 'Set-Cookie': authCookie(token, AUTH_COOKIE_MAX_AGE) });
     } catch (error) {
       console.error('JWT signing failed for demo login', error);
       return response(503, { error: 'JWT authentication is not configured' });
@@ -246,7 +276,8 @@ async function tuLogin(event) {
     await resetLoginAttempts(event, username);
     const token = signAccessToken(user);
     await safeLoginAudit({ username, action: 'login_success', event, newValue: { role: user.role } });
-    return response(200, { token, user });
+    // Token is set as an HttpOnly cookie. It stays in the body too for the transition.
+    return response(200, { token, user }, { 'Set-Cookie': authCookie(token, AUTH_COOKIE_MAX_AGE) });
   } catch (error) {
     console.error('JWT signing failed', error);
     return response(503, { error: 'JWT authentication is not configured' });
@@ -305,6 +336,38 @@ export const authHandler = async (event) => {
     return response(502, { error: 'Unable to reach TU Authentication API' });
   }
 };
+
+// Clears the auth cookie. Returns 200 regardless of whether a valid session existed.
+function logout() {
+  return response(200, { data: { loggedOut: true } }, { 'Set-Cookie': authCookie('', 0) });
+}
+
+const roleLabels = {
+  student: 'นักศึกษา',
+  instructor: 'อาจารย์ผู้สอน',
+  staff: 'เจ้าหน้าที่',
+  curriculum_admin: 'ผู้ดูแลข้อมูลหลักสูตร',
+};
+
+// Reports the current session. Used by the frontend on page load instead of reading
+// the token from storage, since the HttpOnly cookie is invisible to JavaScript. The
+// shape mirrors the login user object, filled from the JWT claims available after a
+// refresh (TU-only fields such as faculty are not in the token and come back empty).
+function me(event) {
+  const actor = actorFromRequest(event);
+  if (!actor.authenticated) return response(401, { error: 'Unauthorized' });
+  return response(200, {
+    data: {
+      user: {
+        username: actor.username,
+        role: actor.role,
+        roleLabel: roleLabels[actor.role] ?? '',
+        displayNameTh: actor.name ?? '',
+        displayNameEn: '',
+      },
+    },
+  });
+}
 
 export async function writeAuditLog({
   username,
@@ -681,11 +744,14 @@ function actorFromRequest(event, body = {}) {
     Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]),
   );
 
+  // Prefer the HttpOnly cookie. Bearer stays as a fallback during the transition so
+  // existing clients keep working until they switch to the cookie flow.
   const authorization = String(normalized.authorization ?? '');
   const bearer = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
-  if (bearer && process.env.JWT_SECRET) {
+  const token = cookieToken(normalized) ?? bearer;
+  if (token && process.env.JWT_SECRET) {
     try {
-      const claims = jwt.verify(bearer, process.env.JWT_SECRET, {
+      const claims = jwt.verify(token, process.env.JWT_SECRET, {
         algorithms: ['HS256'],
         issuer: jwtIssuer,
         audience: jwtAudience,
@@ -695,6 +761,7 @@ function actorFromRequest(event, body = {}) {
         return {
           username: String(claims.sub ?? '').slice(0, 100),
           role: String(claims.role ?? '').slice(0, 30),
+          name: String(claims.name ?? '').slice(0, 200),
           authenticated: true,
         };
       }
@@ -1958,6 +2025,20 @@ export const handler = async (event) => {
 
     if (route === 'POST /api/auth/login') return await tuLogin(event);
     if (method === 'OPTIONS') return response(204, null);
+
+    // CSRF defense for the cookie flow: every state-changing request must carry the custom
+    // header. Login is exempt (it has no cookie yet and sets one). A cross-site attacker
+    // cannot add this header on a simple request, so its presence proves a same-origin caller.
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+      const csrfHeader = Object.fromEntries(
+        Object.entries(event.headers ?? {}).map(([key, value]) => [key.toLowerCase(), value]),
+      )[CSRF_HEADER];
+      if (String(csrfHeader ?? '') !== '1') return response(403, { error: 'Missing CSRF header' });
+    }
+
+    if (route === 'POST /api/auth/logout') return logout();
+    if (route === 'GET /api/auth/me') return me(event);
+
     const publicRoutes = new Set([
       'GET /api/courses',
       'GET /api/curricula',
