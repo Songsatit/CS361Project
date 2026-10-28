@@ -1126,11 +1126,11 @@ function programCard(p) {
 
           <span>
             ${icon("graduation-cap", 14)}
-            ${esc(latest.duration)}
+            ${esc(latest.duration ?? "หลักสูตร")}
           </span>
 
           <span>
-            ${courseCode(latest.totalCredits + " นก.")}
+            ${courseCode(`${latest.totalCredits ?? "—"} นก.`)}
           </span>
 
           ${versions.length > 1 ? `
