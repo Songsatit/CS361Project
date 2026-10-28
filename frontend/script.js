@@ -324,7 +324,10 @@ function renderChangeRequestDetail(request) {
   if (!request) return `<p class="audit-empty">เลือกคำขอเพื่อดูรายละเอียดก่อน–หลัง</p>`;
   const detail = request.request ?? request;
   const items = request.items ?? [];
-  const canDecide = canReviewCurriculumRequests() && detail.status === "pending";
+  const isRequestOwner = detail.created_by === state.user?.username;
+  const canDecide = canReviewCurriculumRequests()
+    && detail.status === "pending"
+    && !isRequestOwner;
   const canEditDraft = detail.status === "draft"
     && detail.created_by === state.user?.username;
   const groupedItems = items.reduce((groups, item) => {
@@ -340,7 +343,7 @@ function renderChangeRequestDetail(request) {
       ${detail.note ? `<p class="change-request-note">${esc(detail.note)}</p>` : ""}
       <div class="change-request-items">${items.length ? [...groupedItems.entries()].map(([group, groupItems], groupIndex) => `<details class="change-request-group" ${groupIndex === 0 ? "open" : ""}><summary><strong>${esc(group)}</strong><span>${groupItems.length} รายการ</span></summary><div class="change-request-group-items">${groupItems.map((item, index) => `<article class="change-request-item"><strong>${index + 1}. ${esc(changeRequestItemLabel(item))}</strong>${changeRequestReadableDiff(item)}</article>`).join("")}</div></details>`).join("") : `<p class="audit-empty">คำขอนี้ยังไม่มีรายการเปลี่ยนแปลง</p>`}</div>
       ${detail.review_note ? `<div class="change-request-review-note"><strong>หมายเหตุผู้ตรวจ</strong><p>${esc(detail.review_note)}</p></div>` : ""}
-      ${canEditDraft || canDecide ? `<div class="change-request-decision">${canEditDraft ? `<button type="button" class="workflow-action workflow-action--muted" data-request-edit="${esc(detail.id)}">แก้ไขฉบับร่าง</button><button type="button" class="workflow-action workflow-action--primary" data-request-submit="${esc(detail.id)}">ส่งขออนุมัติ</button>` : ""}${canDecide ? `<button type="button" class="workflow-action workflow-action--primary" data-request-decision="approve" data-request-id="${esc(detail.id)}">อนุมัติคำขอ</button><button type="button" class="workflow-action workflow-action--danger" data-request-decision="reject" data-request-id="${esc(detail.id)}">ปฏิเสธคำขอ</button>` : ""}</div>` : ""}
+      ${canEditDraft || canDecide || (isRequestOwner && detail.status === "pending") ? `<div class="change-request-decision">${canEditDraft ? `<button type="button" class="workflow-action workflow-action--muted" data-request-edit="${esc(detail.id)}">แก้ไขฉบับร่าง</button><button type="button" class="workflow-action workflow-action--primary" data-request-submit="${esc(detail.id)}">ส่งขออนุมัติ</button>` : ""}${canDecide ? `<button type="button" class="workflow-action workflow-action--primary" data-request-decision="approve" data-request-id="${esc(detail.id)}">อนุมัติคำขอ</button><button type="button" class="workflow-action workflow-action--danger" data-request-decision="reject" data-request-id="${esc(detail.id)}">ปฏิเสธคำขอ</button>` : ""}${isRequestOwner && detail.status === "pending" ? `<p class="change-request-owner-notice">คำขอนี้ส่งโดยคุณ ให้ผู้ตรวจอีกคนพิจารณา</p>` : ""}</div>` : ""}
     </section>
   `;
 }
@@ -563,7 +566,7 @@ function renderWorkflowPage() {
             <thead><tr><th>หลักสูตร</th><th>การแก้ไข</th><th>สถานะ</th><th>การดำเนินการ</th></tr></thead>
             <tbody>${pendingChanges.map(change => `
               <tr><td>${esc(change.curriculum_id)}</td><td class="change-diff-cell">${changeDescription(change)}</td><td>${esc(change.status)}</td><td>
-                <button class="link-btn" data-change-action="approve" data-change-id="${esc(change.change_id)}">อนุมัติ</button><button class="link-btn" data-change-action="reject" data-change-id="${esc(change.change_id)}">ปฏิเสธ</button>
+                ${change.requested_by === state.user?.username ? `<span class="change-request-owner-notice">คำขอนี้ส่งโดยคุณ ให้ผู้ตรวจอีกคนพิจารณา</span>` : `<button class="link-btn" data-change-action="approve" data-change-id="${esc(change.change_id)}">อนุมัติ</button><button class="link-btn" data-change-action="reject" data-change-id="${esc(change.change_id)}">ปฏิเสธ</button>`}
               </td></tr>`).join("")}${pendingDrafts.map(draft => `
               <tr><td>${esc(draft.curriculum_id ?? draft.source_curriculum_id ?? "หลักสูตรใหม่")}</td><td class="change-diff-cell"><strong>${esc(draft.title)}</strong><small>${esc(draft.note ?? "ฉบับร่างจากระบบใหม่")}</small></td><td>${esc(draft.status)}</td><td>รอตรวจสอบ</td></tr>`).join("")}</tbody>
           </table></div>` : `<p class="audit-empty">ยังไม่มีรายการแก้ไขที่รอตรวจสอบ</p>`}
@@ -3416,23 +3419,6 @@ function shell(content) {
     ["courses", "ค้นหารายวิชา"],
     ["faq", "คำถามที่พบบ่อย"]
   ];
-  if (canManageCurricula()) {
-    nav.push(["curriculum-management", "แก้ไขหลักสูตร"]);
-    nav.push(["course-editor", "แก้ไขรายวิชา"]);
-    nav.push(["my-change-requests", "คำขอของฉัน"]);
-  }
-  if (canReviewCurriculumRequests()) {
-    nav.push(["review-requests", "ตรวจคำขอ"]);
-  }
-  if (canAccessCurriculumManagement()) {
-    nav.push(["workflow", "ตรวจสอบข้อมูลหลักสูตร", state.programId || PROGRAMS[0].id]);
-  }
-  if (["student", "instructor", "staff"].includes(state.user?.role)) {
-    nav.push(["graduation", "ตรวจสอบการจบ"]);
-  }
-  if (canAccessStudentProfile()) {
-    nav.push(["profile", "ข้อมูลส่วนตัว"]);
-  }
 
 
   return `
