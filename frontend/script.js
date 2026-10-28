@@ -32,6 +32,90 @@ window.fetch = async (input, init = {}) => {
   return response;
 };
 
+const API_GET_CACHE_TTL_MS = 5 * 60 * 1000;
+const API_GET_RETRY_DELAYS_MS = [2000, 5000, 10000];
+const API_GET_CONCURRENCY = 3;
+const apiGetCache = new Map();
+const apiGetInFlight = new Map();
+const apiGetQueue = [];
+let apiGetActive = 0;
+
+function apiGetCacheKey(url) {
+  return `${state.user?.username ?? "guest"}:${state.user?.role ?? "guest"}:${url}`;
+}
+
+function apiRetryDelay(response, retryIndex) {
+  const retryAfter = Number(response.headers.get("Retry-After"));
+  if (Number.isFinite(retryAfter) && retryAfter >= 0) return retryAfter * 1000;
+  return API_GET_RETRY_DELAYS_MS[retryIndex] ?? API_GET_RETRY_DELAYS_MS[2];
+}
+
+function waitForApiRetry(delayMs) {
+  return new Promise(resolve => window.setTimeout(resolve, delayMs));
+}
+
+function drainApiGetQueue() {
+  while (apiGetActive < API_GET_CONCURRENCY && apiGetQueue.length) {
+    const task = apiGetQueue.shift();
+    apiGetActive += 1;
+    Promise.resolve()
+      .then(task.run)
+      .then(task.resolve, task.reject)
+      .finally(() => {
+        apiGetActive -= 1;
+        drainApiGetQueue();
+      });
+  }
+}
+
+function enqueueApiGet(run) {
+  return new Promise((resolve, reject) => {
+    apiGetQueue.push({ run, resolve, reject });
+    drainApiGetQueue();
+  });
+}
+
+function clearApiGetCache(predicate = () => true) {
+  for (const key of apiGetCache.keys()) {
+    if (predicate(key)) apiGetCache.delete(key);
+  }
+}
+
+async function apiGet(url, { cache = true, signal, headers } = {}) {
+  const key = apiGetCacheKey(url);
+  const cached = cache ? apiGetCache.get(key) : null;
+  if (cached && Date.now() - cached.fetchedAt < API_GET_CACHE_TTL_MS) {
+    return { ...cached, fromCache: true };
+  }
+  if (apiGetInFlight.has(key)) return apiGetInFlight.get(key);
+
+  const request = enqueueApiGet(async () => {
+    for (let retryIndex = 0; ; retryIndex += 1) {
+      const response = await fetch(url, { signal, headers });
+      const payload = await response.json().catch(() => ({}));
+      const result = {
+        ok: response.ok,
+        status: response.status,
+        payload,
+        headers: response.headers,
+        fetchedAt: Date.now(),
+        fromCache: false
+      };
+      if (response.ok || ![429, 503].includes(response.status) || retryIndex >= API_GET_RETRY_DELAYS_MS.length) {
+        if (response.ok && cache) apiGetCache.set(key, result);
+        return result;
+      }
+      await waitForApiRetry(apiRetryDelay(response, retryIndex));
+    }
+  });
+  apiGetInFlight.set(key, request);
+  request.then(
+    () => apiGetInFlight.delete(key),
+    () => apiGetInFlight.delete(key)
+  );
+  return request;
+}
+
 
 function canAccessCurriculumManagement(user = state.user) {
   return ["instructor", "staff", "curriculum_admin"].includes(user?.role);
@@ -894,16 +978,24 @@ async function loadCourseDetail(code) {
   }
 
   const request = Promise.all([
-    fetch(`${API_BASE}/api/courses/${encodeURIComponent(key)}`),
-    fetch(`${API_BASE}/api/courses/${encodeURIComponent(key)}/prerequisites`),
+    apiGet(`${API_BASE}/api/courses/${encodeURIComponent(key)}`),
+    apiGet(`${API_BASE}/api/courses/${encodeURIComponent(key)}/prerequisites`),
     loadCatalogResource("tqf3_course_info", key).catch(() => null),
     loadCatalogResource("course_plo_mappings", key).catch(() => null)
   ])
     .then(async ([detailResponse, prerequisiteResponse, tqf3, ploMappings]) => {
       if (!detailResponse.ok) throw new Error(`Course detail API returned ${detailResponse.status}`);
-      const detailPayload = await detailResponse.json();
+      const detailPayload = detailResponse.payload;
+      if (!prerequisiteResponse.ok) {
+        recordApiSupplementalError(
+          `prerequisites:${key}`,
+          `โหลดวิชาบังคับก่อนของ ${key} ไม่สำเร็จ (${prerequisiteResponse.status})`
+        );
+      } else if (state.apiSupplementalErrors) {
+        delete state.apiSupplementalErrors[`prerequisites:${key}`];
+      }
       const prerequisitePayload = prerequisiteResponse.ok
-        ? await prerequisiteResponse.json()
+        ? prerequisiteResponse.payload
         : { data: { prerequisites: [] } };
       const data = detailPayload?.data ?? {};
       const detail = data.detail ?? {};
@@ -936,6 +1028,7 @@ async function loadCourseDetail(code) {
       };
     })
     .catch(error => {
+      recordApiSupplementalError(`course:${key}`, error.message || `โหลดรายละเอียด ${key} ไม่สำเร็จ`);
       console.warn(`Course detail unavailable for ${key}; using bundled fallback.`, error);
     });
 
@@ -943,13 +1036,48 @@ async function loadCourseDetail(code) {
   return request;
 }
 
+function groupStudyPlanItems(items) {
+  const grouped = new Map();
+  for (const item of items ?? []) {
+    const code = courseKey(item.course_code);
+    const requirementText = String(item.requirement_text ?? "").trim();
+    const displayCode = code || (requirementText ? `__REQ__${requirementText}` : "");
+    if (!displayCode) continue;
+    const key = `${item.study_year}-${item.semester}`;
+    if (!grouped.has(key)) grouped.set(key, {
+      year: Number(item.study_year),
+      term: Number(item.semester),
+      courses: []
+    });
+    grouped.get(key).courses.push(displayCode);
+  }
+  return [...grouped.values()].sort((a, b) => a.year - b.year || a.term - b.term);
+}
+
+async function loadStudyPlanDetail(planId) {
+  const url = `${API_BASE}/api/study-plans/${encodeURIComponent(planId)}`;
+  const response = await apiGet(url);
+  if (!response.ok) throw new Error(`Study plan detail API returned ${response.status}`);
+  return groupStudyPlanItems(response.payload?.data?.items);
+}
+
+function recordApiSupplementalError(key, message) {
+  state.apiSupplementalErrors = {
+    ...(state.apiSupplementalErrors ?? {}),
+    [key]: message
+  };
+}
+
 async function loadStudyPlans() {
-  const response = await fetch(
-    `${API_BASE}/api/study-plans?active=true`
-  );
-  if (!response.ok) throw new Error(`Study plan API returned ${response.status}`);
-  const payload = await response.json();
-  const plans = payload?.data ?? [];
+  const response = await apiGet(`${API_BASE}/api/study-plans?active=true`);
+  if (!response.ok) {
+    recordApiSupplementalError("studyPlans", `โหลดรายการแผนการเรียนไม่สำเร็จ (${response.status})`);
+    state.studyPlanUpdatedAt = response.fetchedAt;
+    return { ok: false, plans: [] };
+  }
+  const plans = response.payload?.data ?? [];
+  state.studyPlanUpdatedAt = response.fetchedAt;
+  if (state.apiSupplementalErrors) delete state.apiSupplementalErrors.studyPlans;
 
   for (const program of PROGRAMS) {
     const pathwayPlans = plans.filter(plan =>
@@ -957,60 +1085,52 @@ async function loadStudyPlans() {
     );
     if (!pathwayPlans.length) continue;
 
-    const loadedPlans = [];
-    for (const plan of pathwayPlans) {
-      const detailResponse = await fetch(
-        `${API_BASE}/api/study-plans/${encodeURIComponent(plan.study_plan_id)}`
-      );
-      if (!detailResponse.ok) continue;
-      const detailPayload = await detailResponse.json();
-      const items = detailPayload?.data?.items ?? [];
-      const grouped = new Map();
-
-      for (const item of items) {
-        const code = courseKey(item.course_code);
-        const requirementText = String(item.requirement_text ?? "").trim();
-        const displayCode = code || (requirementText ? `__REQ__${requirementText}` : "");
-        if (!displayCode) continue;
-        const key = `${item.study_year}-${item.semester}`;
-        if (!grouped.has(key)) {
-          grouped.set(key, {
-            year: Number(item.study_year),
-            term: Number(item.semester),
-            courses: []
-          });
-        }
-        grouped.get(key).courses.push(displayCode);
-      }
-
-      if (grouped.size) {
-        loadedPlans.push({
-          id: plan.study_plan_id,
-          label: studyPlanLabel(plan.study_plan_id, plan.plan_name_th ?? plan.plan_name, plan.plan_name_en),
-          plan: [...grouped.values()].sort(
-            (a, b) => a.year - b.year || a.term - b.term
-          )
-        });
-      }
+    const availablePlans = pathwayPlans.map(plan => ({
+      id: plan.study_plan_id,
+      label: studyPlanLabel(plan.study_plan_id, plan.plan_name_th ?? plan.plan_name, plan.plan_name_en),
+      plan: [],
+      loaded: false,
+      loading: false,
+      error: ""
+    }));
+    if (program.curriculumId === "BSC-CNC-2568" && availablePlans.length === 2) {
+      availablePlans.forEach((availablePlan, index) => {
+        if (availablePlan.label.includes(" · ")) return;
+        const planText = `${availablePlan.id} ${availablePlan.label}`;
+        availablePlan.label = /3\s*[._-]?\s*5|สามปีครึ่ง/i.test(planText)
+          ? "แผน 3.5 ปี"
+          : /4\s*ปี|(^|[-_])4($|[-_])/i.test(planText)
+            ? "แผน 4 ปี"
+            : index === 0 ? "แผน 3.5 ปี" : "แผน 4 ปี";
+      });
     }
+    const selected = availablePlans.find(plan => /PROJECT$/i.test(plan.id)) ?? availablePlans[0];
+    program.studyPlans = availablePlans;
+    program.activeStudyPlanId = program.activeStudyPlanId && availablePlans.some(plan => plan.id === program.activeStudyPlanId)
+      ? program.activeStudyPlanId
+      : selected.id;
+    program.plan = [];
+  }
+  return { ok: true, plans };
+}
 
-    if (loadedPlans.length) {
-      if (program.curriculumId === "BSC-CNC-2568" && loadedPlans.length === 2) {
-        loadedPlans.forEach((loadedPlan, index) => {
-          if (loadedPlan.label.includes(" · ")) return;
-          const planText = `${loadedPlan.id} ${loadedPlan.label}`;
-          loadedPlan.label = /3\s*[._-]?\s*5|สามปีครึ่ง/i.test(planText)
-            ? "แผน 3.5 ปี"
-            : /4\s*ปี|(^|[-_])4($|[-_])/i.test(planText)
-              ? "แผน 4 ปี"
-              : index === 0 ? "แผน 3.5 ปี" : "แผน 4 ปี";
-        });
-      }
-      const selected = loadedPlans.find(plan => /PROJECT$/i.test(plan.id)) ?? loadedPlans[0];
-      program.studyPlans = loadedPlans;
-      program.activeStudyPlanId = selected.id;
-      program.plan = selected.plan;
-    }
+async function ensureActiveStudyPlan(program) {
+  const selected = program?.studyPlans?.find(plan => plan.id === program.activeStudyPlanId);
+  if (!selected || selected.loaded || selected.loading) return;
+  selected.loading = true;
+  selected.error = "";
+  render();
+  try {
+    selected.plan = await loadStudyPlanDetail(selected.id);
+    selected.loaded = true;
+    program.plan = selected.plan;
+    if (state.apiSupplementalErrors) delete state.apiSupplementalErrors.studyPlanDetail;
+  } catch (error) {
+    selected.error = error.message || "โหลดรายละเอียดแผนการเรียนไม่สำเร็จ";
+    recordApiSupplementalError("studyPlanDetail", selected.error);
+  } finally {
+    selected.loading = false;
+    if (state.view === "program" && state.programId === program.id) render();
   }
 }
 
@@ -1039,29 +1159,28 @@ function studyPlanMajorLabel(program) {
 async function loadApiData() {
   state.apiStatus = "loading";
   state.apiError = "";
+  state.apiSupplementalErrors = {};
+  state.apiDataFromCache = false;
   try {
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 10000);
-    const coursesResponse = await fetch(
+    const coursesResponse = await apiGet(
       `${API_BASE}/api/courses?limit=500${canManageCurricula() ? "&includeUnplaced=1" : ""}`,
-      { signal: controller.signal, headers: canManageCurricula() ? draftApiHeaders() : undefined }
+      { headers: canManageCurricula() ? draftApiHeaders() : undefined }
     );
-    window.clearTimeout(timeout);
 
     if (!coursesResponse.ok) {
       throw new Error(`Course API returned ${coursesResponse.status}`);
     }
     state.apiStatus = "ok";
+    state.apiUpdatedAt = coursesResponse.fetchedAt;
+    state.apiDataFromCache = coursesResponse.fromCache === true;
 
-    const coursesPayload = await coursesResponse.json();
-    const courses = coursesPayload?.data ?? [];
+    const courses = coursesResponse.payload?.data ?? [];
     const liveCurriculumIds = new Set();
 
     try {
-      const curriculaResponse = await fetch(`${API_BASE}/api/curricula`);
+      const curriculaResponse = await apiGet(`${API_BASE}/api/curricula`);
       if (curriculaResponse.ok) {
-        const curriculaPayload = await curriculaResponse.json();
-        for (const curriculum of curriculaPayload?.data ?? []) {
+        for (const curriculum of curriculaResponse.payload?.data ?? []) {
           liveCurriculumIds.add(curriculum.curriculum_id);
           if (PROGRAMS.some(program => program.curriculumId === curriculum.curriculum_id)) continue;
           PROGRAMS.push({
@@ -1076,9 +1195,11 @@ async function loadApiData() {
           });
         }
       } else {
+        recordApiSupplementalError("curricula", `โหลดรายชื่อหลักสูตรไม่สำเร็จ (${curriculaResponse.status})`);
         console.warn(`Curriculum list API returned ${curriculaResponse.status}; using bundled curriculum list.`);
       }
     } catch (error) {
+      recordApiSupplementalError("curricula", error.message || "โหลดรายชื่อหลักสูตรไม่สำเร็จ");
       console.warn("Curriculum list API unavailable; using bundled curriculum list.", error);
     }
 
@@ -1148,44 +1269,29 @@ async function loadApiData() {
         .filter(term => term.courses.length);
     });
 
-    for (let index = 0; index < courseCodes.length; index += 8) {
-      const batch = courseCodes.slice(index, index + 8);
-      await Promise.all(batch.map(async code => {
-        try {
-          const response = await fetch(
-            `${API_BASE}/api/courses/${encodeURIComponent(code)}/prerequisites`
-          );
-          if (!response.ok) return;
-          const payload = await response.json();
-          const prerequisites = (payload?.data?.prerequisites ?? [])
-            .filter(item => item.depth == null || item.depth === 1);
-          COURSES[code].prereq = prerequisites
-            .map(courseCodeFromApi)
-            .filter(Boolean);
-        } catch (error) {
-          console.warn(`Prerequisite API unavailable for ${code}.`, error);
-        }
-      }));
-    }
-
     const curriculumIds = [...new Set(
       PROGRAMS.map(program => program.curriculumId).filter(Boolean)
     )];
     await Promise.all(curriculumIds.map(async curriculumId => {
-      const conditionsResponse = await fetch(
+      try {
+        const conditionsResponse = await apiGet(
         `${API_BASE}/api/curricula/${encodeURIComponent(curriculumId)}/graduation-conditions`
-      );
-      if (!conditionsResponse.ok) return;
-      const conditionsPayload = await conditionsResponse.json();
-      const conditions = (conditionsPayload?.data ?? [])
-        .map(condition => condition.condition_text)
-        .filter(Boolean);
-      if (!conditions.length) return;
-      PROGRAMS
-        .filter(program => program.curriculumId === curriculumId)
-        .forEach(program => {
-          program.conditions = conditions;
-        });
+        );
+        if (!conditionsResponse.ok) {
+          recordApiSupplementalError(`conditions:${curriculumId}`, `โหลดเงื่อนไขการจบไม่สำเร็จ (${conditionsResponse.status})`);
+          return;
+        }
+        const conditions = (conditionsResponse.payload?.data ?? [])
+          .map(condition => condition.condition_text)
+          .filter(Boolean);
+        PROGRAMS
+          .filter(program => program.curriculumId === curriculumId)
+          .forEach(program => {
+            program.conditions = conditions;
+          });
+      } catch (error) {
+        recordApiSupplementalError(`conditions:${curriculumId}`, error.message || "โหลดเงื่อนไขการจบไม่สำเร็จ");
+      }
     }));
 
     await loadStudyPlans();
@@ -1229,7 +1335,7 @@ const norm = s =>
 
 function findUnlocks(code) {
   return Object.entries(COURSES)
-    .filter(([, c]) => c.prereq.includes(code))
+    .filter(([, c]) => (c.prereq ?? []).includes(code))
     .map(([k]) => k);
 }
 
@@ -1288,6 +1394,19 @@ function apiDataPanel(title, value) {
       <div class="api-value-content">${apiValueMarkup(value)}</div>
     </details>
   `;
+}
+
+function apiSupplementalPanel() {
+  const errors = Object.values(state.apiSupplementalErrors ?? {});
+  if ((!errors.length && !state.apiDataFromCache) || state.apiStatus === "unavailable") return "";
+  const updatedAt = state.apiUpdatedAt || state.studyPlanUpdatedAt;
+  const updatedLabel = updatedAt
+    ? `ข้อมูลหลักล่าสุดเมื่อ ${new Date(updatedAt).toLocaleString("th-TH")}`
+    : "ข้อมูลหลักโหลดสำเร็จ";
+  if (!errors.length) {
+    return `<section class="api-supplemental-notice" role="status"><span>แสดงข้อมูลจาก cache</span><small>${esc(updatedLabel)}</small></section>`;
+  }
+  return `<section class="api-supplemental-notice api-supplemental-notice--error" role="status"><strong>ข้อมูลเสริมโหลดไม่ครบ</strong><span>${esc(errors[0])}</span><small>${esc(updatedLabel)}</small><button type="button" data-api-action="retry-supplemental">ลองโหลดข้อมูลเสริมอีกครั้ง</button></section>`;
 }
 
 function courseCode(code) {
@@ -1849,11 +1968,11 @@ async function loadEditorActivePlan(program) {
   try {
     const pathwayQuery = program.pathwayId ? `&pathwayId=${encodeURIComponent(program.pathwayId)}` : "";
     const [plansResponse, coursesResponse] = await Promise.all([
-      fetch(`${API_BASE}/api/study-plans?curriculumId=${encodeURIComponent(program.curriculumId)}${pathwayQuery}&active=true`),
-      fetch(`${API_BASE}/api/courses?curriculumId=${encodeURIComponent(program.curriculumId)}${pathwayQuery}&limit=500`)
+      apiGet(`${API_BASE}/api/study-plans?curriculumId=${encodeURIComponent(program.curriculumId)}${pathwayQuery}&active=true`),
+      apiGet(`${API_BASE}/api/courses?curriculumId=${encodeURIComponent(program.curriculumId)}${pathwayQuery}&limit=500`)
     ]);
     if (!plansResponse.ok) throw new Error(`โหลดแผนย่อยไม่สำเร็จ (${plansResponse.status})`);
-    const plansPayload = await plansResponse.json();
+    const plansPayload = plansResponse.payload;
     const plans = plansPayload?.data ?? [];
     if (!plans.length) {
       if (program.plan?.length) {
@@ -1871,12 +1990,12 @@ async function loadEditorActivePlan(program) {
       label: studyPlanLabel(plan.study_plan_id, plan.plan_name_th ?? plan.plan_name, plan.plan_name_en),
       plan: []
     }));
-    const detailResponse = await fetch(`${API_BASE}/api/study-plans/${encodeURIComponent(selectedPlan.study_plan_id)}`);
+    const detailResponse = await apiGet(`${API_BASE}/api/study-plans/${encodeURIComponent(selectedPlan.study_plan_id)}`);
     if (!detailResponse.ok) throw new Error(`โหลดรายวิชาในแผนย่อยไม่สำเร็จ (${detailResponse.status})`);
-    const detailPayload = await detailResponse.json();
+    const detailPayload = detailResponse.payload;
     const items = detailPayload?.data?.items ?? [];
     if (coursesResponse.ok) {
-      const coursesPayload = await coursesResponse.json();
+      const coursesPayload = coursesResponse.payload;
       state.curriculumCourses = coursesPayload?.data ?? [];
       state.curriculumCoursesLoaded = true;
       state.curriculumCoursesKey = `${program.curriculumId}:${program.pathwayId ?? ""}`;
@@ -2270,6 +2389,7 @@ function renderProgram() {
   const curriculumYears = versions.map(version => version.revisionYear);
 
   const activePlanId = p.activeStudyPlanId || `${p.id}-default`;
+  const activeStudyPlan = p.studyPlans?.find(plan => plan.id === activePlanId);
   const planCourses = visiblePlan.flatMap(term => term.courses ?? []);
   const planCredits = visiblePlan.reduce((total, term) => total + term.courses.reduce((subtotal, code) => {
     if (editing && editorChangeFor(p, code, term.year, term.term)?.action === "remove") return subtotal;
@@ -2440,6 +2560,9 @@ function renderProgram() {
             </label>
           </div>
         </div>
+
+        ${activeStudyPlan?.loading ? `<p class="api-supplemental-notice">กำลังโหลดรายละเอียดแผนการเรียน...</p>` : ""}
+        ${activeStudyPlan?.error ? `<div class="api-supplemental-notice api-supplemental-notice--error">โหลดแผนการเรียนบางส่วนไม่สำเร็จ: ${esc(activeStudyPlan.error)} <button type="button" data-api-action="retry-study-plan" data-study-plan-id="${esc(activeStudyPlan.id)}">ลองใหม่</button></div>` : ""}
 
         <div class="study-plan-stats">
           <div class="study-plan-stat">
@@ -2796,7 +2919,7 @@ function renderCourses() {
 
         if (
           state.noPrereqOnly &&
-          c.prereq.length
+          (c.prereq ?? []).length
         ) {
           return false;
         }
@@ -2984,13 +3107,13 @@ function renderCourses() {
                   <span
                     class="
                       course-card-prereq
-                      ${c.prereq.length
+                      ${(c.prereq ?? []).length
             ? ""
             : "course-card-prereq--none"
           }
                     "
                   >
-                    ${c.prereq.length
+                    ${(c.prereq ?? []).length
             ? "มีวิชาบังคับก่อน"
             : "ไม่มีวิชาบังคับก่อน"
           }
@@ -3610,6 +3733,7 @@ function shell(content) {
 
     <main class="main">
       ${content}
+      ${apiSupplementalPanel()}
     </main>
 
     ${state.apiStatus === "unavailable" ? `
@@ -3731,6 +3855,14 @@ function render() {
 
 
   bind();
+
+  // Study-plan details are loaded lazily for the program the user is viewing.
+  // The list is already cached by loadApiData(); this avoids opening every
+  // plan for every curriculum during the home-page load.
+  if (state.view === "program" && state.programTab === "plan") {
+    const program = PROGRAMS.find(item => item.id === state.programId) || PROGRAMS[0];
+    if (program) void ensureActiveStudyPlan(program);
+  }
 
   if (state.view === "curriculum-editor" && state.editorSearch) {
     const searchInput = document.querySelector(`[data-plan-search][data-year="${state.editorSearch.year}"][data-term="${state.editorSearch.term}"]`);
@@ -4135,6 +4267,7 @@ function bind() {
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload.error ?? "ดำเนินการกับคำขอไม่สำเร็จ");
+        clearApiGetCache();
         state.draftRequestsLoaded = false;
         state.selectedChangeRequest = null;
         await loadDraftChangeRequests();
@@ -4157,6 +4290,25 @@ function bind() {
         state.apiStatus = "loading";
         render();
         await loadApiData();
+        render();
+        return;
+      }
+      if (button.dataset.apiAction === "retry-supplemental") {
+        clearApiGetCache(key => key.includes("/api/curricula") || key.includes("/api/study-plans"));
+        state.apiSupplementalErrors = {};
+        await loadApiData();
+        render();
+        return;
+      }
+      if (button.dataset.apiAction === "retry-study-plan") {
+        const program = PROGRAMS.find(item => item.id === state.programId);
+        const selected = program?.studyPlans?.find(plan => plan.id === button.dataset.studyPlanId);
+        if (selected) {
+          selected.loaded = false;
+          selected.error = "";
+          clearApiGetCache(key => key.includes(`/api/study-plans/${selected.id}`));
+          await ensureActiveStudyPlan(program);
+        }
         render();
       }
     };
@@ -4383,6 +4535,7 @@ function bind() {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) return alert(payload.error ?? "ดำเนินการกับรายการแก้ไขไม่สำเร็จ");
+      clearApiGetCache();
       state.curriculumChangesLoaded = false;
       const program = PROGRAMS.find(item => item.id === state.programId);
       loadCurriculumChanges(program?.curriculumId).then(() => render());
@@ -4766,6 +4919,7 @@ function bind() {
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload.error ?? "ลบวิชาไม่สำเร็จ");
+        clearApiGetCache();
         delete COURSES[code];
         alert("ลบวิชาแล้ว");
         await loadApiData();
