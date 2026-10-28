@@ -6,6 +6,7 @@
   "scripts": {
     "import": "tsx src/import.ts",
     "import:graduation": "node src/graduation-import.mjs",
+    "draft-cleanup": "node src/draft-cleanup.mjs",
     "test": "node --test test/graduation.test.mjs",
     "test:db": "node --test --test-force-exit test/graduation.db.test.mjs",
     "typecheck": "tsc --noEmit"

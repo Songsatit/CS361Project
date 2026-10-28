@@ -104,6 +104,31 @@ Import `postman/CS361Project-API.postman_collection.json` into Postman and set `
 
 ## V4: ตรวจสอบการสำเร็จการศึกษา (Demo เท่านั้น)
 
+## การจัดการฉบับร่างคำขอ
+
+เพิ่ม endpoint สำหรับเจ้าของคำขอเท่านั้น:
+
+| Method and path | Description |
+| --- | --- |
+| `DELETE /api/change-requests/{requestId}` | ลบเฉพาะคำขอสถานะ `draft` ของผู้เรียก และลบรายการย่อยใน transaction เดียวกัน |
+| `POST /api/change-requests/{requestId}/cancel` | ถอนคำขอสถานะ `pending` ของผู้เรียกกลับเป็น `draft` |
+
+ทั้งสอง operation เขียน audit log และไม่เพิ่มสถานะ `cancelled` ในฐานข้อมูล การลบจะตอบ `409` หากมี `curriculum_versions.based_on_request_id` อ้างอิงอยู่
+
+ตรวจรายการฉบับร่างซ้ำแบบไม่ลบข้อมูล:
+
+```bash
+npm run draft-cleanup
+```
+
+ระบบถือว่าซ้ำเมื่อ `created_by`, `title`, `type` และ `status = 'draft'` เหมือนกัน โดยเก็บ request ID ที่เก่าที่สุดไว้ การลบจริงต้องใช้ทั้งสอง flag และต้องได้รับอนุมัติจากเจ้าของข้อมูลก่อน:
+
+```bash
+npm run draft-cleanup -- --confirm --owner-approved
+```
+
+ห้ามรันโหมดลบจริงบน RDS จนกว่าจะทำตาม `docs/v4-rds-migration-runbook.md`: ยืนยัน environment/target แบบอ่านอย่างเดียว, ทำ RDS snapshot และทดสอบกู้คืน, ตรวจรายการซ้ำจาก dry-run และบันทึก request ID ที่จะเก็บ/ลบ หากเกิดปัญหาให้หยุดการรัน, เก็บ audit log และกู้คืนจาก snapshot ตามแผนของเจ้าของฐานข้อมูล ห้ามรัน migration หรือ `seed-demo.sql` เป็นส่วนหนึ่งของงานนี้
+
 ปัจจุบัน V4 ประเมินผลการเรียน **สังเคราะห์สำหรับ Demo เท่านั้น** ใน repository ไม่มีข้อกำหนดการส่งออกเกรดจากสำนักทะเบียนหรือการเชื่อมต่อกับทะเบียนจริง โปรดอ่าน[สัญญาข้อมูลฉบับร่าง](../docs/v4-data-contract.md)ก่อนเตรียม fixture และอ่าน[คู่มือ migration สำหรับ RDS](../docs/v4-rds-migration-runbook.md)ก่อนดำเนินการกับฐานข้อมูล สถานะ migration ที่ apply แล้วบน RDS ซึ่ง deploy อยู่ยังไม่ทราบ ห้ามใช้คำสั่งเหล่านี้กับ RDS
 
 ### ลำดับ deploy เมื่อเตรียมพร้อมแล้ว
