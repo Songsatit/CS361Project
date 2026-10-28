@@ -72,16 +72,18 @@ async function scalar(sql, params = []) {
 
 // Calls the Lambda handler directly. The DB env vars point at the scratch database.
 let handler;
-async function call(routeKey, { role, username, studentId } = {}) {
+async function call(routeKey, { role, username, studentId, requestId, body, pathParameters } = {}) {
+  const token = role
+    ? jwt.sign({ sub: username, role, name: username }, JWT_SECRET, {
+      expiresIn: '5m', issuer: 'cs361-curriculum-api', audience: 'cs361-frontend', algorithm: 'HS256',
+    })
+    : null;
   const event = {
     routeKey,
     requestContext: { http: { method: routeKey.split(' ')[0], sourceIp: '127.0.0.1' } },
-    headers: role
-      ? { authorization: `Bearer ${jwt.sign({ sub: username, role, name: username }, JWT_SECRET, {
-          expiresIn: '5m', issuer: 'cs361-curriculum-api', audience: 'cs361-frontend', algorithm: 'HS256',
-        })}` }
-      : {},
-    pathParameters: studentId ? { studentId } : undefined,
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+    pathParameters: pathParameters ?? (studentId ? { studentId } : requestId ? { requestId: String(requestId) } : undefined),
+    body: body === undefined ? undefined : JSON.stringify(body),
   };
   const res = await handler(event);
   return { status: res.statusCode, body: res.statusCode === 204 ? null : JSON.parse(res.body) };
@@ -264,4 +266,88 @@ test('TC2: staff lists import history without personal data', { skip: !enabled }
 test('instructor assignment list shows only assigned students', { skip: !enabled }, async () => {
   const res = await call('GET /api/graduation/students', { role: 'instructor', username: 'instructor' });
   assert.deepEqual(res.body.data.map((row) => row.studentId), ['DEMO0001', 'DEMO0002']);
+});
+
+async function createDraftRequest(username = 'staff') {
+  const response = await call('POST /api/change-requests', {
+    role: 'staff',
+    username,
+    body: {
+      curriculumId: 'BSC-CS-2566',
+      type: 'edit_course',
+      title: `ทดสอบจัดการฉบับร่าง ${Date.now()}-${Math.random()}`,
+      note: 'database test',
+    },
+  });
+  assert.equal(response.status, 201);
+  return response.body.data.id;
+}
+
+test('change request owner rules: other staff gets 403, pending delete gets 409, cancel returns draft', { skip: !enabled }, async () => {
+  const requestId = await createDraftRequest('staff');
+  const otherDelete = await call('DELETE /api/change-requests/{requestId}', {
+    role: 'staff', username: 'staff-other', requestId,
+  });
+  assert.equal(otherDelete.status, 403);
+
+  const saved = await call('PUT /api/change-requests/{requestId}/items', {
+    role: 'staff', username: 'staff', requestId,
+    body: { items: [{ action: 'EDIT_FIELD', courseCode: 'CS101', newValue: { credits: 3 } }] },
+  });
+  assert.equal(saved.status, 200);
+  const submitted = await call('POST /api/change-requests/{requestId}/submit', {
+    role: 'staff', username: 'staff', requestId, body: {},
+  });
+  assert.equal(submitted.status, 200);
+
+  const pendingDelete = await call('DELETE /api/change-requests/{requestId}', {
+    role: 'staff', username: 'staff', requestId,
+  });
+  assert.equal(pendingDelete.status, 409);
+  const cancelled = await call('POST /api/change-requests/{requestId}/cancel', {
+    role: 'staff', username: 'staff', requestId, body: {},
+  });
+  assert.equal(cancelled.status, 200);
+  assert.equal(cancelled.body.data.status, 'draft');
+
+  const deleted = await call('DELETE /api/change-requests/{requestId}', {
+    role: 'staff', username: 'staff', requestId,
+  });
+  assert.equal(deleted.status, 200);
+  const [logs] = await conn.execute(
+    "SELECT action FROM audit_log WHERE entity_type = 'change_request' AND entity_id = ? ORDER BY audit_id",
+    [String(requestId)],
+  );
+  assert.deepEqual(logs.map(row => row.action).slice(-2), ['change_request_cancelled', 'change_request_deleted']);
+});
+
+test('deleting a draft removes its change items in the same operation', { skip: !enabled }, async () => {
+  const requestId = await createDraftRequest('staff');
+  const saved = await call('PUT /api/change-requests/{requestId}/items', {
+    role: 'staff', username: 'staff', requestId,
+    body: { items: [{ action: 'EDIT_FIELD', courseCode: 'CS101', newValue: { credits: 3 } }] },
+  });
+  assert.equal(saved.status, 200);
+  const deleted = await call('DELETE /api/change-requests/{requestId}', {
+    role: 'staff', username: 'staff', requestId,
+  });
+  assert.equal(deleted.status, 200);
+  assert.equal(await scalar('SELECT COUNT(*) FROM change_items WHERE request_id = ?', [requestId]), 0);
+});
+
+test('a draft referenced by a curriculum version cannot be deleted', { skip: !enabled }, async () => {
+  const requestId = await createDraftRequest('staff');
+  await conn.execute(
+    `INSERT INTO curriculum_versions
+      (curriculum_id, version_no, snapshot, based_on_request_id, is_active)
+     VALUES ('BSC-CS-2566', ?, '{}', ?, 0)`,
+    [900000 + requestId, requestId],
+  );
+  const response = await call('DELETE /api/change-requests/{requestId}', {
+    role: 'staff', username: 'staff', requestId,
+  });
+  assert.equal(response.status, 409);
+  assert.match(response.body.error, /referenced by a curriculum version/i);
+  await conn.execute('DELETE FROM curriculum_versions WHERE based_on_request_id = ?', [requestId]);
+  await conn.execute('DELETE FROM change_requests WHERE id = ?', [requestId]);
 });

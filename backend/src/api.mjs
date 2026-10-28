@@ -921,6 +921,85 @@ async function submitDraftChangeRequest(event) {
   return response(200, { data });
 }
 
+async function deleteDraftChangeRequest(event) {
+  const requestId = Number(pathParameter(event, 'requestId'));
+  if (!Number.isInteger(requestId)) return response(400, { error: 'requestId is required' });
+  const actor = actorFromRequest(event, requestBody(event) ?? {});
+  const requests = await queryRows('SELECT * FROM change_requests WHERE id = ?', [requestId]);
+  const request = normalizeChangeRequest(requests[0]);
+  if (!request) return response(404, { error: 'Change request not found' });
+  if (request.created_by !== actor.username) return response(403, { error: 'Only the draft owner can delete this request' });
+  if (request.status !== 'draft') return response(409, { error: 'Only draft requests can be deleted' });
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [versions] = await connection.execute(
+      'SELECT id FROM curriculum_versions WHERE based_on_request_id = ? LIMIT 1 FOR UPDATE',
+      [requestId],
+    );
+    if (versions.length) {
+      await connection.rollback();
+      return response(409, { error: 'This draft is referenced by a curriculum version and cannot be deleted' });
+    }
+    await connection.execute('DELETE FROM change_items WHERE request_id = ?', [requestId]);
+    await connection.execute('DELETE FROM change_requests WHERE id = ? AND status = \'draft\' AND created_by = ?', [requestId, actor.username]);
+    await connection.execute(
+      `INSERT INTO audit_log
+        (actor_username, actor_role, action, entity_type, entity_id, old_value, new_value)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [actor.username, actor.role, 'change_request_deleted', 'change_request', String(requestId), JSON.stringify(request), null],
+    );
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+  return response(200, { data: { requestId, status: 'deleted' } });
+}
+
+async function cancelDraftChangeRequest(event) {
+  const requestId = Number(pathParameter(event, 'requestId'));
+  if (!Number.isInteger(requestId)) return response(400, { error: 'requestId is required' });
+  const body = requestBody(event);
+  if (!body) return response(400, { error: 'Request body must be valid JSON' });
+  const actor = actorFromRequest(event, body);
+  const requests = await queryRows('SELECT * FROM change_requests WHERE id = ?', [requestId]);
+  const request = normalizeChangeRequest(requests[0]);
+  if (!request) return response(404, { error: 'Change request not found' });
+  if (request.created_by !== actor.username) return response(403, { error: 'Only the request owner can cancel this request' });
+  if (request.status !== 'pending') return response(409, { error: 'Only pending requests can be cancelled' });
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await connection.execute(
+      `UPDATE change_requests
+          SET status = 'draft', submitted_at = NULL,
+              reviewed_by = NULL, reviewed_at = NULL, reject_reason = NULL
+        WHERE id = ? AND status = 'pending' AND created_by = ?`,
+      [requestId, actor.username],
+    );
+    const [updatedRows] = await connection.execute('SELECT * FROM change_requests WHERE id = ?', [requestId]);
+    const updated = normalizeChangeRequest(updatedRows[0]);
+    await connection.execute(
+      `INSERT INTO audit_log
+        (actor_username, actor_role, action, entity_type, entity_id, old_value, new_value)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [actor.username, actor.role, 'change_request_cancelled', 'change_request', String(requestId), JSON.stringify(request), JSON.stringify(updated)],
+    );
+    await connection.commit();
+    return response(200, { data: updated });
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
 async function decideDraftChangeRequest(event) {
   const requestId = Number(pathParameter(event, 'requestId'));
   const body = requestBody(event);
@@ -1899,6 +1978,8 @@ export const handler = async (event) => {
     if (route === 'POST /api/change-requests') return await createDraftChangeRequest(event);
     if (route === 'PUT /api/change-requests/{requestId}/items') return await saveDraftChangeItems(event);
     if (route === 'POST /api/change-requests/{requestId}/submit') return await submitDraftChangeRequest(event);
+    if (route === 'DELETE /api/change-requests/{requestId}') return await deleteDraftChangeRequest(event);
+    if (route === 'POST /api/change-requests/{requestId}/cancel') return await cancelDraftChangeRequest(event);
     if (route === 'POST /api/change-requests/{requestId}/decision') return await decideDraftChangeRequest(event);
     if (route === 'POST /api/curriculum-changes') return await createCurriculumChange(event);
     if (route === 'POST /api/curriculum-changes/{changeId}/decision') return await decideCurriculumChange(event);
