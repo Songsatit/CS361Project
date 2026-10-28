@@ -36,4 +36,21 @@ VALUES
   ('instructor', 'DEMO0002', 'demo-seed'),
   ('staff', 'DEMO0001', 'demo-seed'),
   ('staff', 'DEMO0002', 'demo-seed'),
-  ('staff', 'DEMO0003', 'demo-seed');
+  ('staff', 'DEMO0003', 'demo-seed'),
+  ('staff', 'DEMO0004', 'demo-seed');
+
+-- Optional metadata for the V4 student-progress demo. Requires migration 011.
+UPDATE graduation_student_assignment
+   SET display_name = CASE student_id
+     WHEN 'DEMO0001' THEN 'นักศึกษาทดลอง ปี 1'
+     WHEN 'DEMO0002' THEN 'นักศึกษาทดลอง ปี 2'
+     WHEN 'DEMO0003' THEN 'นักศึกษาทดลอง ปี 3'
+     WHEN 'DEMO0004' THEN 'นักศึกษาทดลอง ปี 4'
+     ELSE display_name END,
+       student_year = CASE student_id
+     WHEN 'DEMO0001' THEN 1
+     WHEN 'DEMO0002' THEN 2
+     WHEN 'DEMO0003' THEN 3
+     WHEN 'DEMO0004' THEN 4
+     ELSE student_year END
+ WHERE student_id IN ('DEMO0001', 'DEMO0002', 'DEMO0003', 'DEMO0004');

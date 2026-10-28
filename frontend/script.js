@@ -695,16 +695,27 @@ function renderGraduationResult(result, audienceLabel) {
   const source = result.dataSource ?? {};
   const sourceLabel = graduationSourceLabels[source.status] ?? "ไม่ทราบสถานะข้อมูล";
   const verdict = graduationVerdictLabels[result.verdict] ?? "ยังสรุปผลไม่ได้";
+  const gradeRows = result.records ?? [];
+  const planRows = result.plan ?? [];
+  const gradeLabel = { A: "A", "B+": "B+", B: "B", "C+": "C+", C: "C", "D+": "D+", D: "D", F: "F", S: "S", P: "P", U: "U", W: "W", I: "I" };
+  const planStatus = {
+    completed: "เรียนแล้ว",
+    failed_or_incomplete: "ตก/ยังไม่สมบูรณ์",
+    not_taken: "ยังไม่เรียน",
+  };
   return `
     <section class="graduation-result-card">
       <div class="graduation-result-head">
         <div><span class="workflow-kicker">${esc(audienceLabel)}</span><h2>${esc(result.curriculum?.curriculumId ?? "ไม่พบหลักสูตร")}</h2></div>
         <strong class="graduation-verdict graduation-verdict--${esc(result.verdict ?? "inconclusive")}">${esc(verdict)}</strong>
       </div>
+      ${result.student?.studyYear ? `<p class="graduation-student-meta">ชั้นปีที่ ${esc(result.student.studyYear)}${result.student.displayName ? ` · ${esc(result.student.displayName)}` : ""}</p>` : ""}
       ${dataModeDemo ? `<p class="graduation-demo-banner">ข้อมูลจำลองสำหรับทดสอบเท่านั้น — ไม่ใช่ข้อมูลจริงจากสำนักทะเบียน</p>` : ""}
       <div class="graduation-source-status"><strong>${esc(sourceLabel)}</strong><span>ข้อมูล ณ ${esc(source.asOf ? new Date(source.asOf).toLocaleString("th-TH") : "ไม่มีข้อมูลเวลา")}</span>${source.lastImport?.sourceBatchId ? `<small>Batch: ${esc(source.lastImport.sourceBatchId)}</small>` : ""}</div>
       ${result.totals ? `<div class="graduation-totals"><span>หน่วยกิตที่ได้รับ <strong>${esc(result.totals.earnedCredits)}</strong></span><span>GPA <strong>${esc(result.totals.gpa ?? "ยังคำนวณไม่ได้")}</strong></span></div>` : ""}
       ${result.conditions?.length ? `<div class="graduation-condition-list">${result.conditions.map(condition => `<article class="graduation-condition graduation-condition--${esc(condition.status)}"><div><strong>${esc(graduationConditionLabels[condition.status] ?? "ข้อมูลไม่ครบ")}</strong><span>${esc(condition.text)}</span></div>${graduationDetailsText(condition) ? `<small>${esc(graduationDetailsText(condition))}</small>` : ""}</article>`).join("")}</div>` : `<p class="audit-empty">ไม่พบเงื่อนไขหรือข้อมูลสำหรับตรวจสอบ</p>`}
+      ${gradeRows.length ? `<section class="graduation-history"><h3>วิชาที่เคยเรียนและผลการเรียน</h3><div class="graduation-table-wrap"><table><thead><tr><th>วิชา</th><th>ชื่อวิชา</th><th>ปี/ภาค</th><th>หน่วยกิต</th><th>เกรด</th></tr></thead><tbody>${gradeRows.map(row => `<tr><td>${esc(row.courseCode)}</td><td>${esc(row.courseNameTh ?? row.courseNameEn ?? "ไม่พบชื่อวิชา")}</td><td>${esc(row.academicYear)} / ${esc(row.semester === 3 ? "Summer" : row.semester)}</td><td>${esc(row.credits)}</td><td><strong>${esc(gradeLabel[row.grade] ?? row.grade ?? "-")}</strong></td></tr>`).join("")}</tbody></table></div></section>` : ""}
+      ${planRows.length ? `<section class="graduation-plan-progress"><h3>ความก้าวหน้าตามแผน 4 ปี</h3><div class="graduation-table-wrap"><table><thead><tr><th>ปี/ภาค</th><th>วิชา</th><th>หน่วยกิต</th><th>สถานะ</th><th>เกรด</th></tr></thead><tbody>${planRows.map(row => `<tr><td>ปี ${esc(row.studyYear)} / ${esc(row.semester === 3 ? "Summer" : row.semester)}</td><td>${esc(row.courseCode ?? "-")} ${esc(row.courseNameTh ?? "")}</td><td>${esc(row.credits ?? "-")}</td><td>${esc(planStatus[row.status] ?? row.status)}</td><td>${esc(row.grade ?? "-")}</td></tr>`).join("")}</tbody></table></div></section>` : ""}
     </section>
   `;
 }
@@ -722,7 +733,8 @@ function renderGraduationPage() {
       ${state.graduationLoading ? `<section class="profile-card">กำลังโหลดข้อมูลผลการเรียน...</section>` : ""}
       ${studentView ? renderGraduationResult(state.graduationResult, "ผลตรวจสอบของนักศึกษา") : `
         <section class="graduation-student-list"><h2>นักศึกษาที่ได้รับมอบหมาย</h2><p>แสดงเฉพาะนักศึกษาที่อยู่ในขอบเขตสิทธิ์ของบัญชีนี้</p>
-          ${state.graduationStudents.length ? `<div class="graduation-student-buttons">${state.graduationStudents.map(student => `<button type="button" class="workflow-action ${student.studentId === state.graduationSelectedStudentId ? "workflow-action--primary" : "workflow-action--muted"}" data-graduation-student="${esc(student.studentId)}">${esc(student.studentId)} · ${student.hasData ? "มีข้อมูลผลการเรียน" : "ยังไม่มีข้อมูล"}</button>`).join("")}</div>` : `<p class="audit-empty">ยังไม่มีนักศึกษาที่ได้รับมอบหมายให้ตรวจสอบ</p>`}
+          ${state.graduationStudents.length ? `<div class="graduation-student-buttons">${state.graduationStudents.map(student => `<button type="button" class="workflow-action ${student.studentId === state.graduationSelectedStudentId ? "workflow-action--primary" : "workflow-action--muted"}" data-graduation-student="${esc(student.studentId)}"><strong>${esc(student.displayName ?? student.studentId)}</strong> · ${student.studyYear ? `ปี ${esc(student.studyYear)} · ` : ""}${student.hasData ? "มีข้อมูลผลการเรียน" : "ยังไม่มีข้อมูล"}</button>`).join("")}</div>` : `<p class="audit-empty">ยังไม่มีนักศึกษาที่ได้รับมอบหมายให้ตรวจสอบ</p>`}
+          ${role === "staff" ? `<form class="graduation-assignment-form" data-graduation-assign-form><h3>เพิ่มนักศึกษาเข้ารายการตรวจ</h3><div><input name="studentId" required placeholder="รหัสนักศึกษา Demo เช่น DEMO0001"><input name="displayName" placeholder="ชื่อที่แสดง"><select name="studentYear" required><option value="">ชั้นปี</option><option value="1">ปี 1</option><option value="2">ปี 2</option><option value="3">ปี 3</option><option value="4">ปี 4</option></select><button type="submit" class="workflow-action workflow-action--primary">เพิ่มรายการ</button></div></form>` : ""}
         </section>
         ${state.graduationResult ? renderGraduationResult(state.graduationResult, `ผลตรวจสอบ ${state.graduationSelectedStudentId}`) : ""}
         ${canSeeBatches ? `<section class="graduation-import-history"><h2>ประวัติการนำเข้า</h2>${state.graduationBatches.length ? `<div class="graduation-table-wrap"><table><thead><tr><th>Batch</th><th>โหมด</th><th>สถานะ</th><th>จำนวนแถว</th><th>นำเข้าเมื่อ</th></tr></thead><tbody>${state.graduationBatches.map(batch => `<tr><td>${esc(batch.source_batch_id ?? batch.batch_id)}</td><td>${batch.data_mode === "demo" ? "ข้อมูลจำลอง" : "ข้อมูลจริง"}</td><td>${esc(batch.status)}</td><td>${esc(batch.row_total)}</td><td>${esc(batch.finished_at ? new Date(batch.finished_at).toLocaleString("th-TH") : "-")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="audit-empty">ยังไม่มีประวัติการนำเข้า</p>`}</section>` : ""}
@@ -3827,6 +3839,36 @@ function syncHistoryState() {
    ========================================================= */
 
 function bind() {
+
+  document.querySelectorAll("[data-graduation-assign-form]").forEach(form => {
+    form.onsubmit = async event => {
+      event.preventDefault();
+      const formData = new FormData(form);
+      const button = form.querySelector("button[type=submit]");
+      button.disabled = true;
+      try {
+        const response = await fetch(`${API_BASE}/api/graduation/assignments`, {
+          method: "POST",
+          headers: { ...draftApiHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({
+            studentId: String(formData.get("studentId") ?? "").trim(),
+            displayName: String(formData.get("displayName") ?? "").trim(),
+            studentYear: Number(formData.get("studentYear")),
+          }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? "เพิ่มนักศึกษาไม่สำเร็จ");
+        state.graduationLoaded = false;
+        state.graduationLoading = false;
+        state.graduationError = "";
+        await loadGraduationPage();
+        render();
+      } catch (error) {
+        alert(error.message ?? "เพิ่มนักศึกษาไม่สำเร็จ");
+        button.disabled = false;
+      }
+    };
+  });
 
   document.querySelectorAll("[data-graduation-student]").forEach(button => {
     button.onclick = async () => {

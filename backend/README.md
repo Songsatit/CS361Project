@@ -114,7 +114,7 @@ Import `postman/CS361Project-API.postman_collection.json` into Postman and set `
 
 1. ทดสอบ unit tests, CSV dry-run และ `sam validate --lint`/`sam build` ในเครื่อง
 2. ให้ผู้ดูแลฐานข้อมูลตรวจสถานะ migration `001`–`009` บน RDS แบบอ่านอย่างเดียว เทียบ schema และสำรอง/ยืนยันการกู้คืนก่อนวางแผนเปลี่ยนฐานข้อมูล หากสถานะใดไม่ทราบหรือ apply ไปบางส่วน ให้หยุดและตรวจสอบก่อน
-3. ทบทวนและอนุมัติ migration `010_graduation_verification.sql` แล้วให้ผู้ดูแล apply เฉพาะ migration ที่ตรวจแล้วว่ายังไม่เคย apply ตามแผนที่อนุมัติ ห้ามรัน migration ทั้งชุดโดยเดา และห้ามใช้ `fixtures/v4-demo/seed-demo.sql` บน RDS
+3. ทบทวนและอนุมัติ migration `010_graduation_verification.sql` และ `011_graduation_student_metadata.sql` แล้วให้ผู้ดูแล apply เฉพาะ migration ที่ตรวจแล้วว่ายังไม่เคย apply ตามแผนที่อนุมัติ ห้ามรัน migration ทั้งชุดโดยเดา และห้ามใช้ `fixtures/v4-demo/seed-demo.sql` บน RDS
 4. เมื่อ schema พร้อมแล้ว จึง deploy Lambda ด้วย `sam build` และ `sam deploy` จาก `backend/` โดยใช้ stack parameters ของ environment ที่อนุมัติ การ deploy นี้จะส่ง routes V4 ไปกับ Lambda เดิม
 5. deploy frontend ผ่าน Amplify เฉพาะ branch ที่เชื่อมกับ environment นั้น จากนั้นตรวจ API และหน้าจอด้วยบัญชี/ข้อมูล Demo ที่ได้รับอนุมัติ
 
@@ -160,6 +160,7 @@ node src/graduation-import.mjs --file fixtures/v4-demo/batch-001-demo-success.cs
 | `GET /api/graduation/me` | เฉพาะนักศึกษา: อ่านผลของบัญชีที่เข้าสู่ระบบอยู่ |
 | `GET /api/graduation/students` | อาจารย์/เจ้าหน้าที่: แสดงรายชื่อนักศึกษาสังเคราะห์หรือนักศึกษาที่ได้รับมอบหมาย |
 | `GET /api/graduation/students/{studentId}` | นักศึกษาอ่านผลของตนเองได้ หรืออาจารย์/เจ้าหน้าที่อ่านได้เมื่อได้รับมอบหมาย ผู้ดูแลหลักสูตรไม่มีสิทธิ์ |
+| `POST /api/graduation/assignments` | Staff เพิ่มนักศึกษาเข้ารายการตรวจ พร้อมชื่อและชั้นปี 1–4 |
 | `GET /api/graduation/import-batches` | เฉพาะเจ้าหน้าที่: ดูประวัติการนำเข้าแบบสรุป ไม่มีแถวผลการเรียนหรือรหัสนักศึกษา |
 
-ชื่อบัญชีนักศึกษา Demo คือ `demostudent01` และ `demostudent02` หากต้องการสาธิตในเครื่องโดยตั้งใจ ให้กำหนดค่า `DemoStudent01PasswordHash` และ `DemoStudent02PasswordHash` เป็น hash แบบ scrypt repository นี้ไม่มีรหัสผ่านให้ รหัสนักศึกษาที่ API ส่งกลับเป็นค่าจำลองรูปแบบ `DEMO*` ปิดการเข้าสู่ระบบ Demo ในระบบที่ใช้ร่วมกันหรือ production
+ชื่อบัญชีนักศึกษา Demo คือ `demostudent01` ถึง `demostudent04` หากต้องการสาธิตในเครื่องโดยตั้งใจ ให้กำหนดค่า password hash แบบ scrypt ให้แต่ละ parameter (ใช้ hash เดียวกันได้เฉพาะ Demo) repository นี้ไม่มีรหัสผ่านให้ รหัสนักศึกษาที่ API ส่งกลับเป็นค่าจำลองรูปแบบ `DEMO*` ปิดการเข้าสู่ระบบ Demo ในระบบที่ใช้ร่วมกันหรือ production
