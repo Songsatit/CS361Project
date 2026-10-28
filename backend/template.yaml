@@ -369,6 +369,18 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/graduation/import-batches
             Method: GET
+        TuLogout:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/auth/logout
+            Method: POST
+        AuthMe:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/auth/me
+            Method: GET
 
   AuthFunction:
     Type: AWS::Serverless::Function
@@ -390,18 +402,6 @@ Resources:
             RouteSettings:
               ThrottlingRateLimit: 2
               ThrottlingBurstLimit: 5
-        TuLogout:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/auth/logout
-            Method: POST
-        AuthMe:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/auth/me
-            Method: GET
         StudentProfile:
           Type: HttpApi
           Properties:
