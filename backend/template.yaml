@@ -160,6 +160,8 @@ Resources:
         AllowHeaders:
           - content-type
           - authorization
+          - x-cs361-csrf
+        AllowCredentials: true
       DefaultRouteSettings:
         ThrottlingBurstLimit: 50
         ThrottlingRateLimit: 20
@@ -388,6 +390,18 @@ Resources:
             RouteSettings:
               ThrottlingRateLimit: 2
               ThrottlingBurstLimit: 5
+        TuLogout:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/auth/logout
+            Method: POST
+        AuthMe:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/auth/me
+            Method: GET
         StudentProfile:
           Type: HttpApi
           Properties:
