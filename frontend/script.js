@@ -1134,7 +1134,7 @@ async function loadStudyPlans() {
     );
     if (!pathwayPlans.length) continue;
 
-    const availablePlans = pathwayPlans.map(plan => ({
+    const availablePlans = [...new Map(pathwayPlans.map(plan => [plan.study_plan_id, plan])).values()].map(plan => ({
       id: plan.study_plan_id,
       label: studyPlanLabel(plan.study_plan_id, plan.plan_name_th ?? plan.plan_name, plan.plan_name_en),
       sourceText: `${plan.study_plan_id ?? ""} ${plan.plan_name_th ?? plan.plan_name ?? ""} ${plan.plan_name_en ?? ""}`,
@@ -1153,9 +1153,10 @@ async function loadStudyPlans() {
             : index === 0 ? "แผน 3.5 ปี" : "แผน 4 ปี";
       });
     }
-    const selected = availablePlans.find(plan => /PROJECT$/i.test(plan.id)) ?? availablePlans[0];
-    program.studyPlans = availablePlans;
-    program.activeStudyPlanId = program.activeStudyPlanId && availablePlans.some(plan => plan.id === program.activeStudyPlanId)
+    const labeledPlans = disambiguateStudyPlanLabels(availablePlans);
+    const selected = labeledPlans.find(plan => /PROJECT$/i.test(plan.id)) ?? labeledPlans[0];
+    program.studyPlans = labeledPlans;
+    program.activeStudyPlanId = program.activeStudyPlanId && labeledPlans.some(plan => plan.id === program.activeStudyPlanId)
       ? program.activeStudyPlanId
       : selected.id;
     program.plan = [];
@@ -1205,6 +1206,19 @@ function compactStudyPlanLabel(program, label) {
     new RegExp(`^${escapedMajor}\\s*[-–—:]\\s*${escapedMajor}(?=\\s|·|$)`, "i"),
     major
   );
+}
+
+function shortStudyPlanId(planId) {
+  const parts = String(planId ?? "").split(/[-_]/).filter(Boolean);
+  return parts.slice(-2).join("-") || String(planId ?? "");
+}
+
+function disambiguateStudyPlanLabels(plans) {
+  const counts = new Map();
+  plans.forEach(plan => counts.set(plan.label, (counts.get(plan.label) ?? 0) + 1));
+  return plans.map(plan => counts.get(plan.label) > 1
+    ? { ...plan, label: `${plan.label} (${shortStudyPlanId(plan.id)})` }
+    : plan);
 }
 
 function studyPlanMajorLabel(program) {
@@ -2042,11 +2056,11 @@ async function loadEditorActivePlan(program) {
     const selectedPlanId = state.editorPlanId || program.activeStudyPlanId || plans[0].study_plan_id;
     const selectedPlan = plans.find(plan => plan.study_plan_id === selectedPlanId) || plans[0];
     state.editorPlanId = selectedPlan.study_plan_id;
-    program.studyPlans = plans.map(plan => ({
+    program.studyPlans = disambiguateStudyPlanLabels(plans.map(plan => ({
       id: plan.study_plan_id,
       label: studyPlanLabel(plan.study_plan_id, plan.plan_name_th ?? plan.plan_name, plan.plan_name_en),
       plan: []
-    }));
+    })));
     const detailResponse = await apiGet(`${API_BASE}/api/study-plans/${encodeURIComponent(selectedPlan.study_plan_id)}`);
     if (!detailResponse.ok) throw new Error(`โหลดรายวิชาในแผนย่อยไม่สำเร็จ (${detailResponse.status})`);
     const detailPayload = detailResponse.payload;
