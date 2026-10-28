@@ -28,7 +28,6 @@ window.fetch = async (input, init = {}) => {
   const response = await nativeFetch(input, { ...init, headers });
   if (response.status === 401 && url.startsWith(API_BASE) && !url.endsWith("/api/auth/login")) {
     clearAuthSession();
-    if (state.view !== "login") go("login");
   }
   return response;
 };
@@ -101,8 +100,39 @@ function restoreMockUser() {
 function clearAuthSession() {
   state.user = null;
   state.token = null;
+  state.view = "home";
+  state.draftRequests = [];
+  state.draftRequestsLoaded = false;
+  state.managementCurricula = [];
+  state.managementCurriculaLoaded = false;
+  state.curriculumChanges = [];
+  state.curriculumChangesLoaded = false;
+  state.curriculumCourses = [];
+  state.curriculumCoursesLoaded = false;
+  state.curriculumCoursesKey = null;
+  state.studentProfile = null;
+  state.studentProfileLoading = false;
+  state.studentProfileAttempted = false;
+  state.studentProfileError = "";
+  state.graduationResult = null;
+  state.graduationStudents = [];
+  state.graduationBatches = [];
+  state.graduationSelectedStudentId = "";
+  state.graduationLoading = false;
+  state.graduationLoaded = false;
+  state.graduationError = "";
+  state.selectedChangeRequest = null;
+  state.editingDraftRequestId = null;
+  state.pendingDraftToEdit = null;
+  state.changeRequestLoading = false;
+  state.changeRequestError = "";
+  state.editorProgramLoaded = false;
+  state.editorLoading = false;
+  state.accountMenuOpen = false;
   localStorage.removeItem("cs361-v3-user");
   localStorage.removeItem("cs361-v3-token");
+  render();
+  void loadApiData();
 }
 
 function tokenExpired(token = state.token) {
@@ -128,7 +158,12 @@ function draftApiHeaders() {
 }
 
 async function loadDraftChangeRequests() {
-  if (!state.user || state.draftRequestsLoaded) return state.draftRequests;
+  if (!state.user) {
+    state.draftRequests = [];
+    state.draftRequestsLoaded = true;
+    return state.draftRequests;
+  }
+  if (state.draftRequestsLoaded) return state.draftRequests;
   try {
     const response = await fetch(`${API_BASE}/api/change-requests`, {
       headers: draftApiHeaders()
@@ -169,7 +204,12 @@ async function findOrCreateOwnedDraft({ curriculumId, type, title, sourceCurricu
 }
 
 async function loadManagementCurricula() {
-  if (!canManageCurricula() || state.managementCurriculaLoaded) return state.managementCurricula;
+  if (!state.user || !canManageCurricula()) {
+    state.managementCurricula = [];
+    state.managementCurriculaLoaded = true;
+    return state.managementCurricula;
+  }
+  if (state.managementCurriculaLoaded) return state.managementCurricula;
   try {
     const response = await fetch(`${API_BASE}/api/curricula?includeInactive=1`, {
       headers: draftApiHeaders()
@@ -439,7 +479,12 @@ async function loadAuditLogs() {
 }
 
 async function loadCurriculumChanges(curriculumId) {
-  if (!curriculumId || state.curriculumChangesLoaded) return state.curriculumChanges;
+  if (!state.user || !curriculumId) {
+    state.curriculumChanges = [];
+    state.curriculumChangesLoaded = true;
+    return state.curriculumChanges;
+  }
+  if (state.curriculumChangesLoaded) return state.curriculumChanges;
   try {
     const response = await fetch(`${API_BASE}/api/curriculum-changes?curriculumId=${encodeURIComponent(curriculumId)}`, { headers: draftApiHeaders() });
     if (!response.ok) throw new Error(`Curriculum changes API returned ${response.status}`);
@@ -455,7 +500,12 @@ async function loadCurriculumChanges(curriculumId) {
 }
 
 async function loadCurriculumCourses(program) {
-  if (!program?.curriculumId) return [];
+  if (!state.user || !program?.curriculumId) {
+    state.curriculumCourses = [];
+    state.curriculumCoursesLoaded = true;
+    state.curriculumCoursesKey = null;
+    return state.curriculumCourses;
+  }
   const key = `${program.curriculumId}:${program.pathwayId ?? ""}`;
   if (state.curriculumCoursesLoaded && state.curriculumCoursesKey === key) {
     return state.curriculumCourses;
@@ -1076,7 +1126,7 @@ async function loadApiData() {
     // the UI cannot show stale/mock records alongside real data.
     const apiCourseCodeSet = new Set(courseCodes);
     Object.keys(COURSES).forEach(code => {
-      if (!apiCourseCodeSet.has(code)) delete COURSES[code];
+      if (!apiCourseCodeSet.has(code) && !COURSES[code]?.createdCourse) delete COURSES[code];
     });
     for (let index = PROGRAMS.length - 1; index >= 0; index -= 1) {
       const program = PROGRAMS[index];
@@ -3690,7 +3740,7 @@ function render() {
     }
   }
 
-  if (state.view === "program" || state.view === "workflow") {
+  if (state.user && (state.view === "program" || state.view === "workflow")) {
     const program = PROGRAMS.find(item => item.id === state.programId) || PROGRAMS[0];
     if (program?.curriculumId && !workflowCache.has(program.curriculumId)) {
       loadCurriculumWorkflow(program.curriculumId).then(() => {
@@ -3718,22 +3768,22 @@ function render() {
       });
     }
   }
-  if (state.view === "profile" && canAccessStudentProfile() && !state.studentProfile && !state.studentProfileLoading) {
+  if (state.user && state.view === "profile" && canAccessStudentProfile() && !state.studentProfile && !state.studentProfileLoading) {
     loadStudentProfile().then(() => {
       if (state.view === "profile") render();
     });
   }
-  if (state.view === "graduation" && !state.graduationLoaded && !state.graduationLoading) {
+  if (state.user && state.view === "graduation" && !state.graduationLoaded && !state.graduationLoading) {
     loadGraduationPage().then(() => {
       if (state.view === "graduation") render();
     });
   }
-  if (["curriculum-management", "my-change-requests", "review-requests"].includes(state.view) && !state.draftRequestsLoaded) {
+  if (state.user && ["curriculum-management", "my-change-requests", "review-requests"].includes(state.view) && !state.draftRequestsLoaded) {
     loadDraftChangeRequests().then(() => {
       if (["curriculum-management", "my-change-requests", "review-requests"].includes(state.view)) render();
     });
   }
-  if (state.view === "curriculum-management" && canManageCurricula() && !state.managementCurriculaLoaded) {
+  if (state.user && state.view === "curriculum-management" && canManageCurricula() && !state.managementCurriculaLoaded) {
     loadManagementCurricula().then(() => {
       if (state.view === "curriculum-management") render();
     });
@@ -4123,16 +4173,7 @@ function bind() {
         state.loginError = "";
       } else if (button.dataset.authAction === "logout") {
         logout();
-        state.studentProfile = null;
-        state.studentProfileAttempted = false;
-        state.studentProfileError = "";
-        state.graduationResult = null;
-        state.graduationStudents = [];
-        state.graduationBatches = [];
-        state.graduationSelectedStudentId = "";
-        state.graduationLoaded = false;
-        state.graduationError = "";
-        state.accountMenuOpen = false;
+        return;
       } else if (button.dataset.authAction === "toggle-account") {
         state.accountMenuOpen = !state.accountMenuOpen;
       }
@@ -4168,6 +4209,7 @@ function bind() {
         if (state.token) localStorage.setItem("cs361-v3-token", state.token);
         state.loginOpen = false;
         state.loginError = "";
+        await loadApiData();
         go("home");
       } catch (error) {
         state.loginError = error.message || "TU Login ไม่สำเร็จ";
