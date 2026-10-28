@@ -984,7 +984,7 @@ async function loadApiData() {
             nameEn: curriculum.title_en || "",
             revisionYear: Number(curriculum.academic_year),
             totalCredits: Number(curriculum.total_credits) || 0,
-            duration: curriculum.duration || "หลักสูตร",
+>>>>>>> 1753813 (fix: display and open newly created curricula)
             plan: [],
             studyPlans: []
           });
@@ -1633,8 +1633,7 @@ function renderCurriculumManagement() {
       code: curriculum.title_th || curriculum.curriculum_id,
       nameEn: curriculum.title_en || "",
       revisionYear: Number(curriculum.academic_year),
-      totalCredits: Number(curriculum.total_credits) || 0,
-      duration: curriculum.duration || "หลักสูตร",
+      totalCredits: Number(curriculum.total_credits) || 0, 1753813 (fix: display and open newly created curricula)
       plan: [],
       studyPlans: []
     };
@@ -3820,7 +3819,11 @@ function go(v, id, addHistory = true) {
       editorId: v === "curriculum-editor" ? id : null
     };
 
-    history.pushState(pageState, "", routeUrl(pageState));
+    history.pushState(
+      pageState,
+      "",
+      window.location.pathname
+    );
   }
 
   window.scrollTo({
@@ -3837,32 +3840,6 @@ function go(v, id, addHistory = true) {
   }
 }
 
-function routeUrl(pageState) {
-  const params = new URLSearchParams();
-  if (pageState.view && pageState.view !== "home") params.set("view", pageState.view);
-  if (pageState.programId) params.set("programId", pageState.programId);
-  if (pageState.courseCode) params.set("courseCode", pageState.courseCode);
-  if (pageState.programTab && pageState.programTab !== "overview") params.set("tab", pageState.programTab);
-  if (pageState.year && pageState.year !== 1) params.set("year", String(pageState.year));
-  if (pageState.editorId) params.set("editorId", pageState.editorId);
-  const query = params.toString();
-  return `${window.location.pathname}${query ? `?${query}` : ""}`;
-}
-
-function routeFromLocation() {
-  const params = new URLSearchParams(window.location.search);
-  const view = params.get("view");
-  if (!view) return null;
-  return {
-    view,
-    programId: params.get("programId"),
-    courseCode: params.get("courseCode"),
-    programTab: params.get("tab") || "overview",
-    year: Number(params.get("year")) || 1,
-    editorId: params.get("editorId")
-  };
-}
-
 function syncHistoryState() {
   const current = history.state ?? {};
   history.replaceState(
@@ -3875,14 +3852,7 @@ function syncHistoryState() {
       year: state.year
     },
     "",
-    routeUrl({
-      view: state.view,
-      programId: state.programId,
-      courseCode: state.courseCode,
-      programTab: state.programTab,
-      year: state.year,
-      editorId: state.view === "curriculum-editor" ? state.editorProgram?.id : null
-    })
+    window.location.pathname
   );
 }
 
@@ -5280,23 +5250,22 @@ window.addEventListener("popstate", event => {
   const pageState = event.state;
 
   // ถ้าไม่มี history state ให้กลับหน้าแรก
-  const locationState = pageState || routeFromLocation();
-  if (!locationState) {
+  if (!pageState) {
     state.view = "home";
     state.programId = null;
     state.courseCode = null;
     state.programTab = "overview";
     state.year = 1;
   } else {
-    state.view = locationState.view || "home";
-    state.programId = locationState.programId || null;
-    state.courseCode = locationState.courseCode || null;
+    state.view = pageState.view || "home";
+    state.programId = pageState.programId || null;
+    state.courseCode = pageState.courseCode || null;
     state.programTab =
-      locationState.programTab || "overview";
-    state.year = locationState.year || 1;
+      pageState.programTab || "overview";
+    state.year = pageState.year || 1;
   }
 
-  restoreEditorRoute(locationState || {});
+  restoreEditorRoute(pageState || {});
 
   state.navOpen = false;
 
@@ -5310,7 +5279,7 @@ window.addEventListener("popstate", event => {
 
 async function bootstrap() {
   restoreMockUser();
-  const pageState = history.state?.view ? history.state : routeFromLocation();
+  const pageState = history.state;
   if (pageState?.view) {
     state.view = pageState.view;
     state.programId = pageState.programId || null;
