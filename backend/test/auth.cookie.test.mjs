@@ -224,3 +224,63 @@ test('a valid staff cookie does NOT trigger the verify-failure warning', async (
   assert.equal(res.statusCode, 200);
   assert.equal(warning, '', 'a successful verify must not log a failure');
 });
+
+// ---------- Real HTTP API (payload 2.0) cookie delivery ----------
+// AWS::Serverless::HttpApi uses payload format 2.0: API Gateway removes the Cookie header
+// from event.headers and passes cookies as a "name=value" array in event.cookies. The tests
+// above put the cookie in headers.cookie, which a deployed Lambda never receives. These
+// build the event the way API Gateway really sends it.
+
+function payloadV2Event(routeKey, { cookies, headers = {} } = {}) {
+  return {
+    version: '2.0',
+    routeKey,
+    rawPath: `/${routeKey.split(' ')[1] ?? ''}`,
+    ...(cookies ? { cookies } : {}),
+    headers,
+    requestContext: { http: { method: routeKey.split(' ')[0], sourceIp: '127.0.0.1' } },
+  };
+}
+
+test('payload 2.0: a staff token in event.cookies authenticates GET /api/auth/me', async () => {
+  const token = tokenFor('staff', 'staff01', 'Staff One');
+  const res = await handler(payloadV2Event('GET /api/auth/me', { cookies: [`token=${token}`] }));
+  assert.equal(res.statusCode, 200);
+  assert.equal(JSON.parse(res.body).data.user.role, 'staff');
+});
+
+test('payload 2.0: the token is found among several cookies', async () => {
+  const token = tokenFor('staff', 'staff01', 'Staff One');
+  const res = await handler(payloadV2Event('GET /api/auth/me', { cookies: ['theme=dark', `token=${token}`, 'lang=th'] }));
+  assert.equal(res.statusCode, 200);
+});
+
+test('payload 2.0: a protected route passes the auth gate with the cookie in event.cookies', async () => {
+  // A staff token on the staff-only assignment route reaches input validation (400) only if
+  // the 401/403 gates were cleared using the cookie from event.cookies.
+  const token = tokenFor('staff', 'staff01');
+  const res = await handler(payloadV2Event('POST /api/graduation/assignments', {
+    cookies: [`token=${token}`],
+    headers: { 'x-cs361-csrf': '1' },
+  }));
+  assert.notEqual(res.statusCode, 401);
+  assert.notEqual(res.statusCode, 403);
+});
+
+test('payload 2.0: no cookies field still returns 401', async () => {
+  const res = await handler(payloadV2Event('GET /api/auth/me'));
+  assert.equal(res.statusCode, 401);
+});
+
+test('payload 2.0: an unrelated cookie without a token returns 401', async () => {
+  const res = await handler(payloadV2Event('GET /api/auth/me', { cookies: ['theme=dark'] }));
+  assert.equal(res.statusCode, 401);
+});
+
+test('payload 2.0: a forged token in event.cookies is still rejected with 401', async () => {
+  const forged = jwt.sign({ sub: 'x', role: 'staff' }, 'a-different-secret', {
+    expiresIn: '5m', issuer: 'cs361-curriculum-api', audience: 'cs361-frontend', algorithm: 'HS256',
+  });
+  const res = await handler(payloadV2Event('GET /api/auth/me', { cookies: [`token=${forged}`] }));
+  assert.equal(res.statusCode, 401);
+});
