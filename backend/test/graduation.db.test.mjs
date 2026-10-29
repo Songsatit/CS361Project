@@ -37,6 +37,11 @@ const MIGRATIONS = [
   '008_create_course_draft_action.sql',
   '009_login_attempts.sql',
   '010_graduation_verification.sql',
+  '011_graduation_student_metadata.sql',
+  '012_curriculum_metadata.sql',
+  '013_study_plan_metadata.sql',
+  '015_graduation_grade_source.sql',
+  '016_student_contact.sql',
 ];
 
 let conn;
