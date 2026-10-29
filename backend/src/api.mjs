@@ -56,13 +56,19 @@ export async function roleFromTuType(username, type, queryFn = queryRows) {
 }
 
 // Reads the access token from the request cookies, or null when it is absent.
-function cookieToken(normalizedHeaders) {
-  const raw = normalizedHeaders.cookie;
-  if (!raw) return null;
-  for (const part of String(raw).split(';')) {
-    const eq = part.indexOf('=');
-    if (eq === -1) continue;
-    if (part.slice(0, eq).trim() === AUTH_COOKIE_NAME) return part.slice(eq + 1).trim();
+// API Gateway HTTP API (payload format 2.0, used by AWS::Serverless::HttpApi) removes the
+// Cookie header from event.headers and delivers each cookie as a "name=value" string in
+// event.cookies. The header form is still read for payload 1.0 and for direct callers.
+function cookieToken(normalizedHeaders, eventCookies) {
+  const rawParts = [];
+  if (Array.isArray(eventCookies)) rawParts.push(...eventCookies);
+  if (normalizedHeaders.cookie) rawParts.push(normalizedHeaders.cookie);
+  for (const raw of rawParts) {
+    for (const part of String(raw).split(';')) {
+      const eq = part.indexOf('=');
+      if (eq === -1) continue;
+      if (part.slice(0, eq).trim() === AUTH_COOKIE_NAME) return part.slice(eq + 1).trim();
+    }
   }
   return null;
 }
@@ -776,7 +782,7 @@ function actorFromRequest(event, body = {}) {
   // existing clients keep working until they switch to the cookie flow.
   const authorization = String(normalized.authorization ?? '');
   const bearer = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
-  const token = cookieToken(normalized) ?? bearer;
+  const token = cookieToken(normalized, event.cookies) ?? bearer;
   if (token && process.env.JWT_SECRET) {
     try {
       const claims = jwt.verify(token, process.env.JWT_SECRET, {
