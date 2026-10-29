@@ -29,6 +29,13 @@ export function authCookie(token, maxAgeSeconds) {
 }
 export { AUTH_COOKIE_MAX_AGE };
 
+// Maps a TU account type to an internal role. Only accounts explicitly typed as
+// 'student' become students; every other (or missing) type defaults to the
+// least-privileged 'public' role rather than being granted 'staff' access.
+export function roleFromTuType(type) {
+  return type === 'student' ? 'student' : 'public';
+}
+
 // Reads the access token from the request cookies, or null when it is absent.
 function cookieToken(normalizedHeaders) {
   const raw = normalizedHeaders.cookie;
@@ -263,7 +270,7 @@ async function tuLogin(event) {
       displayNameEn: payload.displayname_en ?? '',
       email: payload.email ?? '',
       type: payload.type ?? 'student',
-      role: payload.type === 'student' ? 'student' : 'staff',
+      role: roleFromTuType(payload.type),
       roleLabel: payload.type === 'student' ? 'นักศึกษา' : 'เจ้าหน้าที่',
       tuStatus: payload.tu_status ?? null,
       statusId: payload.statusid ?? null,
