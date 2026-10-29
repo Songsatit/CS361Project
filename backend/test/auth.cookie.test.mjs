@@ -144,3 +144,83 @@ test('authHandler rejects an anonymous GET (profile): only students may read it'
   const res = await authHandler(httpEvent('GET /api/auth'));
   assert.equal(res.statusCode, 403);
 });
+
+// ---------- Token verify failures still return 401 (no auth is relaxed) ----------
+// The catch in actorFromRequest now logs error.name/message via console.warn. These tests
+// assert two things at once: the response stays 401 for every bad token, and the warning
+// is emitted without ever containing the token string or the JWT secret.
+
+// Signs a token the same way signAccessToken does, but with overridable claims/options so
+// each case can break exactly one thing (signature, expiry, or issuer).
+function signWith({ secret = process.env.JWT_SECRET, issuer = 'cs361-curriculum-api', audience = 'cs361-frontend', expiresIn = '5m' } = {}) {
+  return jwt.sign({ sub: 'staff01', role: 'staff', name: 'Staff One' }, secret, {
+    expiresIn, issuer, audience, algorithm: 'HS256',
+  });
+}
+
+// Runs fn while capturing console.warn output, then restores the original.
+async function captureWarn(fn) {
+  const original = console.warn;
+  const lines = [];
+  console.warn = (...args) => lines.push(args.map(String).join(' '));
+  try {
+    await fn();
+  } finally {
+    console.warn = original;
+  }
+  return lines.join('\n');
+}
+
+const cookieEvent = (token) => ({
+  routeKey: 'GET /api/auth/me',
+  rawPath: '/api/auth/me',
+  requestContext: { http: { method: 'GET', sourceIp: '127.0.0.1' } },
+  headers: { cookie: `token=${token}` },
+});
+
+test('an expired token returns 401 and logs TokenExpiredError (no token/secret leaked)', async () => {
+  const expired = signWith({ expiresIn: '-1s' });
+  let res;
+  const warning = await captureWarn(async () => { res = await handler(cookieEvent(expired)); });
+  assert.equal(res.statusCode, 401);
+  assert.match(warning, /auth token verify failed/);
+  assert.match(warning, /TokenExpiredError|jwt expired/);
+  assert.ok(!warning.includes(expired), 'the warning must not contain the token');
+  assert.ok(!warning.includes(process.env.JWT_SECRET), 'the warning must not contain the secret');
+});
+
+test('a token signed with the wrong secret returns 401 and logs a JsonWebTokenError', async () => {
+  const badSig = signWith({ secret: 'a-different-secret' });
+  let res;
+  const warning = await captureWarn(async () => { res = await handler(cookieEvent(badSig)); });
+  assert.equal(res.statusCode, 401);
+  assert.match(warning, /auth token verify failed/);
+  assert.match(warning, /JsonWebTokenError|invalid signature/);
+  assert.ok(!warning.includes(badSig));
+  assert.ok(!warning.includes(process.env.JWT_SECRET));
+});
+
+test('a token with the wrong issuer returns 401 and logs the mismatch', async () => {
+  const wrongIssuer = signWith({ issuer: 'someone-else' });
+  let res;
+  const warning = await captureWarn(async () => { res = await handler(cookieEvent(wrongIssuer)); });
+  assert.equal(res.statusCode, 401);
+  assert.match(warning, /auth token verify failed/);
+  assert.match(warning, /jwt issuer invalid|JsonWebTokenError/);
+  assert.ok(!warning.includes(wrongIssuer));
+});
+
+test('a token with the wrong audience returns 401', async () => {
+  const wrongAudience = signWith({ audience: 'some-other-app' });
+  let res;
+  const warning = await captureWarn(async () => { res = await handler(cookieEvent(wrongAudience)); });
+  assert.equal(res.statusCode, 401);
+  assert.match(warning, /auth token verify failed/);
+});
+
+test('a valid staff cookie does NOT trigger the verify-failure warning', async () => {
+  let res;
+  const warning = await captureWarn(async () => { res = await handler(cookieEvent(tokenFor('staff', 'staff01', 'Staff One'))); });
+  assert.equal(res.statusCode, 200);
+  assert.equal(warning, '', 'a successful verify must not log a failure');
+});

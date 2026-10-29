@@ -791,7 +791,11 @@ function actorFromRequest(event, body = {}) {
           authenticated: true,
         };
       }
-    } catch {
+    } catch (error) {
+      // Surface why verification failed (expired / bad signature / issuer-audience mismatch)
+      // so a production 401 can be told apart from a missing cookie. Never log the token or
+      // the secret: error.name and error.message from jsonwebtoken carry neither.
+      console.warn('auth token verify failed', error.name, error.message);
       return { username: '', role: '', authenticated: false, authError: true };
     }
   }
