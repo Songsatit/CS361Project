@@ -44,12 +44,48 @@ window.fetch = async (input, init = {}) => {
     }
   }
 
+  const isAuthMe = url.endsWith("/api/auth/me");
+
   const response = await nativeFetch(input, requestInit);
   if (response.status === 401 && isApiRequest && !isLogin) {
-    clearAuthSession();
+    // A single 401 no longer logs the user out on its own. One failing route (e.g. a dropped
+    // cookie on that request, or a server-side blip) should not nuke a still-valid session.
+    // The 401 on /api/auth/me is the authoritative "session is gone" signal and clears
+    // directly; any other 401 is confirmed against /api/auth/me first.
+    if (isAuthMe) {
+      clearAuthSession();
+    } else {
+      console.warn("API request returned 401:", url);
+      const stillAuthed = await confirmSessionStillValid();
+      if (!stillAuthed) clearAuthSession();
+    }
   }
   return response;
 };
+
+// Shared in-flight promise so many simultaneous 401s trigger at most one /api/auth/me check.
+let sessionConfirmInFlight = null;
+
+// Asks the backend whether the HttpOnly session cookie is still valid. Returns true when the
+// session holds (keep the user logged in) and false when /api/auth/me itself answers 401
+// (truly expired/invalid -> caller clears the session). Network errors are treated as
+// "still valid" so a transient blip does not log the user out. Uses nativeFetch to bypass the
+// wrapper above, which prevents the recursive-401 loop the in-flight guard also guards against.
+function confirmSessionStillValid() {
+  if (sessionConfirmInFlight) return sessionConfirmInFlight;
+  sessionConfirmInFlight = (async () => {
+    try {
+      const res = await nativeFetch(`${API_BASE}/api/auth/me`, { credentials: "include" });
+      if (res.status === 401) return false;
+      return true;
+    } catch {
+      return true;
+    } finally {
+      sessionConfirmInFlight = null;
+    }
+  })();
+  return sessionConfirmInFlight;
+}
 
 const API_GET_CACHE_TTL_MS = 5 * 60 * 1000;
 const API_GET_RETRY_DELAYS_MS = [2000, 5000, 10000];
