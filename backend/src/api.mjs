@@ -29,11 +29,30 @@ export function authCookie(token, maxAgeSeconds) {
 }
 export { AUTH_COOKIE_MAX_AGE };
 
-// Maps a TU account type to an internal role. Only accounts explicitly typed as
-// 'student' become students; every other (or missing) type defaults to the
-// least-privileged 'public' role rather than being granted 'staff' access.
-export function roleFromTuType(type) {
-  return type === 'student' ? 'student' : 'public';
+// Roles that may be granted to a non-student TU account through the allowlist. Any value
+// outside this set (including a NULL or unexpected row) is ignored and falls back to public.
+const ALLOWLIST_ROLES = new Set(['instructor', 'staff', 'curriculum_admin']);
+
+// Maps a TU account to an internal role.
+//   - type === 'student'            -> 'student' (unchanged)
+//   - non-student in role_allowlist -> the stored role
+//   - non-student, not listed        -> 'public'
+//   - allowlist query throws         -> 'public' (never escalate on error)
+// queryFn is injected so tests can supply a stub without a database or network. It defaults
+// to the shared pool-backed queryRows in production.
+export async function roleFromTuType(username, type, queryFn = queryRows) {
+  if (type === 'student') return 'student';
+  try {
+    const rows = await queryFn(
+      'SELECT role FROM role_allowlist WHERE tu_username = ?',
+      [String(username ?? '').trim().toLowerCase()],
+    );
+    const role = rows?.[0]?.role;
+    return ALLOWLIST_ROLES.has(role) ? role : 'public';
+  } catch (error) {
+    console.error('role_allowlist lookup failed; defaulting to public role', error);
+    return 'public';
+  }
 }
 
 // Reads the access token from the request cookies, or null when it is absent.
@@ -123,7 +142,7 @@ function verifyPassword(password, encodedHash) {
   }
 }
 
-function demoLogin(username, password) {
+export function demoLogin(username, password) {
   if (process.env.ENABLE_DEMO_LOGIN !== 'true') return null;
   const key = username.trim().toLowerCase();
   const account = demoAccounts[key];
@@ -270,7 +289,7 @@ async function tuLogin(event) {
       displayNameEn: payload.displayname_en ?? '',
       email: payload.email ?? '',
       type: payload.type ?? 'student',
-      role: roleFromTuType(payload.type),
+      role: await roleFromTuType(payload.username ?? username, payload.type),
       roleLabel: payload.type === 'student' ? 'นักศึกษา' : 'เจ้าหน้าที่',
       tuStatus: payload.tu_status ?? null,
       statusId: payload.statusid ?? null,
