@@ -40,8 +40,8 @@ const MIGRATIONS = [
   '011_graduation_student_metadata.sql',
   '012_curriculum_metadata.sql',
   '013_study_plan_metadata.sql',
-  '014_graduation_grade_source.sql',
-  '015_student_contact.sql',
+  '015_graduation_grade_source.sql',
+  '016_student_contact.sql',
 ];
 
 let conn;
