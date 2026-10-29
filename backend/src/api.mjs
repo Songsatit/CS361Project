@@ -289,7 +289,9 @@ async function tuLogin(event) {
       displayNameEn: payload.displayname_en ?? '',
       email: payload.email ?? '',
       type: payload.type ?? 'student',
-      role: await roleFromTuType(payload.username ?? username, payload.type),
+      // Restored from d7c7dd3 at the owner's request: every non-student TU account is staff.
+      // This bypasses role_allowlist (roleFromTuType stays exported but is not called here).
+      role: payload.type === 'student' ? 'student' : 'staff',
       roleLabel: payload.type === 'student' ? 'นักศึกษา' : 'เจ้าหน้าที่',
       tuStatus: payload.tu_status ?? null,
       statusId: payload.statusid ?? null,
