@@ -1220,6 +1220,38 @@ async function ensureActiveStudyPlan(program) {
   }
 }
 
+// Finds the source program and source plan currently chosen in the "copy from another
+// curriculum" dialog. The plan is undefined when the program has no API study plans.
+function copySourceSelection() {
+  const copy = state.editorCopy;
+  if (!copy) return { source: null, plan: null };
+  const source = PROGRAMS.find(program => program.id === copy.sourceId) || PROGRAMS[0];
+  const plans = source?.studyPlans ?? [];
+  const plan = plans.find(item => item.id === (copy.sourcePlanId || source?.activeStudyPlanId)) || plans[0] || null;
+  return { source, plan };
+}
+
+// A plan's courses are only fetched when its program page is opened, so the copy dialog must
+// fetch the chosen source plan itself. Without this the preview showed "0 courses" and the
+// copy button stayed disabled with no explanation.
+async function ensureCopySourcePlan() {
+  const { plan } = copySourceSelection();
+  if (!plan || plan.loading || plan.loaded || plan.plan?.length) return;
+  plan.loading = true;
+  plan.error = "";
+  render();
+  try {
+    plan.plan = await loadStudyPlanDetail(plan.id);
+    plan.loaded = true;
+  } catch (error) {
+    plan.error = error.message || "โหลดรายวิชาของแผนต้นทางไม่สำเร็จ";
+    console.warn(`Copy source plan ${plan.id} unavailable.`, error);
+  } finally {
+    plan.loading = false;
+    if (state.editorCopy) render();
+  }
+}
+
 function studyPlanLabel(planId, planName, planNameEn = "") {
   const planText = `${planId ?? ""} ${planName ?? ""} ${planNameEn ?? ""}`;
   // Prefer the meaningful plan type over a generic duration. Some API plan
@@ -2181,8 +2213,20 @@ function renderEditorCopyModal() {
   if (copy.level === "year") previewTerms = previewTerms.filter(term => term.year === Number(copy.year));
   if (copy.level === "term") previewTerms = previewTerms.filter(term => term.year === Number(copy.year) && term.term === Number(copy.term));
   const preview = previewTerms.flatMap(term => term.courses ?? []);
+  // Tell the user why nothing can be copied instead of showing a silent "0 courses".
+  let previewHtml;
+  if (selectedSourcePlan?.loading) {
+    previewHtml = `<strong>กำลังโหลดรายวิชาของแผนต้นทาง...</strong>`;
+  } else if (selectedSourcePlan?.error) {
+    previewHtml = `<div class="editor-state-card editor-state-card--error" role="alert">คัดลอกไม่ได้: ${esc(selectedSourcePlan.error)} <button type="button" data-editor-copy-retry>ลองใหม่</button></div>`;
+  } else if (!preview.length) {
+    const scopeText = copy.level === "year" ? `ปี ${copy.year}` : copy.level === "term" ? `ปี ${copy.year} ภาค ${copy.term}` : "แผนนี้";
+    previewHtml = `<div class="editor-state-card editor-state-card--error" role="alert">คัดลอกไม่ได้: ${esc(scopeText)}ของหลักสูตรต้นทางไม่มีรายวิชาให้คัดลอก ลองเลือกหลักสูตรหรือแผนอื่น</div>`;
+  } else {
+    previewHtml = `<strong>ตัวอย่าง ${preview.length} รายวิชา</strong>${preview.map(code => `<span>${esc(code)} — ${esc(COURSES[code]?.name ?? code)}</span>`).join("")}`;
+  }
   const planOptions = sourcePlans.length ? `<div class="editor-copy-plan-list"><strong>แผนย่อยต้นทาง</strong>${sourcePlans.map(plan => `<button type="button" class="editor-source-option ${plan.id === sourcePlanId ? "editor-source-option--active" : ""}" data-editor-copy-plan-choice="${esc(plan.id)}"><strong>${esc(plan.label)}</strong><small>${esc(plan.id)}</small></button>`).join("")}</div>` : `<p class="editor-drawer-hint">หลักสูตรนี้มีแผนหลักเดียว</p>`;
-  return `<div class="editor-modal-backdrop" data-editor-copy-close><section class="editor-copy-modal" role="dialog" aria-modal="true" data-editor-copy-dialog><div class="editor-drawer-head"><div><span class="workflow-kicker">COPY FROM ACTIVE VERSION</span><h2>คัดลอกจากหลักสูตรอื่น</h2><p class="editor-drawer-hint">เลือกหลักสูตรย่อยและแผนย่อยต้นทาง แล้วตรวจตัวอย่างก่อนยืนยัน</p></div><button type="button" class="editor-drawer-close" data-editor-copy-close>×</button></div><label>ค้นหาหลักสูตรต้นทาง<input type="search" data-editor-copy-source-search value="${esc(copy.sourceQuery ?? "")}" placeholder="ค้นหาชื่อ รหัส หรือสาขา"></label><div class="editor-source-list">${sourceOptions.length ? sourceOptions.map(program => `<button type="button" class="editor-source-option ${program.id === copy.sourceId ? "editor-source-option--active" : ""}" data-editor-copy-source-choice="${esc(program.id)}"><strong>${esc(program.code)}</strong><span>พ.ศ. ${esc(program.revisionYear)} · ${esc(studyPlanMajorLabel(program))}</span><small>${esc(program.curriculumId)}${program.pathwayId ? ` · ${esc(program.pathwayId)}` : ""}</small></button>`).join("") : `<span class="editor-drawer-hint">ไม่พบหลักสูตรต้นทาง</span>`}</div>${planOptions}${copy.level !== "curriculum" ? `<div class="editor-copy-scope"><span>ขอบเขต: ${copy.level === "year" ? `ปี ${copy.year}` : `ปี ${copy.year} ภาค ${copy.term}`}</span></div>` : ""}<div class="editor-copy-preview"><strong>ตัวอย่าง ${preview.length} รายวิชา</strong>${preview.map(code => `<span>${esc(code)} — ${esc(COURSES[code]?.name ?? code)}</span>`).join("")}</div><label>ถ้าปลายทางมีวิชาอยู่แล้ว<select data-editor-copy-mode><option value="append">เพิ่มต่อท้าย (ข้ามที่ซ้ำ)</option><option value="replace">แทนที่ทั้งหมด</option></select></label><div class="editor-drawer-actions"><button type="button" class="workflow-action workflow-action--muted" data-editor-copy-close>ยกเลิก</button><button type="button" class="workflow-action workflow-action--primary" data-editor-copy-confirm ${preview.length ? "" : "disabled"}>ยืนยันคัดลอก</button></div></section></div>`;
+  return `<div class="editor-modal-backdrop" data-editor-copy-close><section class="editor-copy-modal" role="dialog" aria-modal="true" data-editor-copy-dialog><div class="editor-drawer-head"><div><span class="workflow-kicker">COPY FROM ACTIVE VERSION</span><h2>คัดลอกจากหลักสูตรอื่น</h2><p class="editor-drawer-hint">เลือกหลักสูตรย่อยและแผนย่อยต้นทาง แล้วตรวจตัวอย่างก่อนยืนยัน</p></div><button type="button" class="editor-drawer-close" data-editor-copy-close>×</button></div><label>ค้นหาหลักสูตรต้นทาง<input type="search" data-editor-copy-source-search value="${esc(copy.sourceQuery ?? "")}" placeholder="ค้นหาชื่อ รหัส หรือสาขา"></label><div class="editor-source-list">${sourceOptions.length ? sourceOptions.map(program => `<button type="button" class="editor-source-option ${program.id === copy.sourceId ? "editor-source-option--active" : ""}" data-editor-copy-source-choice="${esc(program.id)}"><strong>${esc(program.code)}</strong><span>พ.ศ. ${esc(program.revisionYear)} · ${esc(studyPlanMajorLabel(program))}</span><small>${esc(program.curriculumId)}${program.pathwayId ? ` · ${esc(program.pathwayId)}` : ""}</small></button>`).join("") : `<span class="editor-drawer-hint">ไม่พบหลักสูตรต้นทาง</span>`}</div>${planOptions}${copy.level !== "curriculum" ? `<div class="editor-copy-scope"><span>ขอบเขต: ${copy.level === "year" ? `ปี ${copy.year}` : `ปี ${copy.year} ภาค ${copy.term}`}</span></div>` : ""}<div class="editor-copy-preview">${previewHtml}</div><label>ถ้าปลายทางมีวิชาอยู่แล้ว<select data-editor-copy-mode><option value="append">เพิ่มต่อท้าย (ข้ามที่ซ้ำ)</option><option value="replace">แทนที่ทั้งหมด</option></select></label><div class="editor-drawer-actions"><button type="button" class="workflow-action workflow-action--muted" data-editor-copy-close>ยกเลิก</button><button type="button" class="workflow-action workflow-action--primary" data-editor-copy-confirm ${preview.length ? "" : "disabled"}>ยืนยันคัดลอก</button></div></section></div>`;
 }
 
 function renderEditorTermCard(program, term) {
@@ -5138,6 +5182,7 @@ function bind() {
       const firstSource = PROGRAMS[0];
       state.editorCopy = { level: button.dataset.editorCopyLevel, year: button.dataset.year, term: button.dataset.term, sourceId: firstSource?.id, sourcePlanId: firstSource?.activeStudyPlanId || firstSource?.studyPlans?.[0]?.id || null, sourceQuery: "" };
       render();
+      void ensureCopySourcePlan();
     };
   });
 
@@ -5165,6 +5210,7 @@ function bind() {
       state.editorCopy.sourceId = button.dataset.editorCopySourceChoice;
       state.editorCopy.sourcePlanId = nextSource?.activeStudyPlanId || nextSource?.studyPlans?.[0]?.id || null;
       render();
+      void ensureCopySourcePlan();
     };
   });
 
@@ -5172,6 +5218,18 @@ function bind() {
     button.onclick = () => {
       state.editorCopy.sourcePlanId = button.dataset.editorCopyPlanChoice;
       render();
+      void ensureCopySourcePlan();
+    };
+  });
+
+  document.querySelectorAll("[data-editor-copy-retry]").forEach(button => {
+    button.onclick = () => {
+      const { plan } = copySourceSelection();
+      if (!plan) return;
+      plan.error = "";
+      plan.loaded = false;
+      clearApiGetCache(key => key.includes(`/api/study-plans/${plan.id}`));
+      void ensureCopySourcePlan();
     };
   });
 
@@ -5186,6 +5244,8 @@ function bind() {
       let selected = sourceTerms;
       if (copy.level === "year") selected = selected.filter(term => term.year === Number(copy.year));
       if (copy.level === "term") selected = selected.filter(term => term.year === Number(copy.year) && term.term === Number(copy.term));
+      // Never close the dialog as if it copied something when there is nothing to copy.
+      if (!selected.some(term => (term.courses ?? []).length)) return;
       const mode = document.querySelector("[data-editor-copy-mode]")?.value ?? "append";
       const targetTerms = copy.level === "curriculum"
         ? state.planEdit.terms
