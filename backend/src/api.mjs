@@ -2056,10 +2056,29 @@ async function listGraduationImportBatches(event) {
   return response(200, { data: rows.map((row) => ({ ...row, error_summary: parseJsonValue(row.error_summary, {}) })) });
 }
 
+// Returns the route string the handler matches on.
+// - With API Gateway, event.routeKey is a template ("GET /api/courses/{courseId}"), so it
+//   cannot be trimmed by string operations. A request to "/api/courses/" (trailing slash)
+//   matches the {courseId} template with an empty parameter and used to reach getCourse,
+//   which answered 400. Treat that case as the list route instead.
+// - Without a routeKey (older/direct events) the route is built from the path, and a
+//   trailing slash is dropped so "/api/courses/" and "/api/courses" are the same route.
+export function normalizeRoute(event) {
+  if (event.routeKey) {
+    const isCourseDetail = event.routeKey === 'GET /api/courses/{courseId}'
+      || event.routeKey === 'GET /api/courses/{courseCode}';
+    const hasCourseId = Boolean(pathParameter(event, 'courseId') || pathParameter(event, 'courseCode'));
+    return isCourseDetail && !hasCourseId ? 'GET /api/courses' : event.routeKey;
+  }
+  const method = event.requestContext?.http?.method ?? event.httpMethod;
+  const path = String(event.rawPath ?? event.path ?? '').replace(/(.)\/+$/, '$1');
+  return `${method} ${path}`;
+}
+
 export const handler = async (event) => {
   try {
     const method = event.requestContext?.http?.method ?? event.httpMethod;
-    const route = event.routeKey ?? `${method} ${event.rawPath ?? event.path ?? ''}`;
+    const route = normalizeRoute(event);
 
     if (route === 'POST /api/auth/login') return await tuLogin(event);
     if (method === 'OPTIONS') return response(204, null);
@@ -2110,7 +2129,10 @@ export const handler = async (event) => {
     if (method !== 'GET') return response(405, { error: 'Method not allowed' });
     if (route === 'GET /api/courses') return await listCourses(event);
     if (route.endsWith('/prerequisites') && route.startsWith('GET /api/courses/')) return await listPrerequisites(event);
-    if (route === 'GET /api/courses/{courseCode}' || route.startsWith('GET /api/courses/')) return await getCourse(event);
+    if (route.startsWith('GET /api/courses/')
+      && (pathParameter(event, 'courseId') || pathParameter(event, 'courseCode'))) {
+      return await getCourse(event);
+    }
     if (route === 'GET /api/curricula/{curriculumId}/graduation-conditions') return await listGraduationConditions(event);
     if (route === 'GET /api/curricula/{curriculumId}/workflow') return await getCurriculumWorkflow(event);
     if (route === 'GET /api/curricula/{curriculumId}/active-plan') return await getActivePlanForDraft(event);
