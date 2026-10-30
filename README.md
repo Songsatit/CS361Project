@@ -12,7 +12,7 @@
  
 ## 🔗 ลิงก์และการเข้าถึง
  
-- **ระบบที่ Deploy แล้ว:** [https://main.d3dm5h9pinlgfm.amplifyapp.com]
+- **ระบบที่ Deploy แล้ว:** [https://main.d4mgfx74c182i.amplifyapp.com/]
 - **Architecture Diagram:** [![V3 Architecture Diagram](docs/v3-architecture.png)](docs/v3-architecture.png)
 - **GitHub Repository:** [https://github.com/Songsatit/CS361Project.git]
  
