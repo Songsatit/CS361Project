@@ -2094,10 +2094,10 @@ async function listAssignedGraduationStudents(event) {
 
 async function assignGraduationStudent(event) {
   const actor = actorFromRequest(event);
-  // Staff add a student to their own list. A curriculum admin picks who reviews the student
-  // (an instructor, for example). Assigning grants access to that reviewer only; the admin
-  // still cannot read grades.
-  if (!['staff', 'curriculum_admin'].includes(actor.role)) return response(403, { error: 'Only staff or curriculum admins can assign students' });
+  // Only a curriculum admin decides who reviews which student (an instructor, for example).
+  // Assigning grants access to that reviewer only; the admin still cannot read grades.
+  // Staff no longer add students to their own list.
+  if (actor.role !== 'curriculum_admin') return response(403, { error: 'Only curriculum admins can assign students' });
   const body = requestBody(event);
   if (!body) return response(400, { error: 'Request body must be valid JSON' });
   if (Array.isArray(body.studentIds)) return assignGraduationStudentsBulk(actor, body);
@@ -2108,11 +2108,8 @@ async function assignGraduationStudent(event) {
   if (!graduationStudentIdPattern.test(studentId)) return response(400, { error: 'studentId is invalid' });
   if (hasYear && (!Number.isInteger(studentYear) || studentYear < 1 || studentYear > 4)) return response(400, { error: 'studentYear must be 1, 2, 3, or 4' });
 
-  let assignee = actor.username;
-  if (actor.role === 'curriculum_admin') {
-    assignee = String(body.assigneeUsername ?? '').trim().toLowerCase();
-    if (!assigneeUsernamePattern.test(assignee)) return response(400, { error: 'assigneeUsername is required' });
-  }
+  const assignee = String(body.assigneeUsername ?? '').trim().toLowerCase();
+  if (!assigneeUsernamePattern.test(assignee)) return response(400, { error: 'assigneeUsername is required' });
   await pool.execute(
     `INSERT INTO graduation_student_assignment
       (assignee_username, student_id, assigned_by, display_name, student_year)
@@ -2152,11 +2149,8 @@ async function assignGraduationStudentsBulk(actor, body) {
   const invalid = studentIds.filter((id) => !graduationStudentIdPattern.test(id));
   if (invalid.length) return response(400, { error: `studentIds contains invalid IDs: ${invalid.slice(0, 5).join(', ')}` });
 
-  let assignee = actor.username;
-  if (actor.role === 'curriculum_admin') {
-    assignee = String(body.assigneeUsername ?? '').trim().toLowerCase();
-    if (!assigneeUsernamePattern.test(assignee)) return response(400, { error: 'assigneeUsername is required' });
-  }
+  const assignee = String(body.assigneeUsername ?? '').trim().toLowerCase();
+  if (!assigneeUsernamePattern.test(assignee)) return response(400, { error: 'assigneeUsername is required' });
 
   // Names come from the sign-in directory when it knows the student.
   const names = new Map();
@@ -2200,7 +2194,8 @@ async function assignGraduationStudentsBulk(actor, body) {
 // does not let anyone read their record (that still needs an assignment).
 async function listGraduationDirectory(event) {
   const actor = actorFromRequest(event);
-  if (!['staff', 'curriculum_admin'].includes(actor.role)) return response(403, { error: 'Forbidden' });
+  // Only curriculum admins assign reviewers, so only they need the list.
+  if (actor.role !== 'curriculum_admin') return response(403, { error: 'Forbidden' });
   let people = [];
   let available = true;
   try {
@@ -2231,12 +2226,10 @@ async function listGraduationDirectory(event) {
     const assignees = byStudent.get(String(row.username).toLowerCase()) ?? [];
     return {
       ...shape(row),
-      assignedToMe: assignees.some((name) => String(name).toLowerCase() === actor.username.toLowerCase()),
-      // Admins see who reviews each student. Staff only need to know about their own list.
-      assignees: actor.role === 'curriculum_admin' ? assignees : undefined,
+      assignees,
     };
   });
-  const reviewers = actor.role === 'curriculum_admin' ? await collectReviewerCandidates(people) : [];
+  const reviewers = await collectReviewerCandidates(people);
   return response(200, { data: { students, reviewers, available } });
 }
 

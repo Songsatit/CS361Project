@@ -126,11 +126,11 @@ test('Bearer token is still accepted as a fallback for reads', async () => {
 });
 
 test('a valid cookie plus the CSRF header passes both gates (reaches input validation)', async () => {
-  // staff assigning a student passes CSRF and auth, then hits input validation. An invalid
-  // studentYear returns 400 before any DB call, proving the request cleared CSRF and auth
-  // via the cookie without needing a Bearer header or a database connection.
+  // A curriculum admin assigning a student passes CSRF and auth, then hits input validation.
+  // An invalid studentYear returns 400 before any DB call, proving the request cleared CSRF
+  // and auth via the cookie without needing a Bearer header or a database connection.
   const res = await handler(httpEvent('POST /api/graduation/assignments', {
-    cookieToken: tokenFor('staff', 'staff'),
+    cookieToken: tokenFor('curriculum_admin', 'admin'),
     csrf: '1',
     body: JSON.stringify({ studentId: 'DEMO0001', studentYear: 99 }),
   }));
@@ -256,9 +256,9 @@ test('payload 2.0: the token is found among several cookies', async () => {
 });
 
 test('payload 2.0: a protected route passes the auth gate with the cookie in event.cookies', async () => {
-  // A staff token on the staff-only assignment route reaches input validation (400) only if
+  // An admin token on the admin-only assignment route reaches input validation (400) only if
   // the 401/403 gates were cleared using the cookie from event.cookies.
-  const token = tokenFor('staff', 'staff01');
+  const token = tokenFor('curriculum_admin', 'admin01');
   const res = await handler(payloadV2Event('POST /api/graduation/assignments', {
     cookies: [`token=${token}`],
     headers: { 'x-cs361-csrf': '1' },

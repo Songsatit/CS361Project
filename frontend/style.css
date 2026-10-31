@@ -4192,3 +4192,232 @@
     max-height: 280px;
   }
 }
+
+/* Pass / fail made obvious: result banner, per-condition badges, course pills */
+.graduation-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.9rem 1.2rem;
+  margin: 0.4rem 0 1rem;
+  padding: 1.1rem 1.3rem;
+  border-radius: 16px;
+  border: 2px solid transparent;
+}
+
+.graduation-hero-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 3.6rem;
+  height: 3.6rem;
+  border-radius: 50%;
+  font-size: 2rem;
+  font-weight: 800;
+  line-height: 1;
+  color: #fff;
+}
+
+.graduation-hero-text {
+  display: grid;
+  gap: 0.15rem;
+  flex: 1 1 14rem;
+}
+
+.graduation-hero-text strong {
+  font-size: 1.7rem;
+  line-height: 1.2;
+}
+
+.graduation-hero-text span {
+  font-size: 0.95rem;
+}
+
+.graduation-hero-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.graduation-hero--met,
+.graduation-hero--met_pending_review {
+  background: #e7f6ec;
+  border-color: #2e9e5b;
+  color: #135c33;
+}
+
+.graduation-hero--met .graduation-hero-icon,
+.graduation-hero--met_pending_review .graduation-hero-icon {
+  background: #2e9e5b;
+}
+
+.graduation-hero--met_pending_review {
+  background: #eaf3fb;
+  border-color: #3b78c2;
+  color: #1f4a7d;
+}
+
+.graduation-hero--met_pending_review .graduation-hero-icon {
+  background: #3b78c2;
+}
+
+.graduation-hero--not_met {
+  background: #fdecee;
+  border-color: #d12b3f;
+  color: #8f1727;
+}
+
+.graduation-hero--not_met .graduation-hero-icon {
+  background: #d12b3f;
+}
+
+.graduation-hero--inconclusive,
+.graduation-hero--no_data {
+  background: #f3f4f6;
+  border-color: #9aa1a9;
+  color: #3d434a;
+}
+
+.graduation-hero--inconclusive .graduation-hero-icon,
+.graduation-hero--no_data .graduation-hero-icon {
+  background: #8a9199;
+}
+
+.graduation-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.graduation-status-badge b {
+  font-size: 1rem;
+}
+
+.graduation-status-badge--passed {
+  background: #2e9e5b;
+  color: #fff;
+}
+
+.graduation-status-badge--not_passed {
+  background: #d12b3f;
+  color: #fff;
+}
+
+.graduation-status-badge--manual {
+  background: #3b78c2;
+  color: #fff;
+}
+
+.graduation-status-badge--incomplete {
+  background: #f0b429;
+  color: #3d2c00;
+}
+
+.graduation-section-title {
+  margin: 1.1rem 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.graduation-condition-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.graduation-condition {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.9rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-left-width: 6px;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.graduation-condition .graduation-status-badge {
+  flex: 0 0 auto;
+  min-width: 7.2rem;
+  justify-content: center;
+}
+
+.graduation-condition-body {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.graduation-condition-text {
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.graduation-condition-body small {
+  color: #4a4f55;
+  font-size: 0.88rem;
+}
+
+.graduation-condition--passed {
+  border-left-color: #2e9e5b;
+}
+
+.graduation-condition--not_passed {
+  border-left-color: #d12b3f;
+  background: #fff8f8;
+}
+
+.graduation-condition--manual {
+  border-left-color: #3b78c2;
+}
+
+.graduation-condition--incomplete {
+  border-left-color: #f0b429;
+}
+
+.graduation-pill {
+  display: inline-block;
+  padding: 0.12rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.graduation-pill--ok {
+  background: #e4f4ea;
+  color: #135c33;
+}
+
+.graduation-pill--fail {
+  background: #fdecee;
+  color: #b01e30;
+}
+
+.graduation-pill--none {
+  background: #eef0f2;
+  color: #5f6b5f;
+}
+
+.graduation-pill--info {
+  background: #e6f0fa;
+  color: #1f4a7d;
+}
+
+.graduation-pill--warn {
+  background: #fff3d6;
+  color: #7a5200;
+}
+
+.graduation-grade--fail {
+  color: #b01e30;
+}
+
+@media (max-width: 600px) {
+  .graduation-condition {
+    flex-direction: column;
+  }
+}
