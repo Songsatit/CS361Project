@@ -1050,7 +1050,7 @@ function renderGraduationPage() {
   return `
     <div class="page graduation-page">
       ${crumbs([{ label: "หน้าแรก", view: "home" }, { label: "ตรวจสอบการสำเร็จการศึกษา" }])}
-      <div class="graduation-page-head"><span class="workflow-kicker">V4 · GRADUATION VERIFICATION</span><h1 class="page-title">ตรวจสอบการสำเร็จการศึกษา</h1><p class="page-sub">ระบบแสดงผลตามข้อมูลที่นำเข้า และจะแจ้งเมื่อข้อมูลหรือเงื่อนไขไม่เพียงพอ</p></div>
+      <div class="graduation-page-head"><h1 class="page-title">ตรวจสอบการสำเร็จการศึกษา</h1><p class="page-sub">ระบบแสดงผลตามข้อมูลที่นำเข้า และจะแจ้งเมื่อข้อมูลหรือเงื่อนไขไม่เพียงพอ</p></div>
       ${state.graduationError ? `<section class="graduation-error">${esc(state.graduationError)}</section>` : ""}
       ${state.graduationLoading ? `<section class="profile-card">กำลังโหลดข้อมูลผลการเรียน...</section>` : ""}
       ${role === "curriculum_admin" ? renderGraduationAdminList() : studentView ? `${renderGraduationResult(state.graduationResult, "ผลตรวจสอบของนักศึกษา", "student")}${renderGraduationGradeForm(state.graduationResult)}` : `
