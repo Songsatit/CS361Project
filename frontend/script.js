@@ -997,6 +997,27 @@ const GRADUATION_ROLES = ["student", "instructor", "staff", "curriculum_admin"];
 
 const GRADUATION_GRADE_OPTIONS = ["A", "B+", "B", "C+", "C", "D+", "D", "F", "S", "P", "U", "W", "I"];
 
+// Courses graded pass/fail give credits but no letter grade. They count toward total credits
+// and stay out of the GPA, so they get their own group and a plain-language label.
+const GRADUATION_LETTER_GRADES = ["A", "B+", "B", "C+", "C", "D+", "D", "F"];
+const GRADUATION_CREDIT_ONLY_GRADES = ["S", "P"];
+const GRADUATION_OTHER_GRADES = ["U", "W", "I"];
+const GRADUATION_GRADE_NAMES = {
+  S: "S · ผ่าน (ได้หน่วยกิต ไม่มีเกรด)",
+  P: "P · ผ่าน (ได้หน่วยกิต ไม่มีเกรด)",
+  U: "U · ไม่ผ่าน (ไม่ได้หน่วยกิต)",
+  W: "W · ถอนรายวิชา",
+  I: "I · ยังไม่สมบูรณ์",
+};
+
+function graduationGradeOptionsHtml(selected = "", { blankLabel = "—", inProgress = true } = {}) {
+  const option = (value, label) => `<option value="${value}"${selected === value ? " selected" : ""}>${esc(label)}</option>`;
+  return `${blankLabel === null ? "" : option("", blankLabel)}${inProgress ? option("IP", "กำลังเรียน") : ""}`
+    + `<optgroup label="เกรดตัวอักษร">${GRADUATION_LETTER_GRADES.map(grade => option(grade, grade)).join("")}</optgroup>`
+    + `<optgroup label="ไม่มีเกรด (ได้หน่วยกิตอย่างเดียว)">${GRADUATION_CREDIT_ONLY_GRADES.map(grade => option(grade, GRADUATION_GRADE_NAMES[grade])).join("")}</optgroup>`
+    + `<optgroup label="อื่น ๆ">${GRADUATION_OTHER_GRADES.map(grade => option(grade, GRADUATION_GRADE_NAMES[grade])).join("")}</optgroup>`;
+}
+
 function graduationCurriculumOptions(selectedId) {
   const seen = new Set();
   return PROGRAMS.filter(program => program.curriculumId && !seen.has(program.curriculumId) && seen.add(program.curriculumId))
@@ -1014,7 +1035,7 @@ function renderGraduationGradeForm(result) {
       <input name="academicYear" type="number" required min="2500" max="2700" value="${buddhistYear}" aria-label="ปีการศึกษา (พ.ศ.)">
       <select name="semester" required aria-label="ภาคเรียน"><option value="1">ภาค 1</option><option value="2">ภาค 2</option><option value="3">Summer</option></select>
       <input name="credits" type="number" step="0.5" min="0" max="12" placeholder="หน่วยกิต" aria-label="หน่วยกิต">
-      <select name="grade" aria-label="เกรด"><option value="">เกรด</option>${GRADUATION_GRADE_OPTIONS.map(grade => `<option value="${grade}">${grade}</option>`).join("")}</select>
+      <select name="grade" aria-label="เกรด">${graduationGradeOptionsHtml("", { blankLabel: "เกรด", inProgress: false })}</select>
       <label class="graduation-inprogress"><input name="inProgress" type="checkbox"> กำลังเรียน</label>
       <button type="submit" class="workflow-action workflow-action--primary">เพิ่มรายการ</button>
     </div>
@@ -1105,8 +1126,8 @@ function renderGraduationPlanForm(result) {
   note(result?.pendingRecords, "ส่งแล้ว รอยืนยัน", true);
   note(result?.inProgressRecords, "กำลังเรียน (ส่งแล้ว)", true);
 
-  const gradeOptions = selected => `<option value="">—</option><option value="IP"${selected === "IP" ? " selected" : ""}>กำลังเรียน</option>${GRADUATION_GRADE_OPTIONS.map(grade => `<option value="${grade}"${selected === grade ? " selected" : ""}>${grade}</option>`).join("")}`;
-  const termTable = term => `<section class="graduation-plan-term"><div class="graduation-plan-term-head"><h4>ปี ${esc(term.year)} · ${esc(term.term === 3 ? "Summer" : `ภาค ${term.term}`)}</h4><label class="graduation-plan-bulk">ตั้งทุกวิชาในภาคนี้เป็น <select data-graduation-plan-bulk aria-label="ตั้งเกรดทั้งภาคเรียน"><option value="">เลือก…</option><option value="IP">กำลังเรียน</option>${GRADUATION_GRADE_OPTIONS.map(grade => `<option value="${grade}">${grade}</option>`).join("")}</select></label></div><table><thead><tr><th>วิชา</th><th>ชื่อวิชา</th><th>หน่วยกิต</th><th>เกรด</th></tr></thead><tbody>${term.courses.map(code => {
+  const gradeOptions = selected => graduationGradeOptionsHtml(selected);
+  const termTable = term => `<section class="graduation-plan-term"><div class="graduation-plan-term-head"><h4>ปี ${esc(term.year)} · ${esc(term.term === 3 ? "Summer" : `ภาค ${term.term}`)}</h4><label class="graduation-plan-bulk">ตั้งทุกวิชาในภาคนี้เป็น <select data-graduation-plan-bulk aria-label="ตั้งเกรดทั้งภาคเรียน">${graduationGradeOptionsHtml("", { blankLabel: "เลือก…" })}</select></label></div><table><thead><tr><th>วิชา</th><th>ชื่อวิชา</th><th>หน่วยกิต</th><th>เกรด</th></tr></thead><tbody>${term.courses.map(code => {
     const info = existing.get(graduationCodeKey(code));
     const course = COURSES[courseKey(code)] ?? {};
     const cell = info?.locked
@@ -1127,7 +1148,7 @@ function renderGraduationPlanForm(result) {
 
   return `<section class="graduation-plan-form" data-graduation-plan-form>
     <h3>เพิ่มผลการเรียนของฉัน</h3>
-    <p class="graduation-student-meta">เลือกหลักสูตร แล้วกรอกเกรดตามวิชาในแผนได้เลย เว้นวิชาที่ยังไม่เรียนไว้ รายการที่ส่งจะแสดงเป็น "ยังไม่ยืนยัน" และไม่นับในผลตรวจจนกว่าอาจารย์หรือเจ้าหน้าที่จะยืนยัน</p>
+    <p class="graduation-student-meta">เลือกหลักสูตร แล้วกรอกเกรดตามวิชาในแผนได้เลย เว้นวิชาที่ยังไม่เรียนไว้ วิชาที่ได้เฉพาะหน่วยกิตโดยไม่มีเกรด (ผ่าน/ไม่ผ่าน) ให้เลือก S ในกลุ่ม "ไม่มีเกรด" ระบบนับหน่วยกิตให้แต่ไม่นำไปคิด GPA รายการที่ส่งจะแสดงเป็น "กรอกเอง · ยังไม่ยืนยัน" กำกับไว้เสมอ</p>
     <div class="graduation-plan-pick">
       <label>หลักสูตร / แขนงวิชา<select data-graduation-plan-program aria-label="หลักสูตรหรือแขนงวิชา"><option value="">เลือกหลักสูตร</option>${programs.map(item => `<option value="${esc(item.id)}"${item.id === form.programId ? " selected" : ""}>${esc(item.nameEn ?? item.id)} · ${esc(item.curriculumId)}${item.pathwayId ? ` (${esc(item.pathwayId.split("-").pop())})` : ""}</option>`).join("")}</select></label>
       ${studyPlans.length > 1 ? `<label>แผนการเรียน<select data-graduation-plan-choice aria-label="แผนการเรียน">${studyPlans.map(item => `<option value="${esc(item.id)}"${item.id === chosenPlan?.id ? " selected" : ""}>${esc(item.label ?? item.id)}</option>`).join("")}</select></label>` : ""}
@@ -1189,7 +1210,7 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
   const verdict = graduationVerdictLabels[result.verdict] ?? "ยังสรุปผลไม่ได้";
   const gradeRows = result.records ?? [];
   const planRows = result.plan ?? [];
-  const gradeLabel = { A: "A", "B+": "B+", B: "B", "C+": "C+", C: "C", "D+": "D+", D: "D", F: "F", S: "S", P: "P", U: "U", W: "W", I: "I" };
+  const gradeLabel = { A: "A", "B+": "B+", B: "B", "C+": "C+", C: "C", "D+": "D+", D: "D", F: "F", S: "S (ผ่าน ไม่มีเกรด)", P: "P (ผ่าน ไม่มีเกรด)", U: "U (ไม่ผ่าน)", W: "W (ถอน)", I: "I (ไม่สมบูรณ์)" };
   const planStatus = {
     completed: "เรียนแล้ว",
     failed_or_incomplete: "ตก/ยังไม่สมบูรณ์",
@@ -1239,7 +1260,7 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
     const latest = years[years.length - 1];
     const showActions = rows.some(rowActions);
     const rowHtml = row => `<tr><td>${esc(row.courseCode)}</td><td>${esc(row.courseNameTh ?? row.courseNameEn ?? "ไม่พบชื่อวิชา")}</td><td>${esc(row.semester === 3 ? "Summer" : `ภาค ${row.semester}`)}</td><td>${esc(row.credits)}</td><td>${mode === "student" && state.graduationEditRow === row.id
-      ? `<select data-graduation-edit-select aria-label="เกรดใหม่ของ ${esc(row.courseCode)}"><option value="IP"${row.isInProgress ? " selected" : ""}>กำลังเรียน</option>${GRADUATION_GRADE_OPTIONS.map(grade => `<option value="${grade}"${!row.isInProgress && row.grade === grade ? " selected" : ""}>${grade}</option>`).join("")}</select>`
+      ? `<select data-graduation-edit-select aria-label="เกรดใหม่ของ ${esc(row.courseCode)}">${graduationGradeOptionsHtml(row.isInProgress ? "IP" : row.grade, { blankLabel: null })}</select>`
       : (row.isInProgress ? "กำลังเรียน" : `<strong>${esc(gradeLabel[row.grade] ?? row.grade ?? "-")}</strong>`)}</td><td>${esc(sourceText(row))}${row.verificationNote ? `<small> · ${esc(row.verificationNote)}</small>` : ""}</td>${showActions ? `<td class="graduation-row-actions">${rowActions(row)}</td>` : ""}</tr>`;
     return years.map(year => {
       const group = rows.filter(row => Number(row.academicYear) === year).sort((a, b) => a.semester - b.semester);
@@ -1255,7 +1276,7 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
     return years.map(year => {
       const group = planRows.filter(row => Number(row.studyYear) === year);
       const done = group.filter(row => row.status === "completed").length;
-      const body = `<div class="graduation-table-wrap"><table><thead><tr><th>ภาค</th><th>วิชา</th><th>หน่วยกิต</th><th>สถานะ</th><th>เกรด</th></tr></thead><tbody>${group.map(row => `<tr><td>${esc(row.semester === 3 ? "Summer" : `ภาค ${row.semester}`)}</td><td>${esc(row.courseCode ?? "-")} ${esc(row.courseNameTh ?? "")}</td><td>${esc(row.credits ?? "-")}</td><td>${esc(planStatus[row.status] ?? row.status)}</td><td>${esc(row.grade ?? "-")}</td></tr>`).join("")}</tbody></table></div>`;
+      const body = `<div class="graduation-table-wrap"><table><thead><tr><th>ภาค</th><th>วิชา</th><th>หน่วยกิต</th><th>สถานะ</th><th>เกรด</th></tr></thead><tbody>${group.map(row => `<tr><td>${esc(row.semester === 3 ? "Summer" : `ภาค ${row.semester}`)}</td><td>${esc(row.courseCode ?? "-")} ${esc(row.courseNameTh ?? "")}</td><td>${esc(row.credits ?? "-")}</td><td>${esc(planStatus[row.status] ?? row.status)}</td><td>${esc(gradeLabel[row.grade] ?? row.grade ?? "-")}</td></tr>`).join("")}</tbody></table></div>`;
       return yearSection(`plan:${year}`, `ปี ${year}`, `เรียนแล้ว ${done} / ${group.length} วิชา`, body, year === firstUnfinished);
     }).join("");
   };
