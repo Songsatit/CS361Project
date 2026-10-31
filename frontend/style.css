@@ -3684,3 +3684,105 @@
   font-size: 1rem;
   line-height: 1;
 }
+
+.graduation-plan-term-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.graduation-plan-term-head h4 {
+  margin: 0;
+}
+
+.graduation-plan-bulk {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: #5f6b5f;
+}
+
+.graduation-plan-bulk select {
+  min-height: 32px;
+  padding: 0.2rem 0.4rem;
+  font: inherit;
+}
+
+.graduation-pick-other {
+  margin-top: 0.5rem;
+}
+
+.graduation-pick {
+  display: grid;
+  gap: 0.25rem;
+  min-width: min(100%, 240px);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.graduation-pick select {
+  min-height: 40px;
+  padding: 0.5rem 0.7rem;
+  font: inherit;
+  font-weight: 400;
+}
+
+/* Author display rules above would otherwise beat the browser's [hidden] rule. */
+.graduation-assignment-form [hidden],
+[data-directory-row][hidden] {
+  display: none !important;
+}
+
+/* Student contact details */
+.profile-contact {
+  margin-top: 1rem;
+}
+
+.profile-contact-form {
+  display: grid;
+  gap: 0.8rem;
+  max-width: 460px;
+  margin-top: 0.8rem;
+}
+
+.profile-contact-form label {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.profile-contact-form input[type="email"],
+.profile-contact-form input[type="tel"] {
+  min-height: 40px;
+  padding: 0.5rem 0.7rem;
+  font: inherit;
+  font-weight: 400;
+}
+
+.profile-contact-form .profile-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 400;
+}
+
+.profile-contact-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.profile-saved {
+  color: #1d7a3a;
+  font-size: 0.9rem;
+}
+
+.profile-note {
+  color: #5f6b5f;
+  font-size: 0.9rem;
+}

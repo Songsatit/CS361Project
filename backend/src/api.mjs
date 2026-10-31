@@ -2125,7 +2125,8 @@ const assigneeUsernamePattern = /^[a-z0-9][a-z0-9._@-]{0,99}$/;
 async function listGraduationDirectory(event) {
   const actor = actorFromRequest(event);
   if (!['staff', 'curriculum_admin'].includes(actor.role)) return response(403, { error: 'Forbidden' });
-  let people;
+  let people = [];
+  let available = true;
   try {
     people = await queryRows(
       `SELECT username, role, display_name, last_login_at
@@ -2134,9 +2135,9 @@ async function listGraduationDirectory(event) {
         LIMIT 600`,
     );
   } catch (error) {
-    // Migration 017 not applied yet: show an empty directory instead of breaking the page.
-    if (error?.code === 'ER_NO_SUCH_TABLE') return response(200, { data: { students: [], reviewers: [], available: false } });
-    throw error;
+    // Migration 017 not applied yet: the sign-in list stays empty, but the page still works.
+    if (error?.code !== 'ER_NO_SUCH_TABLE') throw error;
+    available = false;
   }
   const assignments = await queryRows('SELECT student_id, assignee_username FROM graduation_student_assignment');
   const byStudent = new Map();
@@ -2159,10 +2160,107 @@ async function listGraduationDirectory(event) {
       assignees: actor.role === 'curriculum_admin' ? assignees : undefined,
     };
   });
-  const reviewers = actor.role === 'curriculum_admin'
-    ? people.filter((row) => row.role !== 'student').map(shape)
-    : [];
-  return response(200, { data: { students, reviewers, available: true } });
+  const reviewers = actor.role === 'curriculum_admin' ? await collectReviewerCandidates(people) : [];
+  return response(200, { data: { students, reviewers, available } });
+}
+
+// Everyone an admin can pick as a reviewer, from every place such a person is known:
+// the role allowlist, the built-in demo accounts (when demo login is on), and anyone who has
+// signed in through TU. `kind` says what the account is when we know it. TU accounts that are
+// not students are all staff in this system, so a TU instructor shows as "staff_or_instructor".
+async function collectReviewerCandidates(directoryRows) {
+  const found = new Map();
+  const add = (username, displayName, kind, source) => {
+    const key = String(username ?? '').trim().toLowerCase();
+    if (!assigneeUsernamePattern.test(key)) return;
+    const current = found.get(key);
+    // A known role beats the generic TU label; keep the first non-empty name.
+    if (!current || (current.kind === 'staff_or_instructor' && kind !== 'staff_or_instructor')) {
+      found.set(key, { username: key, displayName: displayName ?? current?.displayName ?? null, kind, source });
+    } else if (!current.displayName && displayName) {
+      current.displayName = displayName;
+    }
+  };
+
+  try {
+    const allowed = await queryRows("SELECT tu_username, role FROM role_allowlist WHERE role IN ('instructor', 'staff')");
+    for (const row of allowed) add(row.tu_username, null, row.role, 'allowlist');
+  } catch (error) {
+    if (error?.code !== 'ER_NO_SUCH_TABLE') console.warn('role_allowlist read failed', error?.code ?? error?.name);
+  }
+  if (process.env.ENABLE_DEMO_LOGIN === 'true') {
+    for (const [key, account] of Object.entries(demoAccounts)) {
+      if (account.role === 'instructor' || account.role === 'staff') add(key, account.name, account.role, 'demo');
+    }
+  }
+  for (const row of directoryRows) {
+    if (row.role !== 'student') add(row.username, row.display_name, 'staff_or_instructor', 'login');
+  }
+  const order = { instructor: 0, staff: 1, staff_or_instructor: 2 };
+  return [...found.values()].sort((a, b) => order[a.kind] - order[b.kind] || a.username.localeCompare(b.username));
+}
+
+// ---- Student contact details (migration 016) ----
+// The login account (name, faculty, TU email) stays read-only. A student, demo accounts
+// included, edits only the contact fields stored here.
+const CONTACT_MIGRATION_ERROR = 'Contact details need migration 016 on the database';
+const contactEmailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const contactPhonePattern = /^[0-9+\-\s()]{6,30}$/;
+
+async function getStudentContact(event) {
+  const actor = actorFromRequest(event);
+  if (actor.role !== 'student') return response(403, { error: 'Only students can open their contact details' });
+  if (!graduationStudentIdPattern.test(actor.username)) return response(400, { error: 'studentId is invalid' });
+  let row;
+  try {
+    [row] = await queryRows('SELECT secondary_email, phone, notify_enabled FROM student_contact WHERE student_id = ?', [actor.username]);
+  } catch (error) {
+    if (error?.code === 'ER_NO_SUCH_TABLE') return response(503, { error: CONTACT_MIGRATION_ERROR });
+    throw error;
+  }
+  return response(200, { data: {
+    secondaryEmail: row?.secondary_email ?? '',
+    phone: row?.phone ?? '',
+    notifyEnabled: row ? Number(row.notify_enabled) === 1 : true,
+  } });
+}
+
+async function updateStudentContact(event) {
+  const actor = actorFromRequest(event);
+  if (actor.role !== 'student') return response(403, { error: 'Only students can edit their contact details' });
+  if (!graduationStudentIdPattern.test(actor.username)) return response(400, { error: 'studentId is invalid' });
+  const body = requestBody(event);
+  if (!body) return response(400, { error: 'Request body must be valid JSON' });
+
+  const secondaryEmail = String(body.secondaryEmail ?? '').trim();
+  const phone = String(body.phone ?? '').trim();
+  if (secondaryEmail && (secondaryEmail.length > 255 || !contactEmailPattern.test(secondaryEmail))) return response(400, { error: 'secondaryEmail is not a valid email' });
+  if (phone && !contactPhonePattern.test(phone)) return response(400, { error: 'phone must use digits, spaces, + - ( ) only' });
+  if (body.notifyEnabled !== undefined && typeof body.notifyEnabled !== 'boolean') return response(400, { error: 'notifyEnabled must be true or false' });
+  const notifyEnabled = body.notifyEnabled !== false;
+
+  try {
+    await pool.execute(
+      `INSERT INTO student_contact (student_id, secondary_email, phone, notify_enabled)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE secondary_email = VALUES(secondary_email), phone = VALUES(phone),
+                               notify_enabled = VALUES(notify_enabled)`,
+      [actor.username, secondaryEmail || null, phone || null, notifyEnabled ? 1 : 0],
+    );
+  } catch (error) {
+    if (error?.code === 'ER_NO_SUCH_TABLE') return response(503, { error: CONTACT_MIGRATION_ERROR });
+    throw error;
+  }
+  // The log says which fields are set, not their values (they are personal data).
+  await writeAuditLog({
+    username: actor.username,
+    role: actor.role,
+    action: 'student_contact_updated',
+    entityType: 'student_contact',
+    entityId: actor.username,
+    newValue: { hasEmail: Boolean(secondaryEmail), hasPhone: Boolean(phone), notifyEnabled },
+  });
+  return response(200, { data: { secondaryEmail, phone, notifyEnabled } });
 }
 
 // Remembers a TU sign-in for the directory. Best effort: a missing table or a database error
@@ -2513,6 +2611,7 @@ export const handler = async (event) => {
     if (route === 'POST /api/curricula/{curriculumId}/workflow') return await updateCurriculumWorkflow(event);
     if (route === 'POST /api/graduation/assignments') return await assignGraduationStudent(event);
     if (route === 'DELETE /api/graduation/assignments/{studentId}') return await removeGraduationStudent(event);
+    if (route === 'PATCH /api/students/me/contact') return await updateStudentContact(event);
     if (route === 'POST /api/graduation/me/grades') return await addSelfReportedGrade(event);
     if (route === 'DELETE /api/graduation/me/grades/{gradeRecordId}') return await deleteSelfReportedGrade(event);
     if (route === 'POST /api/graduation/students/{studentId}/grades/{gradeRecordId}/verification') return await decideSelfReportedGrade(event);
@@ -2535,6 +2634,7 @@ export const handler = async (event) => {
     if (route === 'GET /api/departments') return await listDepartments(event);
     if (route === 'GET /api/audit-logs') return await listAuditLogs(event);
     if (route === 'GET /api/curriculum-changes') return await listCurriculumChanges(event);
+    if (route === 'GET /api/students/me/contact') return await getStudentContact(event);
     if (route === 'GET /api/graduation/me') return await graduationForStudent(event);
     if (route === 'GET /api/graduation/students') return await listAssignedGraduationStudents(event);
     if (route === 'GET /api/graduation/assignments') return await listAllGraduationAssignments(event);

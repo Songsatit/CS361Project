@@ -258,6 +258,7 @@ function clearAuthSession() {
   state.studentProfileLoading = false;
   state.studentProfileAttempted = false;
   state.studentProfileError = "";
+  state.studentContact = { data: null, loading: false, loaded: false, error: "", saved: false };
   state.graduationResult = null;
   state.graduationStudents = [];
   state.graduationBatches = [];
@@ -865,6 +866,43 @@ function renderWorkflowPage() {
   `;
 }
 
+// Contact details the student can edit. Name, faculty and status come from the login account.
+function renderStudentContactCard() {
+  const contact = state.studentContact ?? {};
+  const data = contact.data;
+  return `<section class="profile-card profile-contact">
+    <h2>ข้อมูลติดต่อ (แก้ไขได้)</h2>
+    <p class="profile-note">ชื่อ คณะ และสถานะมาจากบัญชีที่ใช้ล็อกอินจึงแก้ไม่ได้ ส่วนข้อมูลติดต่อด้านล่างแก้ไขและบันทึกได้ รวมถึงบัญชีทดลอง</p>
+    ${contact.loading ? `<p>กำลังโหลดข้อมูลติดต่อ...</p>` : ""}
+    ${contact.error ? `<p class="login-error">${esc(contact.error)}</p>` : ""}
+    ${data ? `<form class="profile-contact-form" data-student-contact-form>
+      <label>อีเมลสำรอง<input name="secondaryEmail" type="email" maxlength="255" value="${esc(data.secondaryEmail ?? "")}" placeholder="name@example.com"></label>
+      <label>เบอร์โทรศัพท์<input name="phone" type="tel" maxlength="30" value="${esc(data.phone ?? "")}" placeholder="08x-xxx-xxxx"></label>
+      <label class="profile-check"><input name="notifyEnabled" type="checkbox"${data.notifyEnabled ? " checked" : ""}> รับการแจ้งเตือนจากระบบ</label>
+      <div class="profile-contact-actions"><button type="submit" class="workflow-action workflow-action--primary">บันทึก</button>${contact.saved ? `<span class="profile-saved">บันทึกแล้ว</span>` : ""}</div>
+    </form>` : ""}
+  </section>`;
+}
+
+async function loadStudentContact() {
+  const contact = state.studentContact ?? (state.studentContact = { data: null, loading: false, loaded: false, error: "", saved: false });
+  if (contact.loading || contact.loaded) return;
+  contact.loading = true;
+  contact.error = "";
+  try {
+    const response = await fetch(`${API_BASE}/api/students/me/contact`);
+    const payload = await response.json().catch(() => ({}));
+    if (response.status === 503) throw new Error("ยังไม่เปิดใช้การแก้ไขข้อมูลติดต่อ ผู้ดูแลระบบต้อง apply migration 016 ก่อน");
+    if (!response.ok) throw new Error(payload.error ?? "โหลดข้อมูลติดต่อไม่สำเร็จ");
+    contact.data = payload.data;
+  } catch (error) {
+    contact.error = error.message || "โหลดข้อมูลติดต่อไม่สำเร็จ";
+  } finally {
+    contact.loading = false;
+    contact.loaded = true;
+  }
+}
+
 function renderStudentProfile() {
   if (!canAccessStudentProfile()) return renderHome();
   const profile = state.studentProfile;
@@ -872,7 +910,7 @@ function renderStudentProfile() {
     <div class="page profile-page">
       ${crumbs([{ label: "หน้าแรก", view: "home" }, { label: "ข้อมูลส่วนตัว" }])}
       <div class="profile-page-head">
-        <span class="workflow-kicker">ข้อมูลจาก TU Authentication API</span>
+        <span class="workflow-kicker">${state.user?.type === "demo" ? "บัญชีทดลอง (ไม่ได้มาจาก TU)" : "ข้อมูลจาก TU Authentication API"}</span>
         <h1 class="page-title">ข้อมูลส่วนตัว</h1>
         <p class="page-sub">ข้อมูลพื้นฐานจากบัญชีมหาวิทยาลัยธรรมศาสตร์ที่ใช้เข้าสู่ระบบ</p>
       </div>
@@ -895,6 +933,7 @@ function renderStudentProfile() {
             ].map(([label, value]) => `<div class="profile-field"><span>${label}</span><strong>${esc(value || "ไม่ระบุ")}</strong></div>`).join("")}
           </div>
         </section>
+        ${renderStudentContactCard()}
       ` : ""}
     </div>
   `;
@@ -1011,6 +1050,21 @@ function graduationPlanTerms(program) {
     .filter(term => term.courses.length && term.year >= 1 && [1, 2, 3].includes(term.term));
 }
 
+// Loads the courses of one study plan for the grade form. Uses its own fields on the plan
+// object so it never disturbs the program page, which tracks loading with `loaded`/`loading`.
+async function ensureGraduationPlan(plan) {
+  if (!plan || plan.gradTerms || plan.gradLoading || plan.gradError) return;
+  plan.gradLoading = true;
+  try {
+    plan.gradTerms = await loadStudyPlanDetail(plan.id);
+  } catch (error) {
+    plan.gradError = error.message || "โหลดแผนการเรียนไม่สำเร็จ";
+  } finally {
+    plan.gradLoading = false;
+    if (state.view === "graduation") render();
+  }
+}
+
 function ensureGraduationForm(result) {
   const form = state.graduationForm ?? (state.graduationForm = { programId: "", entryYear: "", grades: {} });
   if (!form.entryYear) form.entryYear = graduationEntryYearFromId(state.user?.username);
@@ -1025,7 +1079,16 @@ function renderGraduationPlanForm(result) {
   const form = ensureGraduationForm(result);
   const programs = PROGRAMS.filter(program => program.curriculumId);
   const program = programs.find(item => item.id === form.programId);
-  const terms = graduationPlanTerms(program);
+  // Study plans come from the API (one program can have several, e.g. a 3.5-year and a
+  // 4-year plan). Their courses load on demand; the bundled plan is the fallback.
+  const studyPlans = program?.studyPlans ?? [];
+  const chosenPlan = studyPlans.find(item => item.id === form.planId)
+    ?? studyPlans.find(item => item.id === program?.activeStudyPlanId)
+    ?? studyPlans[0]
+    ?? null;
+  if (chosenPlan) queueMicrotask(() => ensureGraduationPlan(chosenPlan));
+  const terms = graduationPlanTerms({ plan: chosenPlan ? chosenPlan.gradTerms : program?.plan });
+  const planLoading = Boolean(chosenPlan && !chosenPlan.gradTerms && !chosenPlan.gradError);
 
   // Courses already entered, by code, so a row that was sent is not asked for again.
   const existing = new Map();
@@ -1037,7 +1100,7 @@ function renderGraduationPlanForm(result) {
   note(result?.inProgressRecords, "กำลังเรียน (ส่งแล้ว)", true);
 
   const gradeOptions = selected => `<option value="">—</option><option value="IP"${selected === "IP" ? " selected" : ""}>กำลังเรียน</option>${GRADUATION_GRADE_OPTIONS.map(grade => `<option value="${grade}"${selected === grade ? " selected" : ""}>${grade}</option>`).join("")}`;
-  const termTable = term => `<section class="graduation-plan-term"><h4>ปี ${esc(term.year)} · ${esc(term.term === 3 ? "Summer" : `ภาค ${term.term}`)}</h4><table><thead><tr><th>วิชา</th><th>ชื่อวิชา</th><th>หน่วยกิต</th><th>เกรด</th></tr></thead><tbody>${term.courses.map(code => {
+  const termTable = term => `<section class="graduation-plan-term"><div class="graduation-plan-term-head"><h4>ปี ${esc(term.year)} · ${esc(term.term === 3 ? "Summer" : `ภาค ${term.term}`)}</h4><label class="graduation-plan-bulk">ตั้งทุกวิชาในภาคนี้เป็น <select data-graduation-plan-bulk aria-label="ตั้งเกรดทั้งภาคเรียน"><option value="">เลือก…</option><option value="IP">กำลังเรียน</option>${GRADUATION_GRADE_OPTIONS.map(grade => `<option value="${grade}">${grade}</option>`).join("")}</select></label></div><table><thead><tr><th>วิชา</th><th>ชื่อวิชา</th><th>หน่วยกิต</th><th>เกรด</th></tr></thead><tbody>${term.courses.map(code => {
     const info = existing.get(graduationCodeKey(code));
     const course = COURSES[courseKey(code)] ?? {};
     const cell = info?.locked
@@ -1051,10 +1114,12 @@ function renderGraduationPlanForm(result) {
     <p class="graduation-student-meta">เลือกหลักสูตร แล้วกรอกเกรดตามวิชาในแผนได้เลย เว้นวิชาที่ยังไม่เรียนไว้ รายการที่ส่งจะแสดงเป็น "ยังไม่ยืนยัน" และไม่นับในผลตรวจจนกว่าอาจารย์หรือเจ้าหน้าที่จะยืนยัน</p>
     <div class="graduation-plan-pick">
       <label>หลักสูตร / แขนงวิชา<select data-graduation-plan-program aria-label="หลักสูตรหรือแขนงวิชา"><option value="">เลือกหลักสูตร</option>${programs.map(item => `<option value="${esc(item.id)}"${item.id === form.programId ? " selected" : ""}>${esc(item.nameEn ?? item.id)} · ${esc(item.curriculumId)}${item.pathwayId ? ` (${esc(item.pathwayId.split("-").pop())})` : ""}</option>`).join("")}</select></label>
+      ${studyPlans.length > 1 ? `<label>แผนการเรียน<select data-graduation-plan-choice aria-label="แผนการเรียน">${studyPlans.map(item => `<option value="${esc(item.id)}"${item.id === chosenPlan?.id ? " selected" : ""}>${esc(item.label ?? item.id)}</option>`).join("")}</select></label>` : ""}
       <label>ปีที่เข้าศึกษา (พ.ศ.)<input data-graduation-plan-entry type="number" min="2540" max="2700" value="${esc(form.entryYear)}" placeholder="เช่น 2567"></label>
     </div>
     ${!program ? `<p class="audit-empty">เลือกหลักสูตรเพื่อแสดงวิชาในแผน</p>`
-      : !terms.length ? `<p class="audit-empty">หลักสูตรนี้ยังไม่มีแผนการเรียนให้กรอก ใช้ "เพิ่มวิชาที่ไม่อยู่ในแผน" ด้านล่างแทน</p>`
+      : planLoading ? `<p class="audit-empty">กำลังโหลดวิชาในแผนการเรียน...</p>`
+      : !terms.length ? `<p class="audit-empty">${chosenPlan?.gradError ? esc(chosenPlan.gradError) : "หลักสูตรนี้ยังไม่มีแผนการเรียนให้กรอก"} ใช้ "เพิ่มวิชาที่ไม่อยู่ในแผน" ด้านล่างแทน</p>`
       : `<form data-graduation-plan-submit>${terms.map(termTable).join("")}<div class="graduation-plan-actions"><button type="submit" class="workflow-action workflow-action--primary">บันทึกเกรดที่กรอก</button></div></form>`}
   </section>`;
 }
@@ -1147,16 +1212,39 @@ function renderGraduationDirectory(role) {
 // Curriculum admins assign reviewers and remove students from the list. They see no grade data.
 function renderGraduationAdminList() {
   const directory = state.graduationDirectory ?? { students: [], reviewers: [] };
-  const studentOptions = (directory.students ?? []).map(person => `<option value="${esc(person.username)}">${esc(person.displayName ?? "")}</option>`).join("");
-  const reviewerOptions = (directory.reviewers ?? []).map(person => `<option value="${esc(person.username)}">${esc(person.displayName ?? "")}</option>`).join("");
-  return `<section class="graduation-student-list"><h2>มอบหมายผู้ตรวจ</h2><p>เลือกอาจารย์หรือเจ้าหน้าที่ที่จะตรวจผลการเรียนของนักศึกษาคนนั้น ผู้ดูแลหลักสูตรไม่เห็นผลการเรียน</p>
-    <form class="graduation-assignment-form" data-graduation-admin-assign-form><div>
-      <input name="studentId" required list="graduation-student-options" placeholder="รหัสนักศึกษา" aria-label="รหัสนักศึกษา" autocomplete="off">
-      <input name="assigneeUsername" required list="graduation-reviewer-options" placeholder="ชื่อผู้ใช้ของอาจารย์/ผู้ตรวจ" aria-label="ชื่อผู้ใช้ผู้ตรวจ" autocomplete="off">
-      <button type="submit" class="workflow-action workflow-action--primary">มอบหมาย</button>
-    </div>
-    <datalist id="graduation-student-options">${studentOptions}</datalist><datalist id="graduation-reviewer-options">${reviewerOptions}</datalist>
-    ${(directory.reviewers ?? []).length ? "" : `<p class="graduation-student-meta">ผู้ตรวจจะแสดงให้เลือกหลังจากอาจารย์ล็อกอินเข้าระบบอย่างน้อยหนึ่งครั้ง หรือพิมพ์ชื่อผู้ใช้ TU เองได้</p>`}
+  // Students: everyone already in a list plus everyone who signed in through TU.
+  const studentChoices = new Map();
+  (state.graduationAssignments ?? []).forEach(item => studentChoices.set(String(item.studentId).toLowerCase(), { id: item.studentId, name: item.displayName }));
+  (directory.students ?? []).forEach(person => {
+    const key = String(person.username).toLowerCase();
+    if (!studentChoices.has(key)) studentChoices.set(key, { id: person.username, name: person.displayName });
+    else if (!studentChoices.get(key).name) studentChoices.get(key).name = person.displayName;
+  });
+  const studentOptions = [...studentChoices.values()].sort((a, b) => String(a.id).localeCompare(String(b.id)))
+    .map(item => `<option value="${esc(item.id)}">${esc(item.id)}${item.name ? ` · ${esc(item.name)}` : ""}</option>`).join("");
+  const reviewerGroups = [
+    ["instructor", "อาจารย์"],
+    ["staff", "เจ้าหน้าที่"],
+    ["staff_or_instructor", "บัญชี TU ที่เคยล็อกอิน (อาจารย์หรือเจ้าหน้าที่)"],
+  ];
+  const reviewerOptions = reviewerGroups.map(([kind, label]) => {
+    const group = (directory.reviewers ?? []).filter(person => person.kind === kind);
+    return group.length
+      ? `<optgroup label="${esc(label)}">${group.map(person => `<option value="${esc(person.username)}">${person.displayName ? `${esc(person.displayName)} · ` : ""}${esc(person.username)}</option>`).join("")}</optgroup>`
+      : "";
+  }).join("");
+  return `<section class="graduation-student-list"><h2>มอบหมายผู้ตรวจ</h2><p>เลือกนักศึกษา แล้วเลือกอาจารย์หรือเจ้าหน้าที่ที่จะตรวจผลการเรียนของคนนั้น ผู้ดูแลหลักสูตรไม่เห็นผลการเรียน</p>
+    <form class="graduation-assignment-form" data-graduation-admin-assign-form>
+      <div>
+        <label class="graduation-pick"><span>นักศึกษา</span><select name="studentId" required data-graduation-pick aria-label="นักศึกษา"><option value="">เลือกนักศึกษา</option>${studentOptions}<option value="__other__">อื่น ๆ (พิมพ์รหัสเอง)</option></select></label>
+        <label class="graduation-pick"><span>ผู้ตรวจ (อาจารย์/เจ้าหน้าที่)</span><select name="assigneeUsername" required data-graduation-pick aria-label="ผู้ตรวจ"><option value="">เลือกผู้ตรวจ</option>${reviewerOptions}<option value="__other__">อื่น ๆ (พิมพ์ชื่อผู้ใช้ TU เอง)</option></select></label>
+        <button type="submit" class="workflow-action workflow-action--primary">มอบหมาย</button>
+      </div>
+      <div class="graduation-pick-other" data-pick-other-row hidden>
+        <input name="studentIdOther" placeholder="รหัสนักศึกษา" aria-label="รหัสนักศึกษา (พิมพ์เอง)" autocomplete="off" hidden>
+        <input name="assigneeUsernameOther" placeholder="ชื่อผู้ใช้ TU ของผู้ตรวจ" aria-label="ชื่อผู้ใช้ผู้ตรวจ (พิมพ์เอง)" autocomplete="off" hidden>
+      </div>
+      ${(directory.reviewers ?? []).length ? "" : `<p class="graduation-student-meta">ยังไม่มีรายชื่ออาจารย์หรือเจ้าหน้าที่ให้เลือก ผู้ที่ล็อกอินเข้าระบบจะปรากฏที่นี่ ระหว่างนี้เลือก "อื่น ๆ" แล้วพิมพ์ชื่อผู้ใช้ TU ได้</p>`}
     </form>
   </section>
   <section class="graduation-student-list"><h2>นักศึกษาที่มีผู้ตรวจ</h2><p>ลบผู้ตรวจรายคนด้วย × หรือลบนักศึกษาออกจากรายการทั้งหมด การลบไม่ลบข้อมูลผลการเรียน</p>
@@ -4270,6 +4358,9 @@ function render() {
     }
   }
   if (state.user && state.view === "profile" && canAccessStudentProfile() && !state.studentProfile && !state.studentProfileLoading) {
+    void loadStudentContact().then(() => {
+      if (state.view === "profile") render();
+    });
     loadStudentProfile().then(() => {
       if (state.view === "profile") render();
     });
@@ -4382,6 +4473,7 @@ function go(v, id, addHistory = true) {
     state.studentProfile = null;
     state.studentProfileAttempted = false;
     state.studentProfileError = "";
+    state.studentContact = { data: null, loading: false, loaded: false, error: "", saved: false };
   }
 
   if (["my-change-requests", "review-requests"].includes(v)) {
@@ -4514,12 +4606,62 @@ function bind() {
     render();
   };
 
+  document.querySelectorAll("[data-student-contact-form]").forEach(form => {
+    form.onsubmit = async event => {
+      event.preventDefault();
+      const formData = new FormData(form);
+      const button = form.querySelector("button[type=submit]");
+      button.disabled = true;
+      try {
+        const response = await fetch(`${API_BASE}/api/students/me/contact`, {
+          method: "PATCH",
+          headers: draftApiHeaders(),
+          body: JSON.stringify({
+            secondaryEmail: String(formData.get("secondaryEmail") ?? "").trim(),
+            phone: String(formData.get("phone") ?? "").trim(),
+            notifyEnabled: formData.get("notifyEnabled") === "on",
+          }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (response.status === 503) throw new Error("ยังไม่เปิดใช้การแก้ไขข้อมูลติดต่อ ผู้ดูแลระบบต้อง apply migration 016 ก่อน");
+        if (!response.ok) throw new Error(payload.error ?? "บันทึกข้อมูลติดต่อไม่สำเร็จ");
+        state.studentContact.data = payload.data;
+        state.studentContact.error = "";
+        state.studentContact.saved = true;
+        render();
+      } catch (error) {
+        alert(error.message ?? "บันทึกข้อมูลติดต่อไม่สำเร็จ");
+        button.disabled = false;
+      }
+    };
+  });
+
   // Student: guided form (program -> study plan courses -> grade per course).
   document.querySelectorAll("[data-graduation-plan-program]").forEach(select => {
     select.onchange = () => {
       state.graduationForm.programId = select.value;
+      state.graduationForm.planId = "";
       state.graduationForm.grades = {};
       render();
+    };
+  });
+  document.querySelectorAll("[data-graduation-plan-choice]").forEach(select => {
+    select.onchange = () => {
+      state.graduationForm.planId = select.value;
+      state.graduationForm.grades = {};
+      render();
+    };
+  });
+  // One choice for a whole term: fills every course of that term that can still be entered.
+  document.querySelectorAll("[data-graduation-plan-bulk]").forEach(select => {
+    select.onchange = () => {
+      const value = select.value;
+      if (!value) return;
+      select.closest(".graduation-plan-term")?.querySelectorAll("[data-graduation-plan-grade]").forEach(courseSelect => {
+        courseSelect.value = value;
+        state.graduationForm.grades[courseSelect.dataset.graduationPlanGrade] = value;
+      });
+      select.value = "";
     };
   });
   document.querySelectorAll("[data-graduation-plan-entry]").forEach(input => {
@@ -4610,12 +4752,31 @@ function bind() {
     };
   });
 
+  // "Other" in a picker reveals a text box for a value that is not in the list.
+  document.querySelectorAll("[data-graduation-pick]").forEach(select => {
+    select.onchange = () => {
+      const form = select.form;
+      const other = form?.elements?.[`${select.name}Other`];
+      if (other) {
+        other.hidden = select.value !== "__other__";
+        other.required = select.value === "__other__";
+      }
+      const row = form?.querySelector("[data-pick-other-row]");
+      if (row) row.hidden = !["studentIdOther", "assigneeUsernameOther"].some(name => form.elements[name] && !form.elements[name].hidden);
+    };
+  });
+
   document.querySelectorAll("[data-graduation-admin-assign-form]").forEach(form => {
     form.onsubmit = async event => {
       event.preventDefault();
       const formData = new FormData(form);
-      const studentId = String(formData.get("studentId") ?? "").trim();
-      const assigneeUsername = String(formData.get("assigneeUsername") ?? "").trim();
+      const pick = name => {
+        const chosen = String(formData.get(name) ?? "");
+        return (chosen === "__other__" ? String(formData.get(`${name}Other`) ?? "") : chosen).trim();
+      };
+      const studentId = pick("studentId");
+      const assigneeUsername = pick("assigneeUsername");
+      if (!studentId || !assigneeUsername) return alert("เลือกนักศึกษาและผู้ตรวจให้ครบ");
       const known = (state.graduationDirectory?.students ?? []).find(person => person.username === studentId.toLowerCase());
       const button = form.querySelector("button[type=submit]");
       button.disabled = true;
