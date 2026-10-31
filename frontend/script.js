@@ -268,6 +268,10 @@ function clearAuthSession() {
   state.graduationCheckOpen = false;
   state.graduationYearOpen = {};
   state.graduationEditRow = null;
+  state.graduationRoster = { query: "", cohort: "", data: "" };
+  state.graduationPageTab = "";
+  state.graduationTab = "overview";
+  state.graduationAdminTab = "assign";
   state.graduationSelectedStudentId = "";
   state.graduationLoading = false;
   state.graduationLoaded = false;
@@ -1161,6 +1165,11 @@ function renderGraduationPlanForm(result) {
   </section>`;
 }
 
+// A row of tabs. `group` says which piece of state a click changes (see the click handler).
+function renderGraduationTabs(items, active, group) {
+  return `<div class="graduation-tabs" role="tablist">${items.map(([key, label]) => `<button type="button" role="tab" class="graduation-tab${key === active ? " is-active" : ""}" aria-selected="${key === active ? "true" : "false"}" data-graduation-tab data-tab-group="${esc(group)}" data-tab-value="${esc(key)}">${esc(label)}</button>`).join("")}</div>`;
+}
+
 // "What is still missing" for one student, built only from the result the API already returned.
 // Shown to the student and to the reviewer.
 function renderGraduationGapPanel(result) {
@@ -1280,6 +1289,15 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
       return yearSection(`plan:${year}`, `ปี ${year}`, `เรียนแล้ว ${done} / ${group.length} วิชา`, body, year === firstUnfinished);
     }).join("");
   };
+  // Tabs keep the card short: overview, grades by year, progress against the study plan.
+  const gradeTotal = gradeRows.length + (result.pendingRecords?.length ?? 0) + (result.inProgressRecords?.length ?? 0) + (result.rejectedRecords?.length ?? 0);
+  const availableTabs = [
+    ["overview", "ภาพรวม"],
+    ...(gradeTotal ? [["grades", `ผลการเรียน (${gradeTotal})`]] : []),
+    ...(planRows.length ? [["plan", "ความก้าวหน้าตามแผน"]] : []),
+  ];
+  const tab = availableTabs.some(([key]) => key === state.graduationTab) ? state.graduationTab : "overview";
+  const tabBar = availableTabs.length > 1 ? renderGraduationTabs(availableTabs, tab, "card") : "";
   const groupTable = (rows, title, note, prefix) => rows?.length
     ? `<section class="graduation-history graduation-history--unconfirmed"><h3>${esc(title)}</h3><p class="graduation-student-meta">${esc(note)}</p>${recordsByYear(rows, prefix)}</section>`
     : "";
@@ -1290,6 +1308,8 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
         <div class="graduation-result-head-side"><strong class="graduation-verdict graduation-verdict--${esc(result.verdict ?? "inconclusive")}">${esc(verdict)}</strong>
           <button type="button" class="workflow-action workflow-action--primary" data-graduation-check-toggle aria-expanded="${state.graduationCheckOpen ? "true" : "false"}">${state.graduationCheckOpen ? "ซ่อนผลตรวจสอบ" : "ตรวจสอบการจบ"}</button></div>
       </div>
+      ${tabBar}
+      ${tab === "overview" ? `
       ${state.graduationCheckOpen ? renderGraduationGapPanel(result) : ""}
       ${result.includesSelfReported ? `<p class="graduation-selfreported-banner">ผลนี้คำนวณรวมเกรดที่นักศึกษากรอกเอง ซึ่งยังไม่ผ่านการยืนยัน แถวเหล่านั้นมีป้าย "นักศึกษากรอกเอง · ยังไม่ยืนยัน" กำกับในตารางด้านล่าง</p>` : ""}
       ${result.student?.studyYear ? `<p class="graduation-student-meta">ชั้นปีที่ ${esc(result.student.studyYear)}${result.student.displayName ? ` · ${esc(result.student.displayName)}` : ""}</p>` : ""}
@@ -1297,11 +1317,16 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
       <div class="graduation-source-status"><strong>${esc(sourceLabel)}</strong><span>ข้อมูล ณ ${esc(source.asOf ? new Date(source.asOf).toLocaleString("th-TH") : "ไม่มีข้อมูลเวลา")}</span>${source.lastImport?.sourceBatchId ? `<small>Batch: ${esc(source.lastImport.sourceBatchId)}</small>` : ""}</div>
       ${result.totals ? `<div class="graduation-totals"><span>หน่วยกิตที่ได้รับ <strong>${esc(result.totals.earnedCredits)}</strong></span><span>GPA <strong>${esc(result.totals.gpa ?? "ยังคำนวณไม่ได้")}</strong></span></div>` : ""}
       ${result.conditions?.length ? `<div class="graduation-condition-list">${result.conditions.map(condition => `<article class="graduation-condition graduation-condition--${esc(condition.status)}"><div><strong>${esc(graduationConditionLabels[condition.status] ?? "ข้อมูลไม่ครบ")}</strong><span>${esc(condition.text)}</span></div>${graduationDetailsText(condition) ? `<small>${esc(graduationDetailsText(condition))}</small>` : ""}</article>`).join("")}</div>` : `<p class="audit-empty">ไม่พบเงื่อนไขหรือข้อมูลสำหรับตรวจสอบ</p>`}
+      ` : ""}
+      ${tab === "grades" ? `
       ${gradeRows.length ? `<section class="graduation-history"><h3>วิชาที่เคยเรียนและผลการเรียน</h3>${yearControls("records")}${recordsByYear(gradeRows, "records")}</section>` : ""}
       ${groupTable(result.pendingRecords, "นักศึกษากรอกเอง รอเจ้าหน้าที่ยืนยัน", "แสดงเพื่อให้ตรวจทาน ไม่นับในผลตรวจสำเร็จการศึกษาจนกว่าจะได้รับการยืนยัน", "pending")}
       ${groupTable(result.inProgressRecords, "วิชาที่กำลังเรียน", "ยังไม่มีผลการเรียน ไม่นับในผลตรวจสำเร็จการศึกษา", "inprogress")}
       ${groupTable(result.rejectedRecords, "รายการที่เจ้าหน้าที่ปฏิเสธ", "ไม่นับในผลตรวจสำเร็จการศึกษา", "rejected")}
+      ` : ""}
+      ${tab === "plan" ? `
       ${planRows.length ? `<section class="graduation-plan-progress"><h3>ความก้าวหน้าตามแผน 4 ปี</h3>${yearControls("plan")}${planByYear()}</section>` : ""}
+      ` : ""}
     </section>
   `;
 }
@@ -1371,7 +1396,13 @@ function renderGraduationAdminList() {
       ? `<optgroup label="${esc(label)}">${group.map(person => `<option value="${esc(person.username)}">${person.displayName ? `${esc(person.displayName)} · ` : ""}${esc(person.username)}</option>`).join("")}</optgroup>`
       : "";
   }).join("");
-  return `<section class="graduation-student-list"><h2>มอบหมายผู้ตรวจ</h2><p>เลือกอาจารย์หรือเจ้าหน้าที่หนึ่งคน แล้วติ๊กนักศึกษาได้หลายคนในครั้งเดียว (กรองตามรุ่น หรือวางรหัสนักศึกษาเป็นชุดได้) ผู้ดูแลหลักสูตรไม่เห็นผลการเรียน</p>
+  const adminTab = ["assign", "assigned", "directory"].includes(state.graduationAdminTab) ? state.graduationAdminTab : "assign";
+  const adminTabs = renderGraduationTabs([
+    ["assign", "มอบหมายผู้ตรวจ"],
+    ["assigned", `นักศึกษาที่มีผู้ตรวจ (${state.graduationAssignments.length})`],
+    ["directory", "นักศึกษาที่เข้าระบบ"],
+  ], adminTab, "admin");
+  return `${adminTabs}${adminTab === "assign" ? `<section class="graduation-student-list"><h2>มอบหมายผู้ตรวจ</h2><p>เลือกอาจารย์หรือเจ้าหน้าที่หนึ่งคน แล้วติ๊กนักศึกษาได้หลายคนในครั้งเดียว (กรองตามรุ่น หรือวางรหัสนักศึกษาเป็นชุดได้) ผู้ดูแลหลักสูตรไม่เห็นผลการเรียน</p>
     <form class="graduation-assignment-form" data-graduation-admin-assign-form>
       <div>
         <label class="graduation-pick"><span>ผู้ตรวจ (อาจารย์/เจ้าหน้าที่)</span><select name="assigneeUsername" required data-graduation-pick aria-label="ผู้ตรวจ"><option value="">เลือกผู้ตรวจ</option>${reviewerOptions}<option value="__other__">อื่น ๆ (พิมพ์ชื่อผู้ใช้ TU เอง)</option></select></label>
@@ -1389,41 +1420,102 @@ function renderGraduationAdminList() {
       <div><button type="submit" class="workflow-action workflow-action--primary">มอบหมายให้นักศึกษาที่เลือก</button></div>
       ${(directory.reviewers ?? []).length ? "" : `<p class="graduation-student-meta">ยังไม่มีรายชื่ออาจารย์หรือเจ้าหน้าที่ให้เลือก ผู้ที่ล็อกอินเข้าระบบจะปรากฏที่นี่ ระหว่างนี้เลือก "อื่น ๆ" แล้วพิมพ์ชื่อผู้ใช้ TU ได้</p>`}
     </form>
-  </section>
-  <section class="graduation-student-list"><h2>นักศึกษาที่มีผู้ตรวจ</h2><p>ลบผู้ตรวจรายคนด้วย × หรือลบนักศึกษาออกจากรายการทั้งหมด การลบไม่ลบข้อมูลผลการเรียน</p>
+  </section>` : ""}${adminTab === "assigned" ? `<section class="graduation-student-list"><h2>นักศึกษาที่มีผู้ตรวจ</h2><p>ลบผู้ตรวจรายคนด้วย × หรือลบนักศึกษาออกจากรายการทั้งหมด การลบไม่ลบข้อมูลผลการเรียน</p>
     ${state.graduationAssignments.length ? `<div class="graduation-table-wrap"><table><thead><tr><th>รหัสนักศึกษา</th><th>ชื่อที่แสดง</th><th>ชั้นปี</th><th>ผู้ตรวจ</th><th>จัดการ</th></tr></thead><tbody>${state.graduationAssignments.map(item => `<tr><td>${esc(item.studentId)}</td><td>${esc(item.displayName ?? "-")}</td><td>${esc(item.studyYear ?? "-")}</td><td>${(item.assignees ?? []).map(name => `<span class="graduation-assignee">${esc(name)} <button type="button" data-graduation-remove="${esc(item.studentId)}" data-assignee="${esc(name)}" aria-label="เอา ${esc(name)} ออกจาก ${esc(item.studentId)}">×</button></span>`).join(" ") || "-"}</td><td><button type="button" class="workflow-action workflow-action--muted" data-graduation-remove="${esc(item.studentId)}">ลบนักศึกษา</button></td></tr>`).join("")}</tbody></table></div>` : `<p class="audit-empty">ยังไม่มีนักศึกษาในรายการ</p>`}
-  </section>
-  ${renderGraduationDirectory("curriculum_admin")}`;
+  </section>` : ""}${adminTab === "directory" ? renderGraduationDirectory("curriculum_admin") : ""}`;
 }
 
 function renderGraduationPage() {
   const role = state.user?.role;
   if (!state.user || !GRADUATION_ROLES.includes(role)) return renderHome();
-  const studentView = role === "student";
-  const canSeeBatches = role === "staff";
+  const wide = role !== "student";
   return `
-    <div class="page graduation-page">
+    <div class="page graduation-page${wide ? " graduation-page--wide" : ""}">
       ${crumbs([{ label: "หน้าแรก", view: "home" }, { label: "ตรวจสอบการสำเร็จการศึกษา" }])}
-      <div class="graduation-page-head"><h1 class="page-title">ตรวจสอบการสำเร็จการศึกษา</h1><p class="page-sub">ระบบแสดงผลตามข้อมูลที่นำเข้า และจะแจ้งเมื่อข้อมูลหรือเงื่อนไขไม่เพียงพอ</p></div>
+      <div class="graduation-page-head"><h1 class="page-title">ตรวจสอบการสำเร็จการศึกษา</h1></div>
       ${state.graduationError ? `<section class="graduation-error">${esc(state.graduationError)}</section>` : ""}
-      ${state.graduationLoading ? `<section class="profile-card">กำลังโหลดข้อมูลผลการเรียน...</section>` : ""}
-      ${role === "curriculum_admin" ? renderGraduationAdminList() : studentView ? `${(() => {
-        // With no data yet, the form comes first: an empty result card is not what the student came for.
-        const resultCard = renderGraduationResult(state.graduationResult, "ผลตรวจสอบของนักศึกษา", "student");
-        const forms = `${renderGraduationPlanForm(state.graduationResult)}${renderGraduationGradeForm(state.graduationResult)}`;
-        return state.graduationResult?.verdict === "no_data" ? forms + resultCard : resultCard + forms;
-      })()}` : `
-        <section class="graduation-student-list"><h2>นักศึกษาที่ได้รับมอบหมาย</h2><p>แสดงเฉพาะนักศึกษาที่อยู่ในขอบเขตสิทธิ์ของบัญชีนี้</p>
-          ${state.graduationStudents.length ? `${state.graduationStudents.length > 8 ? `<input type="search" class="graduation-directory-filter" data-graduation-chip-filter placeholder="ค้นหานักศึกษาในรายการ (${esc(state.graduationStudents.length)} คน)" aria-label="ค้นหานักศึกษาในรายการ">` : ""}<div class="graduation-student-buttons graduation-scroll">${state.graduationStudents.map(student => `<span class="graduation-student-chip" data-student-chip data-search="${esc(`${student.studentId} ${student.displayName ?? ""}`.toLowerCase())}"><button type="button" class="workflow-action ${student.studentId === state.graduationSelectedStudentId ? "workflow-action--primary" : "workflow-action--muted"}" data-graduation-student="${esc(student.studentId)}"><strong>${esc(student.displayName ?? student.studentId)}</strong> · ${student.studyYear ? `ปี ${esc(student.studyYear)} · ` : ""}${student.hasData ? "มีข้อมูลผลการเรียน" : "ยังไม่มีข้อมูล"}</button></span>`).join("")}</div>` : `<p class="audit-empty">ยังไม่มีนักศึกษาที่ได้รับมอบหมายให้ตรวจสอบ</p>`}
-          ${role === "staff" ? `<form class="graduation-assignment-form" data-graduation-assign-form><h3>เพิ่มนักศึกษาเข้ารายการตรวจ</h3><div><input name="studentId" required placeholder="รหัสนักศึกษา Demo เช่น DEMO0001"><input name="displayName" placeholder="ชื่อที่แสดง"><select name="studentYear" required><option value="">ชั้นปี</option><option value="1">ปี 1</option><option value="2">ปี 2</option><option value="3">ปี 3</option><option value="4">ปี 4</option></select><button type="submit" class="workflow-action workflow-action--primary">เพิ่มรายการ</button></div></form>` : ""}
-        </section>
-        ${state.graduationResult ? renderGraduationResult(state.graduationResult, `ผลตรวจสอบ ${state.graduationSelectedStudentId}`, "reviewer") : ""}
-        ${role === "staff" && state.graduationSelectedStudentId ? `<section class="graduation-manage-student"><div><strong>จัดการรายการ</strong><span>เอา ${esc(state.graduationSelectedStudentId)} ออกจากรายการตรวจของคุณ ผลการเรียนของนักศึกษาจะไม่ถูกลบ</span></div><button type="button" class="workflow-action workflow-action--muted" data-graduation-remove="${esc(state.graduationSelectedStudentId)}">ลบนักศึกษาออกจากรายการ</button></section>` : ""}
-        ${renderGraduationDirectory(role)}
-        ${canSeeBatches ? `<section class="graduation-import-history"><h2>ประวัติการนำเข้า</h2>${state.graduationBatches.length ? `<div class="graduation-table-wrap"><table><thead><tr><th>Batch</th><th>โหมด</th><th>สถานะ</th><th>จำนวนแถว</th><th>นำเข้าเมื่อ</th></tr></thead><tbody>${state.graduationBatches.map(batch => `<tr><td>${esc(batch.source_batch_id ?? batch.batch_id)}</td><td>${batch.data_mode === "demo" ? "ข้อมูลจำลอง" : "ข้อมูลจริง"}</td><td>${esc(batch.status)}</td><td>${esc(batch.row_total)}</td><td>${esc(batch.finished_at ? new Date(batch.finished_at).toLocaleString("th-TH") : "-")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="audit-empty">ยังไม่มีประวัติการนำเข้า</p>`}</section>` : ""}
-      `}
+      ${state.graduationLoading ? `<p class="graduation-loading">กำลังโหลดข้อมูล...</p>` : ""}
+      ${role === "curriculum_admin" ? renderGraduationAdminList() : role === "student" ? renderGraduationStudentView() : renderGraduationReviewerView(role)}
     </div>
   `;
+}
+
+// Student page: two tabs. With no data yet the entry tab opens first.
+function renderGraduationStudentView() {
+  const result = state.graduationResult;
+  const defaultTab = result?.verdict === "no_data" ? "enter" : "result";
+  const pageTab = ["result", "enter"].includes(state.graduationPageTab) ? state.graduationPageTab : defaultTab;
+  const tabs = renderGraduationTabs([["result", "ผลตรวจสอบของฉัน"], ["enter", "กรอก / แก้ไขเกรด"]], pageTab, "page");
+  const body = pageTab === "enter"
+    ? `<p class="graduation-hint">กรอกเกรดตามวิชาในแผน แล้วกด "บันทึก" ถ้าต้องแก้เกรดที่กรอกไปแล้ว ไปที่แท็บ "ผลตรวจสอบของฉัน" &gt; "ผลการเรียน" แล้วกด "แก้ไข"</p>${renderGraduationPlanForm(result)}${renderGraduationGradeForm(result)}`
+    : renderGraduationResult(result, "ผลตรวจสอบของนักศึกษา", "student");
+  return `${tabs}${body}`;
+}
+
+const graduationCohortOf = id => (/^\d{2}/.test(String(id)) ? String(id).slice(0, 2) : "อื่น ๆ");
+
+// The students shown in the reviewer's list after the search box and filters.
+function graduationRosterVisible() {
+  const roster = state.graduationRoster ?? {};
+  const query = String(roster.query ?? "").trim().toLowerCase();
+  return (state.graduationStudents ?? []).filter(student => {
+    if (query && !`${student.studentId} ${student.displayName ?? ""}`.toLowerCase().includes(query)) return false;
+    if (roster.cohort && graduationCohortOf(student.studentId) !== roster.cohort) return false;
+    if (roster.data === "has" && !student.hasData) return false;
+    if (roster.data === "none" && student.hasData) return false;
+    return true;
+  });
+}
+
+// Instructor / staff page: a searchable list on the left, the chosen student's result on the right.
+function renderGraduationReviewerView(role) {
+  const students = state.graduationStudents ?? [];
+  const roster = state.graduationRoster ?? { query: "", cohort: "", data: "" };
+  const visible = graduationRosterVisible();
+  const visibleIds = new Set(visible.map(student => student.studentId));
+  const cohorts = [...new Set(students.map(student => graduationCohortOf(student.studentId)))].sort();
+  const selectedId = state.graduationSelectedStudentId;
+  const position = visible.findIndex(student => student.studentId === selectedId);
+  const canAdd = role === "staff";
+
+  const item = student => `<li data-roster-item="${esc(student.studentId)}"${visibleIds.has(student.studentId) ? "" : " hidden"}><button type="button" class="graduation-roster-item${student.studentId === selectedId ? " is-active" : ""}" data-graduation-student="${esc(student.studentId)}"${student.studentId === selectedId ? ` aria-current="true"` : ""}>
+      <span class="graduation-roster-name">${esc(student.displayName ?? student.studentId)}</span>
+      <span class="graduation-roster-meta">${esc(student.studentId)}${student.studyYear ? ` · ปี ${esc(student.studyYear)}` : ""}</span>
+      <span class="graduation-badge ${student.hasData ? "graduation-badge--ok" : "graduation-badge--none"}">${student.hasData ? "มีผลการเรียน" : "ยังไม่มีข้อมูล"}</span>
+    </button></li>`;
+
+  const roasterPanel = `<aside class="graduation-roster" aria-label="รายชื่อนักศึกษา">
+    <div class="graduation-roster-head"><h2>นักศึกษา</h2><span class="graduation-roster-count" data-roster-count>${visible.length} / ${students.length} คน</span></div>
+    ${students.length ? `
+      <input type="search" class="graduation-roster-search" data-graduation-roster-query value="${esc(roster.query ?? "")}" placeholder="ค้นหาชื่อหรือรหัสนักศึกษา" aria-label="ค้นหานักศึกษา">
+      <div class="graduation-roster-filters">
+        ${cohorts.length > 1 ? `<select data-graduation-roster-cohort aria-label="รุ่น"><option value="">ทุกรุ่น</option>${cohorts.map(cohort => `<option value="${esc(cohort)}"${roster.cohort === cohort ? " selected" : ""}>${/^\d/.test(cohort) ? `รุ่น ${esc(cohort)}` : esc(cohort)}</option>`).join("")}</select>` : ""}
+        <select data-graduation-roster-data aria-label="สถานะข้อมูล"><option value="">ทุกสถานะ</option><option value="has"${roster.data === "has" ? " selected" : ""}>มีผลการเรียน</option><option value="none"${roster.data === "none" ? " selected" : ""}>ยังไม่มีข้อมูล</option></select>
+      </div>
+      <ul class="graduation-roster-list">${students.map(item).join("")}</ul>
+      <p class="graduation-roster-empty" data-roster-empty${visible.length ? " hidden" : ""}>ไม่พบนักศึกษาตามที่ค้นหา</p>`
+      : `<p class="audit-empty">ยังไม่มีนักศึกษาในรายการ${canAdd ? " เริ่มจากกด \"เพิ่มนักศึกษา\" ด้านล่าง" : ""}</p>`}
+    ${canAdd ? `<details class="graduation-add" data-graduation-year="ui:add"${(state.graduationYearOpen?.["ui:add"] ?? students.length === 0) ? " open" : ""}>
+      <summary>＋ เพิ่มนักศึกษา</summary>
+      ${renderGraduationDirectory("staff")}
+      <form class="graduation-assignment-form" data-graduation-assign-form><h3>หรือเพิ่มด้วยรหัสนักศึกษา</h3><div><input name="studentId" required placeholder="รหัสนักศึกษา เช่น 6709650094"><input name="displayName" placeholder="ชื่อที่แสดง (ไม่บังคับ)"><select name="studentYear" required><option value="">ชั้นปี</option><option value="1">ปี 1</option><option value="2">ปี 2</option><option value="3">ปี 3</option><option value="4">ปี 4</option></select><button type="submit" class="workflow-action workflow-action--primary">เพิ่ม</button></div></form>
+    </details>` : ""}
+  </aside>`;
+
+  const nav = students.length ? `<div class="graduation-detail-nav">
+      <button type="button" class="workflow-action workflow-action--muted" data-graduation-step="-1"${position > 0 ? "" : " disabled"}>‹ ก่อนหน้า</button>
+      <span>${position >= 0 ? `คนที่ ${position + 1} จาก ${visible.length}` : "เลือกนักศึกษาจากรายการ"}</span>
+      <button type="button" class="workflow-action workflow-action--muted" data-graduation-step="1"${position >= 0 && position < visible.length - 1 ? "" : " disabled"}>ถัดไป ›</button>
+    </div>` : "";
+
+  const detail = `<section class="graduation-detail">
+    ${nav}
+    ${state.graduationResult ? renderGraduationResult(state.graduationResult, `ผลตรวจสอบ ${selectedId}`, "reviewer") : (students.length ? `<p class="audit-empty graduation-detail-empty">เลือกนักศึกษาจากรายการด้านซ้ายเพื่อดูผล</p>` : "")}
+    ${canAdd && selectedId ? `<section class="graduation-manage-student"><div><strong>จัดการรายการ</strong><span>เอา ${esc(selectedId)} ออกจากรายการตรวจของคุณ ผลการเรียนของนักศึกษาจะไม่ถูกลบ</span></div><button type="button" class="workflow-action workflow-action--muted" data-graduation-remove="${esc(selectedId)}">ลบนักศึกษาออกจากรายการ</button></section>` : ""}
+    ${canAdd ? `<details class="graduation-import-history" data-graduation-year="ui:batches"${state.graduationYearOpen?.["ui:batches"] ? " open" : ""}><summary>ประวัติการนำเข้าข้อมูล</summary>${state.graduationBatches.length ? `<div class="graduation-table-wrap"><table><thead><tr><th>Batch</th><th>โหมด</th><th>สถานะ</th><th>จำนวนแถว</th><th>นำเข้าเมื่อ</th></tr></thead><tbody>${state.graduationBatches.map(batch => `<tr><td>${esc(batch.source_batch_id ?? batch.batch_id)}</td><td>${batch.data_mode === "demo" ? "ข้อมูลจำลอง" : "ข้อมูลจริง"}</td><td>${esc(batch.status)}</td><td>${esc(batch.row_total)}</td><td>${esc(batch.finished_at ? new Date(batch.finished_at).toLocaleString("th-TH") : "-")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="audit-empty">ยังไม่มีประวัติการนำเข้า</p>`}</details>` : ""}
+  </section>`;
+
+  return `<div class="graduation-split">${roasterPanel}${detail}</div>`;
 }
 
 // The TU sign-in directory is a convenience. If it fails the rest of the page still works.
@@ -1434,6 +1526,28 @@ async function loadGraduationDirectory() {
     if (response.ok) state.graduationDirectory = payload.data ?? { students: [], reviewers: [], available: true };
   } catch {
     // keep whatever is already shown
+  }
+}
+
+// Opens one student's result in the reviewer page.
+async function selectGraduationStudent(studentId) {
+  if (!studentId || !state.graduationStudents.some(student => student.studentId === studentId)) return;
+  state.graduationSelectedStudentId = studentId;
+  state.graduationLoading = true;
+  state.graduationError = "";
+  render();
+  try {
+    const response = await fetch(`${API_BASE}/api/graduation/students/${encodeURIComponent(studentId)}`);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error ?? "โหลดผลตรวจสอบไม่สำเร็จ");
+    state.graduationResult = payload.data;
+  } catch (error) {
+    state.graduationError = error.message ?? "โหลดผลตรวจสอบไม่สำเร็จ";
+  } finally {
+    state.graduationLoading = false;
+    render();
+    // render() rebuilds the list, so bring the chosen student back into view.
+    document.querySelector(".graduation-roster-item.is-active")?.scrollIntoView({ block: "nearest" });
   }
 }
 
@@ -4595,6 +4709,9 @@ function go(v, id, addHistory = true) {
     state.graduationDirectory = { students: [], reviewers: [], available: true };
     state.graduationCheckOpen = false;
     state.graduationYearOpen = {};
+    state.graduationPageTab = "";
+    state.graduationTab = "overview";
+    state.graduationAdminTab = "assign";
     state.graduationLoaded = false;
     state.graduationError = "";
   }
@@ -4721,24 +4838,45 @@ function bind() {
   });
 
   document.querySelectorAll("[data-graduation-student]").forEach(button => {
-    button.onclick = async () => {
-      const studentId = button.dataset.graduationStudent;
-      if (!studentId || !state.graduationStudents.some(student => student.studentId === studentId)) return;
-      state.graduationSelectedStudentId = studentId;
-      state.graduationLoading = true;
-      state.graduationError = "";
+    button.onclick = () => selectGraduationStudent(button.dataset.graduationStudent);
+  });
+
+  // Previous / next student within the list as currently filtered.
+  document.querySelectorAll("[data-graduation-step]").forEach(button => {
+    button.onclick = () => {
+      const visible = graduationRosterVisible();
+      const index = visible.findIndex(student => student.studentId === state.graduationSelectedStudentId);
+      const next = visible[index + Number(button.dataset.graduationStep)];
+      if (next) selectGraduationStudent(next.studentId);
+    };
+  });
+
+  // Search and filters for the reviewer's list. They hide rows in place, so typing keeps focus.
+  const applyRosterFilter = () => {
+    const visible = graduationRosterVisible();
+    const ids = new Set(visible.map(student => student.studentId));
+    document.querySelectorAll("[data-roster-item]").forEach(row => { row.hidden = !ids.has(row.dataset.rosterItem); });
+    const count = document.querySelector("[data-roster-count]");
+    if (count) count.textContent = `${visible.length} / ${state.graduationStudents.length} คน`;
+    document.querySelector("[data-roster-empty]")?.toggleAttribute("hidden", visible.length > 0);
+  };
+  document.querySelectorAll("[data-graduation-roster-query]").forEach(input => {
+    input.oninput = () => { state.graduationRoster = { ...state.graduationRoster, query: input.value }; applyRosterFilter(); };
+  });
+  document.querySelectorAll("[data-graduation-roster-cohort]").forEach(select => {
+    select.onchange = () => { state.graduationRoster = { ...state.graduationRoster, cohort: select.value }; applyRosterFilter(); };
+  });
+  document.querySelectorAll("[data-graduation-roster-data]").forEach(select => {
+    select.onchange = () => { state.graduationRoster = { ...state.graduationRoster, data: select.value }; applyRosterFilter(); };
+  });
+
+  // Tabs on the student page, the result card and the admin page.
+  document.querySelectorAll("[data-graduation-tab]").forEach(button => {
+    button.onclick = () => {
+      const key = { page: "graduationPageTab", card: "graduationTab", admin: "graduationAdminTab" }[button.dataset.tabGroup];
+      if (!key) return;
+      state[key] = button.dataset.tabValue;
       render();
-      try {
-        const response = await fetch(`${API_BASE}/api/graduation/students/${encodeURIComponent(studentId)}`);
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload.error ?? "โหลดผลตรวจสอบไม่สำเร็จ");
-        state.graduationResult = payload.data;
-      } catch (error) {
-        state.graduationError = error.message ?? "โหลดผลตรวจสอบไม่สำเร็จ";
-      } finally {
-        state.graduationLoading = false;
-        render();
-      }
     };
   });
 
@@ -4799,6 +4937,8 @@ function bind() {
   document.querySelectorAll("[data-graduation-check-toggle]").forEach(button => {
     button.onclick = () => {
       state.graduationCheckOpen = !state.graduationCheckOpen;
+      // The check panel lives in the overview tab.
+      if (state.graduationCheckOpen) state.graduationTab = "overview";
       render();
       if (state.graduationCheckOpen) document.querySelector(".graduation-gap")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     };
@@ -4875,6 +5015,11 @@ function bind() {
         const saved = payload.data?.saved ?? [];
         const failed = payload.data?.failed ?? [];
         saved.forEach(item => { delete state.graduationForm.grades[item.courseCode]; });
+        // Show the result right after saving.
+        if (saved.length) {
+          state.graduationPageTab = "result";
+          state.graduationTab = "overview";
+        }
         if (failed.length) {
           alert(`บันทึกแล้ว ${saved.length} วิชา\nไม่สำเร็จ ${failed.length} วิชา:\n${failed.map(item => `${item.courseCode}: ${item.error}`).join("\n")}`);
         }
@@ -4892,14 +5037,6 @@ function bind() {
       const query = input.value.trim().toLowerCase();
       document.querySelectorAll("[data-directory-row]").forEach(row => {
         row.hidden = Boolean(query) && !String(row.dataset.search ?? "").includes(query);
-      });
-    };
-  });
-  document.querySelectorAll("[data-graduation-chip-filter]").forEach(input => {
-    input.oninput = () => {
-      const query = input.value.trim().toLowerCase();
-      document.querySelectorAll("[data-student-chip]").forEach(chip => {
-        chip.hidden = Boolean(query) && !String(chip.dataset.search ?? "").includes(query);
       });
     };
   });
