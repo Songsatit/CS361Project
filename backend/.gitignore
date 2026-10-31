@@ -1,3 +1,5 @@
 node_modules/
 .env
 dist/
+# raw production dump (contains real data) - commit only the sanitized copy
+migrations/curriculum-full-29-10.sql

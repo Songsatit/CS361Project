@@ -958,7 +958,18 @@ function renderGraduationResult(result, audienceLabel) {
     completed: "เรียนแล้ว",
     failed_or_incomplete: "ตก/ยังไม่สมบูรณ์",
     not_taken: "ยังไม่เรียน",
+    in_progress: "กำลังเรียน (ไม่นับในผลตรวจ)",
+    pending_verification: "นักศึกษากรอกเอง รอยืนยัน (ไม่นับในผลตรวจ)",
   };
+  // Where a grade row came from. Student-entered rows always carry their label.
+  const sourceText = row => row.source === "self_reported"
+    ? (row.verificationStatus === "verified" ? "นักศึกษากรอกเอง · เจ้าหน้าที่ยืนยันแล้ว"
+      : row.verificationStatus === "rejected" ? "นักศึกษากรอกเอง · ถูกปฏิเสธ"
+      : "นักศึกษากรอกเอง · ยังไม่ยืนยัน")
+    : "นำเข้าจากทะเบียน";
+  const groupTable = (rows, title, note) => rows?.length
+    ? `<section class="graduation-history graduation-history--unconfirmed"><h3>${esc(title)}</h3><p class="graduation-student-meta">${esc(note)}</p><div class="graduation-table-wrap"><table><thead><tr><th>วิชา</th><th>ชื่อวิชา</th><th>ปี/ภาค</th><th>หน่วยกิต</th><th>เกรด</th><th>แหล่งที่มา</th></tr></thead><tbody>${rows.map(row => `<tr><td>${esc(row.courseCode)}</td><td>${esc(row.courseNameTh ?? row.courseNameEn ?? "ไม่พบชื่อวิชา")}</td><td>${esc(row.academicYear)} / ${esc(row.semester === 3 ? "Summer" : row.semester)}</td><td>${esc(row.credits)}</td><td>${esc(row.isInProgress ? "กำลังเรียน" : (row.grade ?? "-"))}</td><td>${esc(sourceText(row))}${row.verificationNote ? `<small> · ${esc(row.verificationNote)}</small>` : ""}</td></tr>`).join("")}</tbody></table></div></section>`
+    : "";
   return `
     <section class="graduation-result-card">
       <div class="graduation-result-head">
@@ -970,7 +981,10 @@ function renderGraduationResult(result, audienceLabel) {
       <div class="graduation-source-status"><strong>${esc(sourceLabel)}</strong><span>ข้อมูล ณ ${esc(source.asOf ? new Date(source.asOf).toLocaleString("th-TH") : "ไม่มีข้อมูลเวลา")}</span>${source.lastImport?.sourceBatchId ? `<small>Batch: ${esc(source.lastImport.sourceBatchId)}</small>` : ""}</div>
       ${result.totals ? `<div class="graduation-totals"><span>หน่วยกิตที่ได้รับ <strong>${esc(result.totals.earnedCredits)}</strong></span><span>GPA <strong>${esc(result.totals.gpa ?? "ยังคำนวณไม่ได้")}</strong></span></div>` : ""}
       ${result.conditions?.length ? `<div class="graduation-condition-list">${result.conditions.map(condition => `<article class="graduation-condition graduation-condition--${esc(condition.status)}"><div><strong>${esc(graduationConditionLabels[condition.status] ?? "ข้อมูลไม่ครบ")}</strong><span>${esc(condition.text)}</span></div>${graduationDetailsText(condition) ? `<small>${esc(graduationDetailsText(condition))}</small>` : ""}</article>`).join("")}</div>` : `<p class="audit-empty">ไม่พบเงื่อนไขหรือข้อมูลสำหรับตรวจสอบ</p>`}
-      ${gradeRows.length ? `<section class="graduation-history"><h3>วิชาที่เคยเรียนและผลการเรียน</h3><div class="graduation-table-wrap"><table><thead><tr><th>วิชา</th><th>ชื่อวิชา</th><th>ปี/ภาค</th><th>หน่วยกิต</th><th>เกรด</th></tr></thead><tbody>${gradeRows.map(row => `<tr><td>${esc(row.courseCode)}</td><td>${esc(row.courseNameTh ?? row.courseNameEn ?? "ไม่พบชื่อวิชา")}</td><td>${esc(row.academicYear)} / ${esc(row.semester === 3 ? "Summer" : row.semester)}</td><td>${esc(row.credits)}</td><td><strong>${esc(gradeLabel[row.grade] ?? row.grade ?? "-")}</strong></td></tr>`).join("")}</tbody></table></div></section>` : ""}
+      ${gradeRows.length ? `<section class="graduation-history"><h3>วิชาที่เคยเรียนและผลการเรียน</h3><div class="graduation-table-wrap"><table><thead><tr><th>วิชา</th><th>ชื่อวิชา</th><th>ปี/ภาค</th><th>หน่วยกิต</th><th>เกรด</th><th>แหล่งที่มา</th></tr></thead><tbody>${gradeRows.map(row => `<tr><td>${esc(row.courseCode)}</td><td>${esc(row.courseNameTh ?? row.courseNameEn ?? "ไม่พบชื่อวิชา")}</td><td>${esc(row.academicYear)} / ${esc(row.semester === 3 ? "Summer" : row.semester)}</td><td>${esc(row.credits)}</td><td><strong>${esc(gradeLabel[row.grade] ?? row.grade ?? "-")}</strong></td><td>${esc(sourceText(row))}</td></tr>`).join("")}</tbody></table></div></section>` : ""}
+      ${groupTable(result.pendingRecords, "นักศึกษากรอกเอง รอเจ้าหน้าที่ยืนยัน", "แสดงเพื่อให้ตรวจทาน ไม่นับในผลตรวจสำเร็จการศึกษาจนกว่าจะได้รับการยืนยัน")}
+      ${groupTable(result.inProgressRecords, "วิชาที่กำลังเรียน", "ยังไม่มีผลการเรียน ไม่นับในผลตรวจสำเร็จการศึกษา")}
+      ${groupTable(result.rejectedRecords, "รายการที่เจ้าหน้าที่ปฏิเสธ", "ไม่นับในผลตรวจสำเร็จการศึกษา")}
       ${planRows.length ? `<section class="graduation-plan-progress"><h3>ความก้าวหน้าตามแผน 4 ปี</h3><div class="graduation-table-wrap"><table><thead><tr><th>ปี/ภาค</th><th>วิชา</th><th>หน่วยกิต</th><th>สถานะ</th><th>เกรด</th></tr></thead><tbody>${planRows.map(row => `<tr><td>ปี ${esc(row.studyYear)} / ${esc(row.semester === 3 ? "Summer" : row.semester)}</td><td>${esc(row.courseCode ?? "-")} ${esc(row.courseNameTh ?? "")}</td><td>${esc(row.credits ?? "-")}</td><td>${esc(planStatus[row.status] ?? row.status)}</td><td>${esc(row.grade ?? "-")}</td></tr>`).join("")}</tbody></table></div></section>` : ""}
     </section>
   `;
