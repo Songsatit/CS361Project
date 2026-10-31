@@ -43,7 +43,12 @@ const roundTo = (value, digits) => Math.round(value * 10 ** digits) / 10 ** digi
 //                label, never counted, so student-entered data cannot read as a pass
 // Rows from a database without migration 015 have none of these fields. They are treated as
 // imported + verified + not in progress, which is what every such row is.
-export function partitionGradeRecords(records) {
+//
+// countSelfReported: when true, a student-entered row that nobody has decided yet also counts
+// (it is still labelled self_reported + unverified wherever it is shown). It is off by default
+// here; the API turns it on while the grade data is a mock and staff review is not required.
+// A row staff rejected, and a course still in progress, never count either way.
+export function partitionGradeRecords(records, { countSelfReported = false } = {}) {
   const counted = [];
   const pending = [];
   const rejected = [];
@@ -53,6 +58,7 @@ export function partitionGradeRecords(records) {
     if (Number(record.is_in_progress ?? 0) === 1) inProgress.push(record);
     else if (status === 'rejected') rejected.push(record);
     else if (status === 'verified') counted.push(record);
+    else if (countSelfReported && record.source === 'self_reported') counted.push(record);
     else pending.push(record);
   }
   return { counted, pending, rejected, inProgress };
@@ -278,22 +284,29 @@ export function resolveDataSource({
 
 // A student with no registrar-imported rows has no import snapshot that could be stale or
 // partial, so the import batch status says nothing about their data. Their data source is
-// the self-reported rows that instructor/staff verified. With none verified there is nothing
-// to evaluate, so the source stays "no_source". `basis` lets the UI label the source.
-export function resolveSelfReportedSource(records) {
+// the self-reported rows that count (verified ones, plus undecided ones when `countUnverified`
+// is on). With none counting there is nothing to evaluate, so the source stays "no_source".
+// `basis` lets the UI label the source: 'self_reported' means unverified rows are included.
+export function resolveSelfReportedSource(records, { countUnverified = false, now = new Date() } = {}) {
   let asOf = null;
-  let verified = 0;
+  let usable = 0;
+  let anyUnverified = false;
   for (const record of records) {
-    if (record.source !== 'self_reported' || record.verification_status !== 'verified') continue;
+    if (record.source !== 'self_reported') continue;
     if (Number(record.is_in_progress ?? 0) === 1) continue;
-    verified += 1;
+    const status = record.verification_status;
+    if (status !== 'verified' && !(countUnverified && status === 'unverified')) continue;
+    usable += 1;
+    if (status !== 'verified') anyUnverified = true;
     if (!record.verified_at) continue;
     const value = new Date(record.verified_at);
     if (!asOf || value > asOf) asOf = value;
   }
+  // Unverified rows carry no timestamp, so the data is "as of now" (read live from the database).
+  if (anyUnverified) asOf = now;
   return {
-    status: verified ? 'ok' : 'no_source',
-    basis: 'self_reported_verified',
+    status: usable ? 'ok' : 'no_source',
+    basis: anyUnverified ? 'self_reported' : 'self_reported_verified',
     asOf: toIso(asOf),
     maxAgeDays: null,
     lastImport: null,

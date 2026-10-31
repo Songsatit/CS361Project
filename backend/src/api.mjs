@@ -1846,6 +1846,13 @@ function shapeGradeRecord(record) {
   };
 }
 
+// While the grade data is a mock, student-entered rows count without staff review. Set
+// GRADUATION_COUNT_SELF_REPORTED=false to count only verified rows again. Counted rows stay
+// labelled "self-reported, unverified" in every response.
+function countSelfReportedGrades() {
+  return String(process.env.GRADUATION_COUNT_SELF_REPORTED ?? 'true').toLowerCase() !== 'false';
+}
+
 async function buildGraduationResult(studentId) {
   const records = await loadGradeRecords(studentId);
   const [latestBatch = null] = await queryRows(
@@ -1878,7 +1885,8 @@ async function buildGraduationResult(studentId) {
     return !latest || value > latest ? value : latest;
   }, null);
   const hasImportedRows = records.some((record) => (record.source ?? 'imported') === 'imported');
-  const dataSource = records.length && !hasImportedRows ? resolveSelfReportedSource(records) : resolveDataSource({
+  const countSelfReported = countSelfReportedGrades();
+  const dataSource = records.length && !hasImportedRows ? resolveSelfReportedSource(records, { countUnverified: countSelfReported }) : resolveDataSource({
     latestBatch,
     studentRejectedInLatest: studentRejected,
     unidentifiedRejectedInLatest: unidentifiedRejected,
@@ -1893,6 +1901,8 @@ async function buildGraduationResult(studentId) {
       dataMode: latestBatch ? 'demo' : null,
       curriculum: null,
       verdict: 'no_data',
+      includesSelfReported: false,
+      selfReportedCounts: countSelfReported,
       dataSource,
       totals: null,
       conditions: [],
@@ -1907,8 +1917,9 @@ async function buildGraduationResult(studentId) {
   const curriculumId = pickCurriculum(records.filter((record) => record.verification_status !== 'rejected'))
     ?? pickCurriculum(records);
   const allCurriculumRecords = records.filter((record) => record.curriculum_id === curriculumId);
-  // Only verified, finished rows feed the verdict. The rest are returned separately and labelled.
-  const { counted, pending, rejected, inProgress } = partitionGradeRecords(allCurriculumRecords);
+  // Verified, finished rows feed the verdict, and so do undecided student-entered rows while
+  // countSelfReported is on. The rest are returned separately and labelled.
+  const { counted, pending, rejected, inProgress } = partitionGradeRecords(allCurriculumRecords, { countSelfReported });
   const curriculumRecords = counted;
   const [studentMeta = {}] = await queryRows(
     `SELECT student_id, display_name, student_year
@@ -2009,6 +2020,9 @@ async function buildGraduationResult(studentId) {
       : (records.some((record) => record.data_mode) ? 'live' : null),
     curriculum: { curriculumId },
     verdict: evaluation.verdict,
+    // True when the verdict uses student-entered rows that no one has verified.
+    includesSelfReported: curriculumRecords.some((record) => record.source === 'self_reported' && record.verification_status !== 'verified'),
+    selfReportedCounts: countSelfReported,
     dataSource,
     totals: evaluation.totals,
     conditions: evaluation.conditions,
@@ -2086,6 +2100,7 @@ async function assignGraduationStudent(event) {
   if (!['staff', 'curriculum_admin'].includes(actor.role)) return response(403, { error: 'Only staff or curriculum admins can assign students' });
   const body = requestBody(event);
   if (!body) return response(400, { error: 'Request body must be valid JSON' });
+  if (Array.isArray(body.studentIds)) return assignGraduationStudentsBulk(actor, body);
   const studentId = String(body.studentId ?? '').trim();
   const displayName = String(body.displayName ?? '').trim().slice(0, 255) || null;
   const hasYear = body.studentYear !== undefined && body.studentYear !== null && body.studentYear !== '';
@@ -2118,6 +2133,67 @@ async function assignGraduationStudent(event) {
 }
 
 const assigneeUsernamePattern = /^[a-z0-9][a-z0-9._@-]{0,99}$/;
+
+// Study year (1-4) from a TU student ID such as 6709650094 (entered in BE 2567). The academic
+// year starts in August. Null when the ID has no such prefix or the year is out of range.
+export function studyYearFromStudentId(studentId, now = new Date()) {
+  const match = /^(\d{2})\d{4,}/.exec(String(studentId ?? ''));
+  if (!match) return null;
+  const academicYear = now.getFullYear() + 543 - (now.getMonth() < 7 ? 1 : 0);
+  const year = academicYear - (2500 + Number(match[1])) + 1;
+  return year >= 1 && year <= 4 ? year : null;
+}
+
+// Many students to one reviewer in a single statement, so handing a whole class to an
+// instructor is one request instead of one per student.
+async function assignGraduationStudentsBulk(actor, body) {
+  const studentIds = [...new Set(body.studentIds.map((value) => String(value ?? '').trim()).filter(Boolean))];
+  if (!studentIds.length || studentIds.length > 500) return response(400, { error: 'studentIds must hold 1 to 500 IDs' });
+  const invalid = studentIds.filter((id) => !graduationStudentIdPattern.test(id));
+  if (invalid.length) return response(400, { error: `studentIds contains invalid IDs: ${invalid.slice(0, 5).join(', ')}` });
+
+  let assignee = actor.username;
+  if (actor.role === 'curriculum_admin') {
+    assignee = String(body.assigneeUsername ?? '').trim().toLowerCase();
+    if (!assigneeUsernamePattern.test(assignee)) return response(400, { error: 'assigneeUsername is required' });
+  }
+
+  // Names come from the sign-in directory when it knows the student.
+  const names = new Map();
+  try {
+    const known = await queryRows(
+      `SELECT username, display_name FROM graduation_user_directory
+        WHERE username IN (${studentIds.map(() => '?').join(',')})`,
+      studentIds.map((id) => id.toLowerCase()),
+    );
+    for (const row of known) names.set(String(row.username).toLowerCase(), row.display_name ?? null);
+  } catch (error) {
+    if (error?.code !== 'ER_NO_SUCH_TABLE') throw error;
+  }
+
+  const now = new Date();
+  const values = [];
+  for (const id of studentIds) {
+    values.push(assignee, id, actor.username, names.get(id.toLowerCase()) ?? null, studyYearFromStudentId(id, now));
+  }
+  await pool.execute(
+    `INSERT INTO graduation_student_assignment
+      (assignee_username, student_id, assigned_by, display_name, student_year)
+     VALUES ${studentIds.map(() => '(?, ?, ?, ?, ?)').join(', ')}
+     ON DUPLICATE KEY UPDATE display_name = COALESCE(VALUES(display_name), display_name),
+                             student_year = COALESCE(VALUES(student_year), student_year)`,
+    values,
+  );
+  await writeAuditLog({
+    username: actor.username,
+    role: actor.role,
+    action: 'graduation_students_assigned',
+    entityType: 'student_graduation',
+    entityId: `bulk:${studentIds.length}`,
+    newValue: { count: studentIds.length, assignee },
+  });
+  return response(201, { data: { assigned: studentIds.length, assigneeUsername: assignee } });
+}
 
 // Everyone who signed in through TU, so staff and admins can find a student or reviewer
 // without typing an ID. Names and last-login times only: no grades, and listing someone here
