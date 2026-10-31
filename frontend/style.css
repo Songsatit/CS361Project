@@ -3514,3 +3514,39 @@
     flex-direction: column;
   }
 }
+
+/* V4 graduation: self-reported grades and student removal */
+.graduation-student-chip {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0.3rem;
+}
+
+.graduation-row-actions {
+  white-space: nowrap;
+}
+
+.graduation-row-actions .workflow-action {
+  padding: 0.3rem 0.65rem;
+}
+
+.graduation-grade-form {
+  margin-top: 1.25rem;
+}
+
+.graduation-grade-form > div {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.graduation-inprogress {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.92rem;
+}
+
+.graduation-inprogress input {
+  width: auto;
+  min-height: 0;
+}

@@ -261,6 +261,7 @@ function clearAuthSession() {
   state.graduationResult = null;
   state.graduationStudents = [];
   state.graduationBatches = [];
+  state.graduationAssignments = [];
   state.graduationSelectedStudentId = "";
   state.graduationLoading = false;
   state.graduationLoaded = false;
@@ -945,11 +946,43 @@ function graduationDetailsText(condition) {
   return parts.join(" · ");
 }
 
-function renderGraduationResult(result, audienceLabel) {
+const GRADUATION_ROLES = ["student", "instructor", "staff", "curriculum_admin"];
+
+const GRADUATION_GRADE_OPTIONS = ["A", "B+", "B", "C+", "C", "D+", "D", "F", "S", "P", "U", "W", "I"];
+
+function graduationCurriculumOptions(selectedId) {
+  const seen = new Set();
+  return PROGRAMS.filter(program => program.curriculumId && !seen.has(program.curriculumId) && seen.add(program.curriculumId))
+    .map(program => `<option value="${esc(program.curriculumId)}"${program.curriculumId === selectedId ? " selected" : ""}>${esc(program.curriculumId)}${program.nameEn ? ` · ${esc(program.nameEn)}` : ""}</option>`)
+    .join("");
+}
+
+// Lets a student add one grade. The row stays "unverified" until instructor/staff confirm it.
+function renderGraduationGradeForm(result) {
+  const buddhistYear = new Date().getFullYear() + 543;
+  return `<form class="graduation-assignment-form graduation-grade-form" data-graduation-grade-form>
+    <h3>เพิ่มผลการเรียนของฉัน</h3>
+    <p class="graduation-student-meta">รายการที่เพิ่มเองจะแสดงเป็น "ยังไม่ยืนยัน" และไม่นับในผลตรวจ จนกว่าอาจารย์หรือเจ้าหน้าที่จะยืนยัน</p>
+    <div>
+      <select name="curriculumId" required aria-label="หลักสูตร"><option value="">หลักสูตร</option>${graduationCurriculumOptions(result?.curriculum?.curriculumId)}</select>
+      <input name="courseCode" required maxlength="30" placeholder="รหัสวิชา เช่น CS361" aria-label="รหัสวิชา">
+      <input name="academicYear" type="number" required min="2500" max="2700" value="${buddhistYear}" aria-label="ปีการศึกษา (พ.ศ.)">
+      <select name="semester" required aria-label="ภาคเรียน"><option value="1">ภาค 1</option><option value="2">ภาค 2</option><option value="3">Summer</option></select>
+      <input name="credits" type="number" step="0.5" min="0" max="12" placeholder="หน่วยกิต" aria-label="หน่วยกิต">
+      <select name="grade" aria-label="เกรด"><option value="">เกรด</option>${GRADUATION_GRADE_OPTIONS.map(grade => `<option value="${grade}">${grade}</option>`).join("")}</select>
+      <label class="graduation-inprogress"><input name="inProgress" type="checkbox"> กำลังเรียน</label>
+      <button type="submit" class="workflow-action workflow-action--primary">เพิ่มรายการ</button>
+    </div>
+  </form>`;
+}
+
+function renderGraduationResult(result, audienceLabel, mode = "view") {
   if (!result) return `<p class="audit-empty">ยังไม่มีผลตรวจสอบ</p>`;
   const dataModeDemo = result.dataMode === "demo";
   const source = result.dataSource ?? {};
-  const sourceLabel = graduationSourceLabels[source.status] ?? "ไม่ทราบสถานะข้อมูล";
+  const sourceLabel = source.basis === "self_reported_verified" && source.status === "ok"
+    ? "ข้อมูลที่นักศึกษากรอกเองและได้รับการยืนยันแล้ว"
+    : (graduationSourceLabels[source.status] ?? "ไม่ทราบสถานะข้อมูล");
   const verdict = graduationVerdictLabels[result.verdict] ?? "ยังสรุปผลไม่ได้";
   const gradeRows = result.records ?? [];
   const planRows = result.plan ?? [];
@@ -967,8 +1000,20 @@ function renderGraduationResult(result, audienceLabel) {
       : row.verificationStatus === "rejected" ? "นักศึกษากรอกเอง · ถูกปฏิเสธ"
       : "นักศึกษากรอกเอง · ยังไม่ยืนยัน")
     : "นำเข้าจากทะเบียน";
+  // Only student-entered rows that nobody has decided yet can be acted on.
+  const waitingForReview = row => row.source === "self_reported" && row.verificationStatus === "unverified";
+  const rowActions = row => {
+    if (!waitingForReview(row)) return "";
+    if (mode === "student") {
+      return `<button type="button" class="workflow-action workflow-action--muted" data-graduation-grade-delete="${esc(row.id)}">ลบ</button>`;
+    }
+    if (mode === "reviewer" && !row.isInProgress) {
+      return `<button type="button" class="workflow-action workflow-action--primary" data-graduation-grade-decision="verify" data-grade-id="${esc(row.id)}">ยืนยัน</button> <button type="button" class="workflow-action workflow-action--muted" data-graduation-grade-decision="reject" data-grade-id="${esc(row.id)}">ปฏิเสธ</button>`;
+    }
+    return "";
+  };
   const groupTable = (rows, title, note) => rows?.length
-    ? `<section class="graduation-history graduation-history--unconfirmed"><h3>${esc(title)}</h3><p class="graduation-student-meta">${esc(note)}</p><div class="graduation-table-wrap"><table><thead><tr><th>วิชา</th><th>ชื่อวิชา</th><th>ปี/ภาค</th><th>หน่วยกิต</th><th>เกรด</th><th>แหล่งที่มา</th></tr></thead><tbody>${rows.map(row => `<tr><td>${esc(row.courseCode)}</td><td>${esc(row.courseNameTh ?? row.courseNameEn ?? "ไม่พบชื่อวิชา")}</td><td>${esc(row.academicYear)} / ${esc(row.semester === 3 ? "Summer" : row.semester)}</td><td>${esc(row.credits)}</td><td>${esc(row.isInProgress ? "กำลังเรียน" : (row.grade ?? "-"))}</td><td>${esc(sourceText(row))}${row.verificationNote ? `<small> · ${esc(row.verificationNote)}</small>` : ""}</td></tr>`).join("")}</tbody></table></div></section>`
+    ? `<section class="graduation-history graduation-history--unconfirmed"><h3>${esc(title)}</h3><p class="graduation-student-meta">${esc(note)}</p><div class="graduation-table-wrap"><table><thead><tr><th>วิชา</th><th>ชื่อวิชา</th><th>ปี/ภาค</th><th>หน่วยกิต</th><th>เกรด</th><th>แหล่งที่มา</th>${rows.some(rowActions) ? "<th>จัดการ</th>" : ""}</tr></thead><tbody>${rows.map(row => `<tr><td>${esc(row.courseCode)}</td><td>${esc(row.courseNameTh ?? row.courseNameEn ?? "ไม่พบชื่อวิชา")}</td><td>${esc(row.academicYear)} / ${esc(row.semester === 3 ? "Summer" : row.semester)}</td><td>${esc(row.credits)}</td><td>${esc(row.isInProgress ? "กำลังเรียน" : (row.grade ?? "-"))}</td><td>${esc(sourceText(row))}${row.verificationNote ? `<small> · ${esc(row.verificationNote)}</small>` : ""}</td>${rows.some(rowActions) ? `<td class="graduation-row-actions">${rowActions(row)}</td>` : ""}</tr>`).join("")}</tbody></table></div></section>`
     : "";
   return `
     <section class="graduation-result-card">
@@ -990,9 +1035,16 @@ function renderGraduationResult(result, audienceLabel) {
   `;
 }
 
+// Curriculum admins can remove students from the list. They see no grade data.
+function renderGraduationAdminList() {
+  return `<section class="graduation-student-list"><h2>รายชื่อนักศึกษาในระบบตรวจสอบการจบ</h2><p>ผู้ดูแลหลักสูตรลบรายชื่อได้ แต่ไม่เห็นผลการเรียน การลบเอารายชื่อออกจากรายการตรวจของเจ้าหน้าที่/อาจารย์ ไม่ลบข้อมูลผลการเรียน</p>
+    ${state.graduationAssignments.length ? `<div class="graduation-table-wrap"><table><thead><tr><th>รหัสนักศึกษา</th><th>ชื่อที่แสดง</th><th>ชั้นปี</th><th>ผู้ตรวจ</th><th>จัดการ</th></tr></thead><tbody>${state.graduationAssignments.map(item => `<tr><td>${esc(item.studentId)}</td><td>${esc(item.displayName ?? "-")}</td><td>${esc(item.studyYear ?? "-")}</td><td>${esc((item.assignees ?? []).join(", ") || "-")}</td><td><button type="button" class="workflow-action workflow-action--muted" data-graduation-remove="${esc(item.studentId)}">ลบ</button></td></tr>`).join("")}</tbody></table></div>` : `<p class="audit-empty">ยังไม่มีนักศึกษาในรายการ</p>`}
+  </section>`;
+}
+
 function renderGraduationPage() {
   const role = state.user?.role;
-  if (!state.user || !["student", "instructor", "staff"].includes(role)) return renderHome();
+  if (!state.user || !GRADUATION_ROLES.includes(role)) return renderHome();
   const studentView = role === "student";
   const canSeeBatches = role === "staff";
   return `
@@ -1001,12 +1053,12 @@ function renderGraduationPage() {
       <div class="graduation-page-head"><span class="workflow-kicker">V4 · GRADUATION VERIFICATION</span><h1 class="page-title">ตรวจสอบการสำเร็จการศึกษา</h1><p class="page-sub">ระบบแสดงผลตามข้อมูลที่นำเข้า และจะแจ้งเมื่อข้อมูลหรือเงื่อนไขไม่เพียงพอ</p></div>
       ${state.graduationError ? `<section class="graduation-error">${esc(state.graduationError)}</section>` : ""}
       ${state.graduationLoading ? `<section class="profile-card">กำลังโหลดข้อมูลผลการเรียน...</section>` : ""}
-      ${studentView ? renderGraduationResult(state.graduationResult, "ผลตรวจสอบของนักศึกษา") : `
+      ${role === "curriculum_admin" ? renderGraduationAdminList() : studentView ? `${renderGraduationResult(state.graduationResult, "ผลตรวจสอบของนักศึกษา", "student")}${renderGraduationGradeForm(state.graduationResult)}` : `
         <section class="graduation-student-list"><h2>นักศึกษาที่ได้รับมอบหมาย</h2><p>แสดงเฉพาะนักศึกษาที่อยู่ในขอบเขตสิทธิ์ของบัญชีนี้</p>
-          ${state.graduationStudents.length ? `<div class="graduation-student-buttons">${state.graduationStudents.map(student => `<button type="button" class="workflow-action ${student.studentId === state.graduationSelectedStudentId ? "workflow-action--primary" : "workflow-action--muted"}" data-graduation-student="${esc(student.studentId)}"><strong>${esc(student.displayName ?? student.studentId)}</strong> · ${student.studyYear ? `ปี ${esc(student.studyYear)} · ` : ""}${student.hasData ? "มีข้อมูลผลการเรียน" : "ยังไม่มีข้อมูล"}</button>`).join("")}</div>` : `<p class="audit-empty">ยังไม่มีนักศึกษาที่ได้รับมอบหมายให้ตรวจสอบ</p>`}
+          ${state.graduationStudents.length ? `<div class="graduation-student-buttons">${state.graduationStudents.map(student => `<span class="graduation-student-chip"><button type="button" class="workflow-action ${student.studentId === state.graduationSelectedStudentId ? "workflow-action--primary" : "workflow-action--muted"}" data-graduation-student="${esc(student.studentId)}"><strong>${esc(student.displayName ?? student.studentId)}</strong> · ${student.studyYear ? `ปี ${esc(student.studyYear)} · ` : ""}${student.hasData ? "มีข้อมูลผลการเรียน" : "ยังไม่มีข้อมูล"}</button>${role === "staff" ? `<button type="button" class="workflow-action workflow-action--muted" data-graduation-remove="${esc(student.studentId)}" aria-label="ลบ ${esc(student.studentId)} ออกจากรายการ">ลบ</button>` : ""}</span>`).join("")}</div>` : `<p class="audit-empty">ยังไม่มีนักศึกษาที่ได้รับมอบหมายให้ตรวจสอบ</p>`}
           ${role === "staff" ? `<form class="graduation-assignment-form" data-graduation-assign-form><h3>เพิ่มนักศึกษาเข้ารายการตรวจ</h3><div><input name="studentId" required placeholder="รหัสนักศึกษา Demo เช่น DEMO0001"><input name="displayName" placeholder="ชื่อที่แสดง"><select name="studentYear" required><option value="">ชั้นปี</option><option value="1">ปี 1</option><option value="2">ปี 2</option><option value="3">ปี 3</option><option value="4">ปี 4</option></select><button type="submit" class="workflow-action workflow-action--primary">เพิ่มรายการ</button></div></form>` : ""}
         </section>
-        ${state.graduationResult ? renderGraduationResult(state.graduationResult, `ผลตรวจสอบ ${state.graduationSelectedStudentId}`) : ""}
+        ${state.graduationResult ? renderGraduationResult(state.graduationResult, `ผลตรวจสอบ ${state.graduationSelectedStudentId}`, "reviewer") : ""}
         ${canSeeBatches ? `<section class="graduation-import-history"><h2>ประวัติการนำเข้า</h2>${state.graduationBatches.length ? `<div class="graduation-table-wrap"><table><thead><tr><th>Batch</th><th>โหมด</th><th>สถานะ</th><th>จำนวนแถว</th><th>นำเข้าเมื่อ</th></tr></thead><tbody>${state.graduationBatches.map(batch => `<tr><td>${esc(batch.source_batch_id ?? batch.batch_id)}</td><td>${batch.data_mode === "demo" ? "ข้อมูลจำลอง" : "ข้อมูลจริง"}</td><td>${esc(batch.status)}</td><td>${esc(batch.row_total)}</td><td>${esc(batch.finished_at ? new Date(batch.finished_at).toLocaleString("th-TH") : "-")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="audit-empty">ยังไม่มีประวัติการนำเข้า</p>`}</section>` : ""}
       `}
     </div>
@@ -1016,11 +1068,17 @@ function renderGraduationPage() {
 async function loadGraduationPage() {
   if (state.graduationLoading || state.graduationLoaded) return;
   const role = state.user?.role;
-  if (!["student", "instructor", "staff"].includes(role)) return;
+  if (!GRADUATION_ROLES.includes(role)) return;
   state.graduationLoading = true;
   state.graduationError = "";
   try {
-    if (role === "student") {
+    if (role === "curriculum_admin") {
+      // Admins manage the student list only. They get no grade data.
+      const response = await fetch(`${API_BASE}/api/graduation/assignments`);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error ?? "โหลดรายชื่อนักศึกษาไม่สำเร็จ");
+      state.graduationAssignments = payload.data ?? [];
+    } else if (role === "student") {
       const response = await fetch(`${API_BASE}/api/graduation/me`);
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error ?? "โหลดผลตรวจสอบไม่สำเร็จ");
@@ -1042,6 +1100,9 @@ async function loadGraduationPage() {
         const resultPayload = await resultResponse.json().catch(() => ({}));
         if (!resultResponse.ok) throw new Error(resultPayload.error ?? "โหลดผลตรวจสอบไม่สำเร็จ");
         state.graduationResult = resultPayload.data;
+      } else {
+        state.graduationSelectedStudentId = "";
+        state.graduationResult = null;
       }
     }
     state.graduationLoaded = true;
@@ -3792,8 +3853,8 @@ function shell(content) {
     ["programs", "หลักสูตร"],
     ["courses", "ค้นหารายวิชา"]
   ];
-  if (["student", "instructor", "staff"].includes(state.user?.role)) {
-    nav.push(["graduation", "ตรวจสอบการจบ"]);
+  if (GRADUATION_ROLES.includes(state.user?.role)) {
+    nav.push(["graduation", state.user?.role === "curriculum_admin" ? "รายชื่อนักศึกษา" : "ตรวจสอบการจบ"]);
   }
   nav.push(["faq", "คำถามที่พบบ่อย"]);
 
@@ -3849,7 +3910,7 @@ function shell(content) {
             ${canManageCurricula() ? `<button data-go="curriculum-management" role="menuitem">จัดการหลักสูตร</button><button data-go="course-editor" role="menuitem">แก้ไขรายวิชา</button><button data-go="my-change-requests" role="menuitem">คำขอของฉัน</button>` : ""}
             ${canReviewCurriculumRequests() ? `<button data-go="review-requests" role="menuitem">ตรวจคำขอ + ประวัติเวอร์ชัน</button>` : ""}
             ${canAccessCurriculumManagement() ? `<button data-go="workflow" data-id="${esc(state.programId || PROGRAMS[0].id)}" role="menuitem">ตรวจสอบข้อมูลหลักสูตร</button>` : ""}
-            ${["student", "instructor", "staff"].includes(state.user.role) ? `<button data-go="graduation" role="menuitem">ตรวจสอบการจบ</button>` : ""}
+            ${GRADUATION_ROLES.includes(state.user.role) ? `<button data-go="graduation" role="menuitem">${state.user.role === "curriculum_admin" ? "รายชื่อนักศึกษา" : "ตรวจสอบการจบ"}</button>` : ""}
             <button data-auth-action="logout" role="menuitem" class="account-menu-logout">ออกจากระบบ</button>
           </div>` : ""}
         </div>`
@@ -4142,7 +4203,7 @@ function go(v, id, addHistory = true) {
     render();
     return;
   }
-  if (v === "graduation" && !["student", "instructor", "staff"].includes(state.user?.role)) {
+  if (v === "graduation" && !GRADUATION_ROLES.includes(state.user?.role)) {
     state.view = state.user ? "home" : "login";
     render();
     return;
@@ -4153,6 +4214,7 @@ function go(v, id, addHistory = true) {
     state.graduationResult = null;
     state.graduationStudents = [];
     state.graduationBatches = [];
+    state.graduationAssignments = [];
     state.graduationLoaded = false;
     state.graduationError = "";
   }
@@ -4295,6 +4357,123 @@ function bind() {
       } finally {
         state.graduationLoading = false;
         render();
+      }
+    };
+  });
+
+  // Re-fetches the graduation page data after a change, keeping the selected student.
+  const reloadGraduation = async () => {
+    state.graduationLoaded = false;
+    state.graduationLoading = false;
+    state.graduationError = "";
+    await loadGraduationPage();
+    render();
+  };
+
+  document.querySelectorAll("[data-graduation-grade-form]").forEach(form => {
+    form.onsubmit = async event => {
+      event.preventDefault();
+      const formData = new FormData(form);
+      const inProgress = formData.get("inProgress") === "on";
+      const grade = String(formData.get("grade") ?? "");
+      if (!inProgress && !grade) return alert("เลือกเกรด หรือติ๊ก \"กำลังเรียน\"");
+      const button = form.querySelector("button[type=submit]");
+      button.disabled = true;
+      try {
+        const response = await fetch(`${API_BASE}/api/graduation/me/grades`, {
+          method: "POST",
+          headers: draftApiHeaders(),
+          body: JSON.stringify({
+            curriculumId: String(formData.get("curriculumId") ?? ""),
+            courseCode: String(formData.get("courseCode") ?? "").trim(),
+            academicYear: Number(formData.get("academicYear")),
+            semester: Number(formData.get("semester")),
+            credits: formData.get("credits") === "" ? undefined : Number(formData.get("credits")),
+            grade: inProgress ? undefined : grade,
+            inProgress,
+          }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? "เพิ่มผลการเรียนไม่สำเร็จ");
+        await reloadGraduation();
+      } catch (error) {
+        alert(error.message ?? "เพิ่มผลการเรียนไม่สำเร็จ");
+        button.disabled = false;
+      }
+    };
+  });
+
+  document.querySelectorAll("[data-graduation-grade-delete]").forEach(button => {
+    button.onclick = async () => {
+      const gradeId = button.dataset.graduationGradeDelete;
+      if (!gradeId || !confirm("ลบรายการผลการเรียนนี้หรือไม่")) return;
+      button.disabled = true;
+      try {
+        const response = await fetch(`${API_BASE}/api/graduation/me/grades/${encodeURIComponent(gradeId)}`, {
+          method: "DELETE",
+          headers: draftApiHeaders(),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? "ลบรายการไม่สำเร็จ");
+        await reloadGraduation();
+      } catch (error) {
+        alert(error.message ?? "ลบรายการไม่สำเร็จ");
+        button.disabled = false;
+      }
+    };
+  });
+
+  document.querySelectorAll("[data-graduation-grade-decision]").forEach(button => {
+    button.onclick = async () => {
+      const decision = button.dataset.graduationGradeDecision;
+      const gradeId = button.dataset.gradeId;
+      const studentId = state.graduationSelectedStudentId;
+      if (!decision || !gradeId || !studentId) return;
+      let note = "";
+      if (decision === "reject") {
+        const answer = prompt("เหตุผลที่ปฏิเสธ (ไม่ใส่ก็ได้)");
+        if (answer === null) return;
+        note = answer.trim();
+      } else if (!confirm("ยืนยันว่าผลการเรียนนี้ถูกต้อง และให้นับในผลตรวจสอบหรือไม่")) {
+        return;
+      }
+      button.disabled = true;
+      try {
+        const response = await fetch(`${API_BASE}/api/graduation/students/${encodeURIComponent(studentId)}/grades/${encodeURIComponent(gradeId)}/verification`, {
+          method: "POST",
+          headers: draftApiHeaders(),
+          body: JSON.stringify({ decision, note }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? "บันทึกผลการตรวจไม่สำเร็จ");
+        await reloadGraduation();
+      } catch (error) {
+        alert(error.message ?? "บันทึกผลการตรวจไม่สำเร็จ");
+        button.disabled = false;
+      }
+    };
+  });
+
+  document.querySelectorAll("[data-graduation-remove]").forEach(button => {
+    button.onclick = async () => {
+      const studentId = button.dataset.graduationRemove;
+      if (!studentId || !confirm(`ลบ ${studentId} ออกจากรายการนักศึกษาหรือไม่ (ผลการเรียนของนักศึกษาจะไม่ถูกลบ)`)) return;
+      button.disabled = true;
+      try {
+        const response = await fetch(`${API_BASE}/api/graduation/assignments/${encodeURIComponent(studentId)}`, {
+          method: "DELETE",
+          headers: draftApiHeaders(),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? "ลบนักศึกษาไม่สำเร็จ");
+        if (state.graduationSelectedStudentId === studentId) {
+          state.graduationSelectedStudentId = "";
+          state.graduationResult = null;
+        }
+        await reloadGraduation();
+      } catch (error) {
+        alert(error.message ?? "ลบนักศึกษาไม่สำเร็จ");
+        button.disabled = false;
       }
     };
   });

@@ -276,6 +276,30 @@ export function resolveDataSource({
   };
 }
 
+// A student with no registrar-imported rows has no import snapshot that could be stale or
+// partial, so the import batch status says nothing about their data. Their data source is
+// the self-reported rows that instructor/staff verified. With none verified there is nothing
+// to evaluate, so the source stays "no_source". `basis` lets the UI label the source.
+export function resolveSelfReportedSource(records) {
+  let asOf = null;
+  let verified = 0;
+  for (const record of records) {
+    if (record.source !== 'self_reported' || record.verification_status !== 'verified') continue;
+    if (Number(record.is_in_progress ?? 0) === 1) continue;
+    verified += 1;
+    if (!record.verified_at) continue;
+    const value = new Date(record.verified_at);
+    if (!asOf || value > asOf) asOf = value;
+  }
+  return {
+    status: verified ? 'ok' : 'no_source',
+    basis: 'self_reported_verified',
+    asOf: toIso(asOf),
+    maxAgeDays: null,
+    lastImport: null,
+  };
+}
+
 // Access rules for graduation data.
 // - A student may view only their own record.
 // - Instructor and staff may view only students assigned to them.
