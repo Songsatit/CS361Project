@@ -267,6 +267,7 @@ function clearAuthSession() {
   state.graduationForm = { programId: "", entryYear: "", grades: {} };
   state.graduationCheckOpen = false;
   state.graduationYearOpen = {};
+  state.graduationEditRow = null;
   state.graduationSelectedStudentId = "";
   state.graduationLoading = false;
   state.graduationLoaded = false;
@@ -1205,10 +1206,15 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
   // Only student-entered rows that nobody has decided yet can be acted on.
   const waitingForReview = row => row.source === "self_reported" && row.verificationStatus === "unverified";
   const rowActions = row => {
-    if (!waitingForReview(row)) return "";
     if (mode === "student") {
-      return `<button type="button" class="workflow-action workflow-action--muted" data-graduation-grade-delete="${esc(row.id)}">ลบ</button>`;
+      // A student fixes or removes their own row until staff verify it.
+      if (row.source !== "self_reported" || !["unverified", "rejected"].includes(row.verificationStatus)) return "";
+      if (state.graduationEditRow === row.id) {
+        return `<button type="button" class="workflow-action workflow-action--primary" data-graduation-grade-edit-save="${esc(row.id)}">บันทึก</button> <button type="button" class="workflow-action workflow-action--muted" data-graduation-grade-edit-cancel>ยกเลิก</button>`;
+      }
+      return `<button type="button" class="workflow-action workflow-action--primary" data-graduation-grade-edit="${esc(row.id)}">แก้ไข</button>${row.verificationStatus === "unverified" ? ` <button type="button" class="workflow-action workflow-action--muted" data-graduation-grade-delete="${esc(row.id)}">ลบ</button>` : ""}`;
     }
+    if (!waitingForReview(row)) return "";
     if (mode === "reviewer" && !row.isInProgress) {
       // When student-entered grades count without review, "verify" is optional and left out.
       // "Reject" stays so a reviewer can still take a wrong row out of the result.
@@ -1232,7 +1238,9 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
     const years = [...new Set(rows.map(row => Number(row.academicYear)))].sort((a, b) => a - b);
     const latest = years[years.length - 1];
     const showActions = rows.some(rowActions);
-    const rowHtml = row => `<tr><td>${esc(row.courseCode)}</td><td>${esc(row.courseNameTh ?? row.courseNameEn ?? "ไม่พบชื่อวิชา")}</td><td>${esc(row.semester === 3 ? "Summer" : `ภาค ${row.semester}`)}</td><td>${esc(row.credits)}</td><td>${row.isInProgress ? "กำลังเรียน" : `<strong>${esc(gradeLabel[row.grade] ?? row.grade ?? "-")}</strong>`}</td><td>${esc(sourceText(row))}${row.verificationNote ? `<small> · ${esc(row.verificationNote)}</small>` : ""}</td>${showActions ? `<td class="graduation-row-actions">${rowActions(row)}</td>` : ""}</tr>`;
+    const rowHtml = row => `<tr><td>${esc(row.courseCode)}</td><td>${esc(row.courseNameTh ?? row.courseNameEn ?? "ไม่พบชื่อวิชา")}</td><td>${esc(row.semester === 3 ? "Summer" : `ภาค ${row.semester}`)}</td><td>${esc(row.credits)}</td><td>${mode === "student" && state.graduationEditRow === row.id
+      ? `<select data-graduation-edit-select aria-label="เกรดใหม่ของ ${esc(row.courseCode)}"><option value="IP"${row.isInProgress ? " selected" : ""}>กำลังเรียน</option>${GRADUATION_GRADE_OPTIONS.map(grade => `<option value="${grade}"${!row.isInProgress && row.grade === grade ? " selected" : ""}>${grade}</option>`).join("")}</select>`
+      : (row.isInProgress ? "กำลังเรียน" : `<strong>${esc(gradeLabel[row.grade] ?? row.grade ?? "-")}</strong>`)}</td><td>${esc(sourceText(row))}${row.verificationNote ? `<small> · ${esc(row.verificationNote)}</small>` : ""}</td>${showActions ? `<td class="graduation-row-actions">${rowActions(row)}</td>` : ""}</tr>`;
     return years.map(year => {
       const group = rows.filter(row => Number(row.academicYear) === year).sort((a, b) => a.semester - b.semester);
       const credits = group.reduce((sum, row) => sum + (Number(row.credits) || 0), 0);
@@ -5035,6 +5043,42 @@ function bind() {
         await reloadGraduation();
       } catch (error) {
         alert(error.message ?? "เพิ่มผลการเรียนไม่สำเร็จ");
+        button.disabled = false;
+      }
+    };
+  });
+
+  // Student: change the grade of one of their own rows in place.
+  document.querySelectorAll("[data-graduation-grade-edit]").forEach(button => {
+    button.onclick = () => {
+      state.graduationEditRow = Number(button.dataset.graduationGradeEdit);
+      render();
+    };
+  });
+  document.querySelectorAll("[data-graduation-grade-edit-cancel]").forEach(button => {
+    button.onclick = () => {
+      state.graduationEditRow = null;
+      render();
+    };
+  });
+  document.querySelectorAll("[data-graduation-grade-edit-save]").forEach(button => {
+    button.onclick = async () => {
+      const gradeId = button.dataset.graduationGradeEditSave;
+      const value = button.closest("tr")?.querySelector("[data-graduation-edit-select]")?.value;
+      if (!gradeId || !value) return;
+      button.disabled = true;
+      try {
+        const response = await fetch(`${API_BASE}/api/graduation/me/grades/${encodeURIComponent(gradeId)}`, {
+          method: "PATCH",
+          headers: draftApiHeaders(),
+          body: JSON.stringify(value === "IP" ? { inProgress: true } : { grade: value }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? "แก้ไขเกรดไม่สำเร็จ");
+        state.graduationEditRow = null;
+        await reloadGraduation();
+      } catch (error) {
+        alert(error.message ?? "แก้ไขเกรดไม่สำเร็จ");
         button.disabled = false;
       }
     };

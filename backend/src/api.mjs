@@ -2530,6 +2530,56 @@ async function saveSelfReportedGrade(actor, body) {
   } });
 }
 
+// A student corrects the grade of their own row (or marks a course finished by giving it a
+// grade). Allowed while the row is unverified or was rejected; a row staff verified is fixed.
+// The row goes back to "unverified" and keeps its "self-reported" label.
+async function updateSelfReportedGrade(event) {
+  const actor = actorFromRequest(event);
+  if (actor.role !== 'student') return response(403, { error: 'Only students can edit their own grades' });
+  const recordId = Number(pathParameter(event, 'gradeRecordId'));
+  if (!Number.isInteger(recordId) || recordId < 1) return response(400, { error: 'gradeRecordId is invalid' });
+  const body = requestBody(event);
+  if (!body) return response(400, { error: 'Request body must be valid JSON' });
+  const inProgress = body.inProgress === true;
+  const grade = inProgress ? '-' : String(body.grade ?? '').trim().toUpperCase();
+  if (!inProgress && !ACCEPTED_GRADES.has(grade)) return response(400, { error: 'grade is not accepted' });
+
+  try {
+    const [row] = await queryRows(
+      `SELECT curriculum_id, academic_year, semester, course_code, credits, verification_status
+         FROM graduation_grade_record
+        WHERE grade_record_id = ? AND student_id = ? AND source = 'self_reported'`,
+      [recordId, actor.username],
+    );
+    if (!row) return response(404, { error: 'Grade row not found' });
+    if (!['unverified', 'rejected'].includes(row.verification_status)) return response(409, { error: 'A verified grade can no longer be changed' });
+    const rowHash = crypto.createHash('sha256')
+      .update(JSON.stringify([actor.username, row.curriculum_id, Number(row.academic_year), Number(row.semester), row.course_code, Number(row.credits), grade, inProgress]))
+      .digest('hex');
+    const [result] = await pool.execute(
+      `UPDATE graduation_grade_record
+          SET grade = ?, is_in_progress = ?, row_hash = ?, verification_status = 'unverified',
+              verified_by = NULL, verified_at = NULL, verification_note = NULL
+        WHERE grade_record_id = ? AND student_id = ?
+          AND source = 'self_reported' AND verification_status IN ('unverified', 'rejected')`,
+      [grade, inProgress ? 1 : 0, rowHash, recordId, actor.username],
+    );
+    if (!result.affectedRows) return response(409, { error: 'The grade changed while you were editing it. Reload and try again' });
+  } catch (error) {
+    if (error?.code === 'ER_BAD_FIELD_ERROR') return response(503, { error: SELF_REPORT_MIGRATION_ERROR });
+    throw error;
+  }
+  await writeAuditLog({
+    username: actor.username,
+    role: actor.role,
+    action: 'graduation_grade_self_edited',
+    entityType: 'student_graduation',
+    entityId: actor.username,
+    newValue: { gradeRecordId: recordId },
+  });
+  return response(200, { data: { id: recordId, grade, isInProgress: inProgress, verificationStatus: 'unverified' } });
+}
+
 // A student deletes their own row, only while it is still unverified.
 async function deleteSelfReportedGrade(event) {
   const actor = actorFromRequest(event);
@@ -2690,6 +2740,7 @@ export const handler = async (event) => {
     if (route === 'PATCH /api/students/me/contact') return await updateStudentContact(event);
     if (route === 'POST /api/graduation/me/grades') return await addSelfReportedGrade(event);
     if (route === 'DELETE /api/graduation/me/grades/{gradeRecordId}') return await deleteSelfReportedGrade(event);
+    if (route === 'PATCH /api/graduation/me/grades/{gradeRecordId}') return await updateSelfReportedGrade(event);
     if (route === 'POST /api/graduation/students/{studentId}/grades/{gradeRecordId}/verification') return await decideSelfReportedGrade(event);
     if (method !== 'GET') return response(405, { error: 'Method not allowed' });
     if (route === 'GET /api/courses') return await listCourses(event);
