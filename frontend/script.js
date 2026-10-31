@@ -1527,6 +1527,7 @@ function renderGraduationReviewerView(role) {
   </aside>`;
 
   const nav = students.length ? `<div class="graduation-detail-nav">
+      <button type="button" class="workflow-action workflow-action--muted graduation-back-to-list" data-graduation-scroll-roster>↑ กลับไปรายชื่อ</button>
       <button type="button" class="workflow-action workflow-action--muted" data-graduation-step="-1"${position > 0 ? "" : " disabled"}>‹ ก่อนหน้า</button>
       <span>${position >= 0 ? `คนที่ ${position + 1} จาก ${visible.length}` : "เลือกนักศึกษาจากรายการ"}</span>
       <button type="button" class="workflow-action workflow-action--muted" data-graduation-step="1"${position >= 0 && position < visible.length - 1 ? "" : " disabled"}>ถัดไป ›</button>
@@ -1570,8 +1571,13 @@ async function selectGraduationStudent(studentId) {
   } finally {
     state.graduationLoading = false;
     render();
-    // render() rebuilds the list, so bring the chosen student back into view.
-    document.querySelector(".graduation-roster-item.is-active")?.scrollIntoView({ block: "nearest" });
+    // On a narrow screen the list sits above the result, so jump down to the result. On a wide
+    // screen render() rebuilt the list, so bring the chosen student back into view instead.
+    if (window.matchMedia?.("(max-width: 900px)").matches) {
+      document.querySelector(".graduation-detail")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } else {
+      document.querySelector(".graduation-roster-item.is-active")?.scrollIntoView({ block: "nearest" });
+    }
   }
 }
 
@@ -4828,10 +4834,31 @@ function syncHistoryState() {
    BIND EVENTS
    ========================================================= */
 
+// On narrow screens the graduation tables turn into stacked cards (see style.css). Each cell
+// needs its column title as a data-label so the card can show "หน่วยกิต: 3" instead of a bare 3.
+function labelGraduationTables() {
+  document.querySelectorAll(".graduation-page table").forEach(table => {
+    const headers = [...table.querySelectorAll("thead th")].map(th => String(th.textContent ?? "").trim());
+    table.classList.add("graduation-stack");
+    table.querySelectorAll("tbody tr").forEach(row => {
+      [...row.children].forEach((cell, index) => {
+        if (headers[index] && !cell.hasAttribute("data-label")) cell.setAttribute("data-label", headers[index]);
+      });
+    });
+  });
+}
+
 function bind() {
+  labelGraduationTables();
 
   document.querySelectorAll("[data-graduation-student]").forEach(button => {
     button.onclick = () => selectGraduationStudent(button.dataset.graduationStudent);
+  });
+
+  document.querySelectorAll("[data-graduation-scroll-roster]").forEach(button => {
+    button.onclick = () => {
+      document.querySelector(".graduation-roster")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
   });
 
   // Previous / next student within the list as currently filtered.
