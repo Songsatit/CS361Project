@@ -81,6 +81,11 @@ Parameters:
     Type: Number
     Default: 30
     Description: Days after which graduation grade data counts as stale (V4)
+  CountSelfReportedGrades:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: When true, grades a student entered count in the graduation check without staff review (the grade data is a mock). They stay labelled self-reported and unverified. Set false to count only verified rows.
 
 Globals:
   Function:
@@ -109,6 +114,7 @@ Globals:
         DEMO_STUDENT_01_PASSWORD_HASH: !Ref DemoStudent01PasswordHash
         DEMO_STUDENT_02_PASSWORD_HASH: !Ref DemoStudent02PasswordHash
         GRADUATION_SNAPSHOT_MAX_AGE_DAYS: !Ref GraduationSnapshotMaxAgeDays
+        GRADUATION_COUNT_SELF_REPORTED: !Ref CountSelfReportedGrades
 
 Resources:
   CurriculumDbSecret:

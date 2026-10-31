@@ -3786,3 +3786,128 @@
   color: #5f6b5f;
   font-size: 0.9rem;
 }
+
+/* Bulk assignment, long lists, gap panel */
+.graduation-scroll {
+  max-height: 340px;
+  overflow: auto;
+}
+
+.graduation-student-chip[hidden] {
+  display: none !important;
+}
+
+.graduation-bulk-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.6rem 0;
+}
+
+.graduation-bulk-tools input[type="search"],
+.graduation-bulk-tools select {
+  min-height: 38px;
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+}
+
+.graduation-bulk-list {
+  max-height: 300px;
+  overflow: auto;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.graduation-bulk-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  font-size: 0.92rem;
+  cursor: pointer;
+}
+
+.graduation-bulk-row small {
+  color: #5f6b5f;
+}
+
+.graduation-assignment-form .graduation-bulk-row input[type="checkbox"],
+.graduation-directory input[type="checkbox"] {
+  width: auto;
+  min-height: 0;
+  padding: 0;
+}
+
+.graduation-bulk-paste {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.8rem 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.graduation-bulk-paste textarea {
+  padding: 0.5rem 0.7rem;
+  font: inherit;
+  font-weight: 400;
+}
+
+.graduation-result-head-side {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+
+.graduation-selfreported-banner {
+  margin: 0.6rem 0;
+  padding: 0.6rem 0.9rem;
+  border-left: 4px solid #d99a00;
+  border-radius: 8px;
+  background: #fff7e0;
+  font-size: 0.9rem;
+}
+
+.graduation-gap {
+  margin: 0.8rem 0 1rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 14px;
+  background: #fbfbf8;
+}
+
+.graduation-gap h3,
+.graduation-gap h4 {
+  margin: 0 0 0.5rem;
+}
+
+.graduation-gap-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.4rem;
+  margin-bottom: 0.8rem;
+}
+
+.graduation-gap-block {
+  margin-top: 0.9rem;
+}
+
+.graduation-gap-block ul {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.graduation-gap-block li small {
+  display: block;
+  color: #5f6b5f;
+}
+
+.graduation-gap-ok {
+  color: #1d7a3a;
+  font-weight: 600;
+}
