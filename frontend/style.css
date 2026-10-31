@@ -3337,6 +3337,15 @@
   color: #765317;
 }
 
+.graduation-condition--manual strong:first-child {
+  color: #3b5a8c;
+}
+
+.graduation-verdict--met_pending_review {
+  background: #eef3fb;
+  color: #3b5a8c;
+}
+
 .graduation-verdict--not_met {
   background: #fff0f0;
   color: #b42335;

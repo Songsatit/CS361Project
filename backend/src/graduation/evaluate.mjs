@@ -1,7 +1,9 @@
 // Pure grading logic for V4 graduation verification. No database or network access.
 //
 // A condition is computed only when a graduation_rule row exists for it. Any other
-// condition is reported as "incomplete" rather than guessed from its text.
+// condition is reported as "incomplete" rather than guessed from its text. A rule of type
+// 'manual' marks a condition that only a person can judge: it is reported as "manual" and
+// caps the verdict at 'met_pending_review'.
 // When the data is stale, failed, or partially rejected, no condition is reported as
 // passed or not passed, and the verdict stays inconclusive.
 
@@ -184,6 +186,10 @@ export function evaluateRule(rule, summary) {
         courses,
       });
     }
+    // A condition only a person can judge (learning outcomes, faculty-specific requirements).
+    // It is never computed and never passes on its own: it stays "manual" until staff review it.
+    case 'manual':
+      return { status: 'manual', reason: 'manual_review', details: {} };
     default:
       return incomplete('unsupported_rule');
   }
@@ -229,6 +235,10 @@ export function evaluateGraduation({ conditions, rules, records, dataSource }) {
     verdict = 'not_met';
   } else if (results.some((item) => item.status === 'incomplete')) {
     verdict = 'inconclusive';
+  } else if (results.some((item) => item.status === 'manual')) {
+    // Everything the system can compute passed, but a person still has to judge the rest.
+    // This is deliberately not "met": nobody has confirmed the manual conditions.
+    verdict = 'met_pending_review';
   } else {
     verdict = 'met';
   }

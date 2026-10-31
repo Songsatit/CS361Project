@@ -951,6 +951,7 @@ const graduationSourceLabels = {
 
 const graduationVerdictLabels = {
   met: "ผ่านเงื่อนไขที่ระบบตรวจได้ครบ",
+  met_pending_review: "ผ่านทุกข้อที่ระบบตรวจได้ รอเจ้าหน้าที่ตรวจข้อที่เหลือ",
   not_met: "ยังไม่ผ่านอย่างน้อยหนึ่งเงื่อนไข",
   inconclusive: "ยังสรุปผลไม่ได้",
   no_data: "ยังไม่มีข้อมูลผลการเรียน",
@@ -960,6 +961,7 @@ const graduationConditionLabels = {
   passed: "ผ่าน",
   not_passed: "ยังไม่ผ่าน",
   incomplete: "ข้อมูลไม่ครบ",
+  manual: "รอเจ้าหน้าที่ตรวจ",
 };
 
 function graduationDetailsText(condition) {
@@ -971,6 +973,7 @@ function graduationDetailsText(condition) {
   if (details.missing?.length) parts.push(`ยังไม่มีผล: ${details.missing.join(", ")}`);
   if (details.belowMinimum?.length) parts.push(`เกรดต่ำกว่าเกณฑ์: ${details.belowMinimum.join(", ")}`);
   const reasonLabels = {
+    manual_review: "เงื่อนไขนี้ต้องให้เจ้าหน้าที่ตรวจโดยตรง ระบบคำนวณเองไม่ได้",
     no_rule: "ระบบยังไม่มีกฎคำนวณสำหรับเงื่อนไขนี้",
     no_data: "ไม่พบผลการเรียน",
     no_graded_data: "ไม่มีผลเกรดที่ใช้คำนวณ GPA",
@@ -1132,7 +1135,7 @@ function renderGraduationGapPanel(result) {
   const plan = result.plan ?? [];
   const termLabel = row => `ปี ${row.studyYear} / ${row.semester === 3 ? "Summer" : row.semester}`;
   const notPassed = conditions.filter(item => item.status === "not_passed");
-  const needsCheck = conditions.filter(item => item.status === "incomplete");
+  const needsCheck = conditions.filter(item => ["incomplete", "manual"].includes(item.status));
   const missingCourses = plan.filter(row => ["not_taken", "failed_or_incomplete"].includes(row.status));
   const waiting = plan.filter(row => ["in_progress", "pending_verification"].includes(row.status));
   const missingCredits = missingCourses.reduce((sum, row) => sum + (Number(row.credits) || 0), 0);
@@ -1144,7 +1147,7 @@ function renderGraduationGapPanel(result) {
   if (result.verdict === "no_data") {
     return `<section class="graduation-gap"><h3>ผลการตรวจสอบการจบ</h3><p class="audit-empty">ยังไม่มีผลการเรียนให้ตรวจ กรอกเกรดก่อน แล้วกดตรวจสอบอีกครั้ง</p></section>`;
   }
-  const nothingMissing = !notPassed.length && !needsCheck.length && !missingCourses.length && (creditsLeft ?? 0) === 0;
+  const nothingMissing = !notPassed.length && !conditions.some(item => item.status === "incomplete") && !missingCourses.length && (creditsLeft ?? 0) === 0;
   return `<section class="graduation-gap">
     <h3>ผลการตรวจสอบการจบ</h3>
     ${dataOk ? "" : `<p class="graduation-selfreported-banner">ข้อมูลยังไม่พร้อมสรุปผล (${esc(graduationSourceLabels[result.dataSource?.status] ?? "ไม่ทราบสถานะข้อมูล")}) รายการด้านล่างจึงอาจยังไม่ครบ</p>`}
@@ -1154,11 +1157,11 @@ function renderGraduationGapPanel(result) {
       ${creditsLeft !== null ? `<span>ยังขาดอีก <strong>${esc(creditsLeft)}</strong> หน่วยกิต</span>` : ""}
       <span>วิชาในแผนที่ยังไม่ผ่าน/ไม่ได้เรียน <strong>${esc(missingCourses.length)}</strong> วิชา${missingCredits ? ` (${esc(missingCredits)} หน่วยกิต)` : ""}</span>
     </div>
-    ${nothingMissing && dataOk ? `<p class="graduation-gap-ok">ไม่พบสิ่งที่ขาดจากเงื่อนไขที่ระบบตรวจได้</p>` : ""}
+    ${nothingMissing && dataOk ? `<p class="graduation-gap-ok">ไม่พบสิ่งที่ขาดจากเงื่อนไขที่ระบบตรวจได้${needsCheck.length ? " (ยังเหลือข้อที่เจ้าหน้าที่ต้องตรวจ)" : ""}</p>` : ""}
     ${notPassed.length ? `<div class="graduation-gap-block"><h4>เงื่อนไขที่ยังไม่ผ่าน</h4><ul>${notPassed.map(item => `<li><strong>${esc(item.text)}</strong>${graduationDetailsText(item) ? `<small>${esc(graduationDetailsText(item))}</small>` : ""}</li>`).join("")}</ul></div>` : ""}
     ${missingCourses.length ? `<div class="graduation-gap-block"><h4>วิชาในแผนที่ยังขาด</h4><div class="graduation-table-wrap"><table><thead><tr><th>ปี/ภาค</th><th>วิชา</th><th>หน่วยกิต</th><th>สถานะ</th></tr></thead><tbody>${missingCourses.map(row => `<tr><td>${esc(termLabel(row))}</td><td>${esc(row.courseCode ?? "-")} ${esc(row.courseNameTh ?? "")}</td><td>${esc(row.credits ?? "-")}</td><td>${esc(statusText[row.status] ?? row.status)}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
     ${waiting.length ? `<div class="graduation-gap-block"><h4>ยังไม่นับ (กำลังเรียนหรือรอยืนยัน)</h4><ul>${waiting.map(row => `<li>${esc(row.courseCode ?? "-")} ${esc(row.courseNameTh ?? "")}<small>${esc(statusText[row.status] ?? row.status)}</small></li>`).join("")}</ul></div>` : ""}
-    ${needsCheck.length ? `<div class="graduation-gap-block"><h4>เงื่อนไขที่ระบบยังตรวจเองไม่ได้</h4><ul>${needsCheck.map(item => `<li>${esc(item.text)}${graduationDetailsText(item) ? `<small>${esc(graduationDetailsText(item))}</small>` : ""}</li>`).join("")}</ul></div>` : ""}
+    ${needsCheck.length ? `<div class="graduation-gap-block"><h4>เงื่อนไขที่ต้องให้เจ้าหน้าที่ตรวจ หรือระบบยังตรวจเองไม่ได้</h4><ul>${needsCheck.map(item => `<li>${esc(item.text)}${graduationDetailsText(item) ? `<small>${esc(graduationDetailsText(item))}</small>` : ""}</li>`).join("")}</ul></div>` : ""}
   </section>`;
 }
 
