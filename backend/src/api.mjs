@@ -313,6 +313,8 @@ async function tuLogin(event) {
     await resetLoginAttempts(event, username);
     const token = signAccessToken(user);
     await safeLoginAudit({ username, action: 'login_success', event, newValue: { role: user.role } });
+    // List this person in the graduation directory (only people who sign in themselves).
+    await recordDirectoryLogin(user);
     // Token is set as an HttpOnly cookie. It stays in the body too for the transition.
     return response(200, { token, user }, { 'Set-Cookie': authCookie(token, AUTH_COOKIE_MAX_AGE) });
   } catch (error) {
@@ -2078,20 +2080,31 @@ async function listAssignedGraduationStudents(event) {
 
 async function assignGraduationStudent(event) {
   const actor = actorFromRequest(event);
-  if (actor.role !== 'staff') return response(403, { error: 'Only staff can assign students' });
+  // Staff add a student to their own list. A curriculum admin picks who reviews the student
+  // (an instructor, for example). Assigning grants access to that reviewer only; the admin
+  // still cannot read grades.
+  if (!['staff', 'curriculum_admin'].includes(actor.role)) return response(403, { error: 'Only staff or curriculum admins can assign students' });
   const body = requestBody(event);
   if (!body) return response(400, { error: 'Request body must be valid JSON' });
   const studentId = String(body.studentId ?? '').trim();
   const displayName = String(body.displayName ?? '').trim().slice(0, 255) || null;
-  const studentYear = Number(body.studentYear);
+  const hasYear = body.studentYear !== undefined && body.studentYear !== null && body.studentYear !== '';
+  const studentYear = hasYear ? Number(body.studentYear) : null;
   if (!graduationStudentIdPattern.test(studentId)) return response(400, { error: 'studentId is invalid' });
-  if (!Number.isInteger(studentYear) || studentYear < 1 || studentYear > 4) return response(400, { error: 'studentYear must be 1, 2, 3, or 4' });
+  if (hasYear && (!Number.isInteger(studentYear) || studentYear < 1 || studentYear > 4)) return response(400, { error: 'studentYear must be 1, 2, 3, or 4' });
+
+  let assignee = actor.username;
+  if (actor.role === 'curriculum_admin') {
+    assignee = String(body.assigneeUsername ?? '').trim().toLowerCase();
+    if (!assigneeUsernamePattern.test(assignee)) return response(400, { error: 'assigneeUsername is required' });
+  }
   await pool.execute(
     `INSERT INTO graduation_student_assignment
       (assignee_username, student_id, assigned_by, display_name, student_year)
      VALUES (?, ?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), student_year = VALUES(student_year)`,
-    [actor.username, studentId, actor.username, displayName, studentYear],
+     ON DUPLICATE KEY UPDATE display_name = COALESCE(VALUES(display_name), display_name),
+                             student_year = COALESCE(VALUES(student_year), student_year)`,
+    [assignee, studentId, actor.username, displayName, studentYear],
   );
   await writeAuditLog({
     username: actor.username,
@@ -2099,9 +2112,78 @@ async function assignGraduationStudent(event) {
     action: 'graduation_student_assigned',
     entityType: 'student_graduation',
     entityId: studentId,
-    newValue: { studentYear },
+    newValue: { studentYear, assignee },
   });
-  return response(201, { data: { studentId, displayName, studyYear: studentYear, assigneeUsername: actor.username } });
+  return response(201, { data: { studentId, displayName, studyYear: studentYear, assigneeUsername: assignee } });
+}
+
+const assigneeUsernamePattern = /^[a-z0-9][a-z0-9._@-]{0,99}$/;
+
+// Everyone who signed in through TU, so staff and admins can find a student or reviewer
+// without typing an ID. Names and last-login times only: no grades, and listing someone here
+// does not let anyone read their record (that still needs an assignment).
+async function listGraduationDirectory(event) {
+  const actor = actorFromRequest(event);
+  if (!['staff', 'curriculum_admin'].includes(actor.role)) return response(403, { error: 'Forbidden' });
+  let people;
+  try {
+    people = await queryRows(
+      `SELECT username, role, display_name, last_login_at
+         FROM graduation_user_directory
+        ORDER BY last_login_at DESC
+        LIMIT 600`,
+    );
+  } catch (error) {
+    // Migration 017 not applied yet: show an empty directory instead of breaking the page.
+    if (error?.code === 'ER_NO_SUCH_TABLE') return response(200, { data: { students: [], reviewers: [], available: false } });
+    throw error;
+  }
+  const assignments = await queryRows('SELECT student_id, assignee_username FROM graduation_student_assignment');
+  const byStudent = new Map();
+  for (const row of assignments) {
+    const key = String(row.student_id).toLowerCase();
+    if (!byStudent.has(key)) byStudent.set(key, []);
+    byStudent.get(key).push(row.assignee_username);
+  }
+  const shape = (row) => ({
+    username: row.username,
+    displayName: row.display_name ?? null,
+    lastLoginAt: row.last_login_at ? new Date(row.last_login_at).toISOString() : null,
+  });
+  const students = people.filter((row) => row.role === 'student').map((row) => {
+    const assignees = byStudent.get(String(row.username).toLowerCase()) ?? [];
+    return {
+      ...shape(row),
+      assignedToMe: assignees.some((name) => String(name).toLowerCase() === actor.username.toLowerCase()),
+      // Admins see who reviews each student. Staff only need to know about their own list.
+      assignees: actor.role === 'curriculum_admin' ? assignees : undefined,
+    };
+  });
+  const reviewers = actor.role === 'curriculum_admin'
+    ? people.filter((row) => row.role !== 'student').map(shape)
+    : [];
+  return response(200, { data: { students, reviewers, available: true } });
+}
+
+// Remembers a TU sign-in for the directory. Best effort: a missing table or a database error
+// must never block the login itself.
+async function recordDirectoryLogin(user) {
+  try {
+    const username = String(user.username ?? '').trim().toLowerCase().slice(0, 100);
+    if (!username) return;
+    const role = user.role === 'student' ? 'student' : 'staff';
+    const displayName = String(user.displayNameTh || user.displayNameEn || '').trim().slice(0, 255) || null;
+    await pool.execute(
+      `INSERT INTO graduation_user_directory (username, role, display_name, last_login_at)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+       ON DUPLICATE KEY UPDATE role = VALUES(role),
+                               display_name = COALESCE(VALUES(display_name), display_name),
+                               last_login_at = CURRENT_TIMESTAMP`,
+      [username, role, displayName],
+    );
+  } catch (error) {
+    console.warn('directory login record failed', error?.code ?? error?.name);
+  }
 }
 
 // Removes a student from the review list. Grade rows are not touched, so imported data and
@@ -2112,9 +2194,14 @@ async function removeGraduationStudent(event) {
   if (!['staff', 'curriculum_admin'].includes(actor.role)) return response(403, { error: 'Only staff or curriculum admins can remove students' });
   const studentId = String(pathParameter(event, 'studentId') ?? '').trim();
   if (!graduationStudentIdPattern.test(studentId)) return response(400, { error: 'studentId is invalid' });
+  // An admin may name one reviewer to drop; without it every reviewer of the student is dropped.
+  const onlyAssignee = String(event.queryStringParameters?.assignee ?? '').trim().toLowerCase();
+  if (onlyAssignee && !assigneeUsernamePattern.test(onlyAssignee)) return response(400, { error: 'assignee is invalid' });
   const [result] = actor.role === 'staff'
     ? await pool.execute('DELETE FROM graduation_student_assignment WHERE student_id = ? AND assignee_username = ?', [studentId, actor.username])
-    : await pool.execute('DELETE FROM graduation_student_assignment WHERE student_id = ?', [studentId]);
+    : onlyAssignee
+      ? await pool.execute('DELETE FROM graduation_student_assignment WHERE student_id = ? AND assignee_username = ?', [studentId, onlyAssignee])
+      : await pool.execute('DELETE FROM graduation_student_assignment WHERE student_id = ?', [studentId]);
   if (!result.affectedRows) return response(404, { error: 'Student is not in the list' });
   await writeAuditLog({
     username: actor.username,
@@ -2154,10 +2241,28 @@ const normalizeGradeCourseCode = (value) => String(value ?? '').replace(/\s+/g, 
 async function addSelfReportedGrade(event) {
   const actor = actorFromRequest(event);
   if (actor.role !== 'student') return response(403, { error: 'Only students can add their own grades' });
-  const studentId = actor.username;
-  if (!graduationStudentIdPattern.test(studentId)) return response(400, { error: 'studentId is invalid' });
   const body = requestBody(event);
   if (!body) return response(400, { error: 'Request body must be valid JSON' });
+  if (!Array.isArray(body.entries)) return saveSelfReportedGrade(actor, body);
+
+  // Several rows at once (the form fills a whole study plan). Each row is validated and saved
+  // on its own, so one bad row does not discard the others. The reply lists both groups.
+  if (!body.entries.length || body.entries.length > 80) return response(400, { error: 'entries must hold 1 to 80 rows' });
+  const saved = [];
+  const failed = [];
+  for (const entry of body.entries) {
+    const result = await saveSelfReportedGrade(actor, entry && typeof entry === 'object' ? entry : {});
+    if (result.statusCode === 503) return result;
+    const parsed = parseJsonValue(result.body, {});
+    if (result.statusCode < 300) saved.push(parsed.data);
+    else failed.push({ courseCode: normalizeGradeCourseCode(entry?.courseCode), statusCode: result.statusCode, error: parsed.error ?? 'Unable to save' });
+  }
+  return response(saved.length ? 201 : 400, { data: { saved, failed } });
+}
+
+async function saveSelfReportedGrade(actor, body) {
+  const studentId = actor.username;
+  if (!graduationStudentIdPattern.test(studentId)) return response(400, { error: 'studentId is invalid' });
 
   const curriculumId = String(body.curriculumId ?? '').trim();
   const courseCode = normalizeGradeCourseCode(body.courseCode);
@@ -2433,6 +2538,7 @@ export const handler = async (event) => {
     if (route === 'GET /api/graduation/me') return await graduationForStudent(event);
     if (route === 'GET /api/graduation/students') return await listAssignedGraduationStudents(event);
     if (route === 'GET /api/graduation/assignments') return await listAllGraduationAssignments(event);
+    if (route === 'GET /api/graduation/directory') return await listGraduationDirectory(event);
     if (route === 'GET /api/graduation/students/{studentId}') return await graduationForStudentId(event);
     if (route === 'GET /api/graduation/import-batches') return await listGraduationImportBatches(event);
     return response(404, { error: 'Route not found' });

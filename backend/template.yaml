@@ -363,6 +363,12 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/graduation/assignments
             Method: GET
+        ListGraduationDirectory:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/graduation/directory
+            Method: GET
         RemoveGraduationStudent:
           Type: HttpApi
           Properties:
