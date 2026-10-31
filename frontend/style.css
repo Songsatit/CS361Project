@@ -4192,3 +4192,526 @@
     max-height: 280px;
   }
 }
+
+/* Pass / fail made obvious: result banner, per-condition badges, course pills */
+.graduation-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.9rem 1.2rem;
+  margin: 0.4rem 0 1rem;
+  padding: 1.1rem 1.3rem;
+  border-radius: 16px;
+  border: 2px solid transparent;
+}
+
+.graduation-hero-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 3.6rem;
+  height: 3.6rem;
+  border-radius: 50%;
+  font-size: 2rem;
+  font-weight: 800;
+  line-height: 1;
+  color: #fff;
+}
+
+.graduation-hero-text {
+  display: grid;
+  gap: 0.15rem;
+  flex: 1 1 14rem;
+}
+
+.graduation-hero-text strong {
+  font-size: 1.7rem;
+  line-height: 1.2;
+}
+
+.graduation-hero-text span {
+  font-size: 0.95rem;
+}
+
+.graduation-hero-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.graduation-hero--met,
+.graduation-hero--met_pending_review {
+  background: #e7f6ec;
+  border-color: #2e9e5b;
+  color: #135c33;
+}
+
+.graduation-hero--met .graduation-hero-icon,
+.graduation-hero--met_pending_review .graduation-hero-icon {
+  background: #2e9e5b;
+}
+
+.graduation-hero--met_pending_review {
+  background: #eaf3fb;
+  border-color: #3b78c2;
+  color: #1f4a7d;
+}
+
+.graduation-hero--met_pending_review .graduation-hero-icon {
+  background: #3b78c2;
+}
+
+.graduation-hero--not_met {
+  background: #fdecee;
+  border-color: #d12b3f;
+  color: #8f1727;
+}
+
+.graduation-hero--not_met .graduation-hero-icon {
+  background: #d12b3f;
+}
+
+.graduation-hero--inconclusive,
+.graduation-hero--no_data {
+  background: #f3f4f6;
+  border-color: #9aa1a9;
+  color: #3d434a;
+}
+
+.graduation-hero--inconclusive .graduation-hero-icon,
+.graduation-hero--no_data .graduation-hero-icon {
+  background: #8a9199;
+}
+
+.graduation-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.graduation-status-badge b {
+  font-size: 1rem;
+}
+
+.graduation-status-badge--passed {
+  background: #2e9e5b;
+  color: #fff;
+}
+
+.graduation-status-badge--not_passed {
+  background: #d12b3f;
+  color: #fff;
+}
+
+.graduation-status-badge--manual {
+  background: #3b78c2;
+  color: #fff;
+}
+
+.graduation-status-badge--incomplete {
+  background: #f0b429;
+  color: #3d2c00;
+}
+
+.graduation-section-title {
+  margin: 1.1rem 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.graduation-condition-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.graduation-condition {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.9rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-left-width: 6px;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.graduation-condition .graduation-status-badge {
+  flex: 0 0 auto;
+  min-width: 7.2rem;
+  justify-content: center;
+}
+
+.graduation-condition-body {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.graduation-condition-text {
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.graduation-condition-body small {
+  color: #4a4f55;
+  font-size: 0.88rem;
+}
+
+.graduation-condition--passed {
+  border-left-color: #2e9e5b;
+}
+
+.graduation-condition--not_passed {
+  border-left-color: #d12b3f;
+  background: #fff8f8;
+}
+
+.graduation-condition--manual {
+  border-left-color: #3b78c2;
+}
+
+.graduation-condition--incomplete {
+  border-left-color: #f0b429;
+}
+
+.graduation-pill {
+  display: inline-block;
+  padding: 0.12rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.graduation-pill--ok {
+  background: #e4f4ea;
+  color: #135c33;
+}
+
+.graduation-pill--fail {
+  background: #fdecee;
+  color: #b01e30;
+}
+
+.graduation-pill--none {
+  background: #eef0f2;
+  color: #5f6b5f;
+}
+
+.graduation-pill--info {
+  background: #e6f0fa;
+  color: #1f4a7d;
+}
+
+.graduation-pill--warn {
+  background: #fff3d6;
+  color: #7a5200;
+}
+
+.graduation-grade--fail {
+  color: #b01e30;
+}
+
+@media (max-width: 600px) {
+  .graduation-condition {
+    flex-direction: column;
+  }
+}
+
+/* ===== Responsive: graduation pages (tablet <= 900px, phone <= 700px, small phone <= 420px) ===== */
+.graduation-back-to-list {
+  display: none;
+}
+
+.graduation-detail,
+.graduation-roster,
+.graduation-result-card {
+  min-width: 0;
+}
+
+.graduation-roster-name,
+.graduation-roster-meta,
+.graduation-condition-text,
+.graduation-condition-body small {
+  overflow-wrap: anywhere;
+}
+
+.graduation-tabs {
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+.graduation-tab {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .graduation-page--wide {
+    max-width: 100%;
+  }
+
+  .graduation-back-to-list {
+    display: inline-flex;
+  }
+
+  .graduation-detail-nav {
+    flex-wrap: wrap;
+  }
+
+  .graduation-detail-nav > span {
+    order: 5;
+    flex: 1 0 100%;
+    text-align: center;
+  }
+
+  .graduation-roster-list {
+    max-height: 320px;
+  }
+}
+
+@media (max-width: 700px) {
+  .graduation-page-head .page-title {
+    font-size: 1.6rem;
+  }
+
+  /* Bigger touch targets */
+  .graduation-page .workflow-action,
+  .graduation-page select,
+  .graduation-page input[type="search"],
+  .graduation-page input[type="text"],
+  .graduation-page input[type="number"],
+  .graduation-page input:not([type]) {
+    min-height: 44px;
+  }
+
+  .graduation-tab {
+    padding: 0.7rem 0.9rem;
+  }
+
+  .graduation-result-card,
+  .graduation-student-list,
+  .graduation-plan-form,
+  .graduation-roster {
+    padding: 0.9rem;
+    border-radius: 14px;
+  }
+
+  .graduation-result-head {
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .graduation-result-head-side {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .graduation-result-head-side .workflow-action {
+    width: 100%;
+  }
+
+  .graduation-hero {
+    gap: 0.6rem 0.9rem;
+    padding: 0.9rem 1rem;
+  }
+
+  .graduation-hero-icon {
+    width: 2.8rem;
+    height: 2.8rem;
+    font-size: 1.5rem;
+  }
+
+  .graduation-hero-text strong {
+    font-size: 1.35rem;
+  }
+
+  .graduation-hero-counts {
+    width: 100%;
+  }
+
+  .graduation-condition .graduation-status-badge {
+    min-width: 0;
+    justify-content: flex-start;
+  }
+
+  .graduation-totals {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .graduation-source-status {
+    margin: 12px 0;
+    padding: 10px 12px;
+  }
+
+  .graduation-gap-summary {
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .graduation-plan-pick {
+    flex-direction: column;
+    gap: 0.7rem;
+  }
+
+  .graduation-plan-pick label,
+  .graduation-plan-pick select,
+  .graduation-plan-pick input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .graduation-plan-term-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .graduation-plan-bulk {
+    justify-content: space-between;
+  }
+
+  .graduation-plan-actions .workflow-action {
+    width: 100%;
+  }
+
+  .graduation-year > summary {
+    padding: 0.75rem 0.85rem;
+  }
+
+  .graduation-year .graduation-table-wrap {
+    padding: 0.2rem 0.4rem 0.5rem;
+  }
+
+  .graduation-bulk-tools {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .graduation-bulk-tools input[type="search"],
+  .graduation-bulk-tools select,
+  .graduation-bulk-tools .workflow-action,
+  .graduation-directory-filter {
+    width: 100%;
+  }
+
+  .graduation-bulk-list {
+    max-height: 260px;
+  }
+
+  .graduation-bulk-row {
+    padding: 0.65rem 0.75rem;
+  }
+
+  .graduation-manage-student {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .graduation-manage-student .workflow-action {
+    width: 100%;
+  }
+
+  .graduation-year-controls .workflow-action {
+    flex: 1;
+  }
+
+  .profile-contact-form {
+    max-width: none;
+  }
+
+  .profile-contact-form input[type="email"],
+  .profile-contact-form input[type="tel"] {
+    width: 100%;
+  }
+
+  /* Tables become stacked cards: each cell shows its column title (data-label, set in script.js) */
+  .graduation-table-wrap {
+    overflow-x: visible;
+  }
+
+  .graduation-table-wrap .graduation-stack thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .graduation-table-wrap .graduation-stack,
+  .graduation-table-wrap .graduation-stack tbody,
+  .graduation-table-wrap .graduation-stack tr {
+    display: block;
+    width: 100%;
+  }
+
+  .graduation-table-wrap .graduation-stack tr {
+    margin: 0 0 0.6rem;
+    padding: 0.35rem 0.2rem;
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    border-radius: 12px;
+    background: #fff;
+  }
+
+  .graduation-table-wrap .graduation-stack tr[hidden] {
+    display: none;
+  }
+
+  .graduation-table-wrap .graduation-stack td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.3rem 0.7rem;
+    border: 0;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+
+  .graduation-table-wrap .graduation-stack td::before {
+    content: attr(data-label);
+    flex: 0 0 auto;
+    max-width: 45%;
+    color: #5f6b5f;
+    font-size: 0.82rem;
+    font-weight: 600;
+    text-align: left;
+  }
+
+  .graduation-table-wrap .graduation-stack td.graduation-row-actions {
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .graduation-table-wrap .graduation-stack td.graduation-row-actions::before {
+    display: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .graduation-roster-item {
+    grid-template-columns: 1fr;
+  }
+
+  .graduation-roster-item .graduation-badge {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: start;
+    margin-top: 0.2rem;
+  }
+
+  .graduation-totals {
+    grid-template-columns: 1fr;
+  }
+
+  .graduation-hero-text strong {
+    font-size: 1.2rem;
+  }
+}
