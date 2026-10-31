@@ -5,6 +5,7 @@ import {
   DEFAULT_SNAPSHOT_MAX_AGE_DAYS,
   canViewGraduation,
   evaluateGraduation,
+  partitionGradeRecords,
   pickCurriculum,
   resolveDataSource,
 } from './graduation/evaluate.mjs';
@@ -1782,14 +1783,21 @@ async function decideCurriculumChange(event) {
 }
 
 // ---- V4 graduation verification ----
-// Reads only. Grade data is written by the CLI import, never through this API.
+// Reads only so far. Grade data is written by the CLI import; no API route writes grades yet.
+// Rows are split by source and verification (see partitionGradeRecords) so that unverified
+// or in-progress data never counts toward a verdict.
 const GRADUATION_SOURCE_KEY = 'registrar-demo';
 const graduationStudentIdPattern = /^[A-Za-z0-9]{1,20}$/;
 
-async function buildGraduationResult(studentId) {
-  const records = await queryRows(
-    `SELECT g.student_id, g.curriculum_id, g.academic_year, g.semester, g.course_code,
-            g.credits, g.grade, b.batch_id, b.data_mode, b.exported_at,
+// Columns added by migration 015. Selected only when that migration is applied.
+const GRADE_SOURCE_COLUMNS = 'g.source, g.verification_status, g.is_in_progress, g.verification_note,';
+
+// batch_id is NULL for self-reported rows (migration 015), so batches are joined with LEFT JOIN.
+// An inner join would silently drop every row a student entered.
+function gradeRecordsSql(sourceColumns) {
+  return `SELECT g.student_id, g.curriculum_id, g.academic_year, g.semester, g.course_code,
+            g.credits, g.grade, ${sourceColumns}
+            b.batch_id, b.data_mode, b.exported_at,
             (SELECT c.title_th FROM course c
               WHERE c.course_code = g.course_code
                  OR REPLACE(c.course_code, ' ', '') = REPLACE(g.course_code, ' ', '')
@@ -1799,10 +1807,41 @@ async function buildGraduationResult(studentId) {
                  OR REPLACE(c.course_code, ' ', '') = REPLACE(g.course_code, ' ', '')
               ORDER BY c.active DESC, c.course_id LIMIT 1) AS course_name_en
        FROM graduation_grade_record g
-       JOIN graduation_import_batch b ON b.batch_id = g.batch_id
-      WHERE g.student_id = ?`,
-    [studentId],
-  );
+       LEFT JOIN graduation_import_batch b ON b.batch_id = g.batch_id
+      WHERE g.student_id = ?`;
+}
+
+async function loadGradeRecords(studentId) {
+  try {
+    return await queryRows(gradeRecordsSql(GRADE_SOURCE_COLUMNS), [studentId]);
+  } catch (error) {
+    // Keep the check working on a database that has not applied migration 015 yet. Every row
+    // there is a registrar import, which partitionGradeRecords treats as verified.
+    if (error?.code !== 'ER_BAD_FIELD_ERROR') throw error;
+    return queryRows(gradeRecordsSql(''), [studentId]);
+  }
+}
+
+// One grade row as the API returns it, including where it came from.
+function shapeGradeRecord(record) {
+  return {
+    courseCode: record.course_code,
+    courseNameTh: record.course_name_th ?? null,
+    courseNameEn: record.course_name_en ?? null,
+    academicYear: Number(record.academic_year),
+    semester: Number(record.semester),
+    credits: Number(record.credits),
+    grade: record.grade,
+    dataMode: record.data_mode ?? null,
+    source: record.source ?? 'imported',
+    verificationStatus: record.verification_status ?? 'verified',
+    isInProgress: Number(record.is_in_progress ?? 0) === 1,
+    verificationNote: record.verification_note ?? null,
+  };
+}
+
+async function buildGraduationResult(studentId) {
+  const records = await loadGradeRecords(studentId);
   const [latestBatch = null] = await queryRows(
     `SELECT batch_id, status, source_batch_id, exported_at, finished_at, row_rejected
        FROM graduation_import_batch
@@ -1827,6 +1866,8 @@ async function buildGraduationResult(studentId) {
   }
 
   const asOf = records.reduce((latest, record) => {
+    // Self-reported rows have no import batch, hence no export time. new Date(null) is 1970.
+    if (!record.exported_at) return latest;
     const value = new Date(record.exported_at);
     return !latest || value > latest ? value : latest;
   }, null);
@@ -1848,11 +1889,20 @@ async function buildGraduationResult(studentId) {
       dataSource,
       totals: null,
       conditions: [],
+      records: [],
+      pendingRecords: [],
+      inProgressRecords: [],
+      rejectedRecords: [],
     };
   }
 
-  const curriculumId = pickCurriculum(records);
-  const curriculumRecords = records.filter((record) => record.curriculum_id === curriculumId);
+  // The curriculum comes from the most recent attempt among rows that are not rejected.
+  const curriculumId = pickCurriculum(records.filter((record) => record.verification_status !== 'rejected'))
+    ?? pickCurriculum(records);
+  const allCurriculumRecords = records.filter((record) => record.curriculum_id === curriculumId);
+  // Only verified, finished rows feed the verdict. The rest are returned separately and labelled.
+  const { counted, pending, rejected, inProgress } = partitionGradeRecords(allCurriculumRecords);
+  const curriculumRecords = counted;
   const [studentMeta = {}] = await queryRows(
     `SELECT student_id, display_name, student_year
        FROM graduation_student_assignment
@@ -1913,9 +1963,17 @@ async function buildGraduationResult(studentId) {
     const attempt = Number(record.academic_year) * 10 + Number(record.semester);
     if (!current || attempt > current.attempt) latestByCourse.set(code, { ...record, attempt });
   }
+  // Courses the student reported or is taking now, so the plan does not call them "not taken".
+  const unconfirmedCodes = new Set();
+  const inProgressCodes = new Set();
+  for (const record of pending) unconfirmedCodes.add(String(record.course_code ?? '').replace(/\s+/g, '').toUpperCase());
+  for (const record of inProgress) inProgressCodes.add(String(record.course_code ?? '').replace(/\s+/g, '').toUpperCase());
   const progressPlan = plan.map((item) => {
     const code = String(item.course_code ?? '').replace(/\s+/g, '').toUpperCase();
     const taken = latestByCourse.get(code);
+    let status = taken ? (['F', 'U', 'W', 'I'].includes(String(taken.grade)) ? 'failed_or_incomplete' : 'completed') : 'not_taken';
+    if (!taken && inProgressCodes.has(code)) status = 'in_progress';
+    else if (!taken && unconfirmedCodes.has(code)) status = 'pending_verification';
     return {
       studyYear: Number(item.study_year),
       semester: Number(item.semester),
@@ -1924,7 +1982,7 @@ async function buildGraduationResult(studentId) {
       courseNameTh: item.course_name_th ?? null,
       courseNameEn: item.course_name_en ?? null,
       credits: item.credits == null ? null : Number(item.credits),
-      status: taken ? (['F', 'U', 'W', 'I'].includes(String(taken.grade)) ? 'failed_or_incomplete' : 'completed') : 'not_taken',
+      status,
       grade: taken?.grade ?? null,
       takenAcademicYear: taken?.academic_year ?? null,
       takenSemester: taken?.semester ?? null,
@@ -1938,22 +1996,20 @@ async function buildGraduationResult(studentId) {
       displayName: studentMeta.display_name ?? null,
       studyYear: studentMeta.student_year == null ? null : Number(studentMeta.student_year),
     },
-    dataMode: records.some((record) => record.data_mode === 'demo') ? 'demo' : 'live',
+    // demo/live describes registrar imports only. A student with only self-reported rows has none.
+    dataMode: records.some((record) => record.data_mode === 'demo')
+      ? 'demo'
+      : (records.some((record) => record.data_mode) ? 'live' : null),
     curriculum: { curriculumId },
     verdict: evaluation.verdict,
     dataSource,
     totals: evaluation.totals,
     conditions: evaluation.conditions,
-    records: curriculumRecords.map((record) => ({
-      courseCode: record.course_code,
-      courseNameTh: record.course_name_th ?? null,
-      courseNameEn: record.course_name_en ?? null,
-      academicYear: Number(record.academic_year),
-      semester: Number(record.semester),
-      credits: Number(record.credits),
-      grade: record.grade,
-      dataMode: record.data_mode,
-    })),
+    // `records` are the rows the verdict is based on. The groups below are never counted.
+    records: curriculumRecords.map(shapeGradeRecord),
+    pendingRecords: pending.map(shapeGradeRecord),
+    inProgressRecords: inProgress.map(shapeGradeRecord),
+    rejectedRecords: rejected.map(shapeGradeRecord),
     plan: progressPlan,
   };
 }

@@ -19,6 +19,7 @@ import {
 import {
   canViewGraduation,
   evaluateGraduation,
+  partitionGradeRecords,
   resolveDataSource,
 } from '../src/graduation/evaluate.mjs';
 
@@ -287,6 +288,85 @@ test('GPA comparison uses the unrounded value, so 1.996 does not pass a 2.00 min
     dataSource: ok('ok'),
   });
   assert.equal(statusOf(result, 1).status, 'not_passed');
+});
+
+// ---------- Source and verification: unverified data must never count ----------
+
+const gradeRow = (course, grade, overrides = {}) => ({
+  student_id: 'DEMO0004',
+  curriculum_id: 'DEMO-GRAD-V4',
+  academic_year: 2025,
+  semester: 1,
+  course_code: course,
+  credits: 3,
+  grade,
+  ...overrides,
+});
+
+test('partition: rows from a database without migration 015 count as verified imports', () => {
+  const { counted, pending, rejected, inProgress } = partitionGradeRecords([gradeRow('DEMO100', 'A')]);
+  assert.equal(counted.length, 1);
+  assert.equal(pending.length + rejected.length + inProgress.length, 0);
+});
+
+test('partition: a self-reported unverified row is pending, never counted', () => {
+  const row = gradeRow('DEMO100', 'A', { source: 'self_reported', verification_status: 'unverified', is_in_progress: 0 });
+  const result = partitionGradeRecords([row]);
+  assert.deepEqual([result.counted.length, result.pending.length], [0, 1]);
+});
+
+test('partition: a self-reported row counts only after staff verify it', () => {
+  const row = gradeRow('DEMO100', 'A', { source: 'self_reported', verification_status: 'verified', is_in_progress: 0 });
+  assert.equal(partitionGradeRecords([row]).counted.length, 1);
+});
+
+test('partition: a rejected row is never counted', () => {
+  const row = gradeRow('DEMO100', 'A', { source: 'self_reported', verification_status: 'rejected', is_in_progress: 0 });
+  const result = partitionGradeRecords([row]);
+  assert.deepEqual([result.counted.length, result.rejected.length], [0, 1]);
+});
+
+test('partition: an in-progress course is separate even when it is imported and verified', () => {
+  const row = gradeRow('DEMO100', 'A', { source: 'imported', verification_status: 'verified', is_in_progress: 1 });
+  const result = partitionGradeRecords([row]);
+  assert.deepEqual([result.counted.length, result.inProgress.length], [0, 1]);
+});
+
+test('partition: is_in_progress wins over a rejected status, so the row lands in one group only', () => {
+  const row = gradeRow('DEMO100', 'A', { source: 'self_reported', verification_status: 'rejected', is_in_progress: 1 });
+  const result = partitionGradeRecords([row]);
+  assert.equal(result.counted.length + result.pending.length + result.rejected.length + result.inProgress.length, 1);
+  assert.equal(result.inProgress.length, 1);
+});
+
+test('student-entered passing grades alone cannot reach a met or passed result', () => {
+  // Every grade here would pass all computable DEMO rules if it were counted.
+  const typed = ['DEMO100', 'DEMO101', 'DEMO102', 'DEMO111'].map((code) =>
+    gradeRow(code, 'A', { source: 'self_reported', verification_status: 'unverified', is_in_progress: 0 }));
+  const { counted } = partitionGradeRecords(typed);
+  const result = evaluateGraduation({ conditions: DEMO_CONDITIONS, rules: DEMO_RULES, records: counted, dataSource: ok('ok') });
+  assert.equal(result.verdict, 'no_data');
+  assert.equal(result.totals, null);
+  assert.ok(result.conditions.every((item) => item.status !== 'passed'));
+});
+
+test('an unverified row does not change the totals of a student who has verified rows', () => {
+  const verified = recordsFromCsv(fixture('batch-001-demo-success.csv'), 'DEMO0001');
+  const extra = gradeRow('DEMO999', 'A', { student_id: 'DEMO0001', source: 'self_reported', verification_status: 'unverified', is_in_progress: 0 });
+  const withExtra = partitionGradeRecords([...verified, extra]).counted;
+  const baseline = evaluateGraduation({ conditions: DEMO_CONDITIONS, rules: DEMO_RULES, records: verified, dataSource: ok('ok') });
+  const result = evaluateGraduation({ conditions: DEMO_CONDITIONS, rules: DEMO_RULES, records: withExtra, dataSource: ok('ok') });
+  assert.equal(result.totals.earnedCredits, baseline.totals.earnedCredits);
+  assert.equal(result.totals.gpa, baseline.totals.gpa);
+});
+
+test('an in-progress F does not drag down a student GPA', () => {
+  const verified = recordsFromCsv(fixture('batch-001-demo-success.csv'), 'DEMO0001');
+  const ongoing = gradeRow('DEMO888', 'F', { student_id: 'DEMO0001', source: 'imported', verification_status: 'verified', is_in_progress: 1 });
+  const counted = partitionGradeRecords([...verified, ongoing]).counted;
+  const baseline = evaluateGraduation({ conditions: DEMO_CONDITIONS, rules: DEMO_RULES, records: verified, dataSource: ok('ok') });
+  const result = evaluateGraduation({ conditions: DEMO_CONDITIONS, rules: DEMO_RULES, records: counted, dataSource: ok('ok') });
+  assert.equal(result.totals.gpa, baseline.totals.gpa);
 });
 
 // ---------- Access control ----------

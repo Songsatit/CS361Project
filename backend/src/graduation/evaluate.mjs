@@ -34,6 +34,30 @@ const normalizeCourse = (code) => String(code ?? '').replace(/\s+/g, '');
 const attemptOrder = (record) => Number(record.academic_year) * 10 + Number(record.semester);
 const roundTo = (value, digits) => Math.round(value * 10 ** digits) / 10 ** digits;
 
+// Splits grade rows by how far they can be trusted. Only `counted` rows may feed the verdict.
+//   inProgress - the course is still being taken, so it is shown apart and never evaluated
+//   rejected   - staff rejected the row
+//   counted    - verified rows. CLI imports default to 'verified' (migration 015), so a
+//                registrar import counts and a self-reported row counts only once staff verify it
+//   pending    - anything else (a self-reported row nobody has verified yet): shown with a
+//                label, never counted, so student-entered data cannot read as a pass
+// Rows from a database without migration 015 have none of these fields. They are treated as
+// imported + verified + not in progress, which is what every such row is.
+export function partitionGradeRecords(records) {
+  const counted = [];
+  const pending = [];
+  const rejected = [];
+  const inProgress = [];
+  for (const record of records) {
+    const status = record.verification_status ?? 'verified';
+    if (Number(record.is_in_progress ?? 0) === 1) inProgress.push(record);
+    else if (status === 'rejected') rejected.push(record);
+    else if (status === 'verified') counted.push(record);
+    else pending.push(record);
+  }
+  return { counted, pending, rejected, inProgress };
+}
+
 // The curriculum a student is checked against: the one in their most recent attempt.
 export function pickCurriculum(records) {
   let best = null;
