@@ -363,6 +363,18 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/graduation/assignments
             Method: GET
+        GetStudentContact:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/students/me/contact
+            Method: GET
+        UpdateStudentContact:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/students/me/contact
+            Method: PATCH
         ListGraduationDirectory:
           Type: HttpApi
           Properties:
