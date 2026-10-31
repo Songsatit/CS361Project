@@ -357,6 +357,36 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/graduation/assignments
             Method: POST
+        ListGraduationAssignments:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/graduation/assignments
+            Method: GET
+        RemoveGraduationStudent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/graduation/assignments/{studentId}
+            Method: DELETE
+        AddSelfReportedGrade:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/graduation/me/grades
+            Method: POST
+        DeleteSelfReportedGrade:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/graduation/me/grades/{gradeRecordId}
+            Method: DELETE
+        DecideSelfReportedGrade:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/graduation/students/{studentId}/grades/{gradeRecordId}/verification
+            Method: POST
         GetStudentGraduationCheck:
           Type: HttpApi
           Properties:
