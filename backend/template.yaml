@@ -44,7 +44,7 @@ Parameters:
     Default: https://restapi.tu.ac.th/api/v1/auth/Ad/verify2
   FrontendOrigin:
     Type: String
-    Default: https://main.d3dm5h9pinlgfm.amplifyapp.com
+    Default: https://main.d4mgfx74c182i.amplifyapp.com
   JwtSecret:
     Type: String
     NoEcho: true
