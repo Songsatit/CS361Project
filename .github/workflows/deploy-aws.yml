@@ -1,0 +1,116 @@
+name: V5 - Manual AWS Deployment
+
+# Deployment is intentionally manual. CI verifies code, but only an authorized
+# operator should deploy to the AWS account/environment.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: Build and deploy SAM stack
+    runs-on: ubuntu-latest
+    environment: aws-deploy
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies and verify
+        run: |
+          npm ci
+          npm test
+          npm run typecheck
+
+      - name: Setup AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+
+      - name: Validate and build
+        run: |
+          sam validate --lint --template-file template.yaml
+          sam build --template-file template.yaml
+
+      # Configure GitHub Environment "aws-deploy" with an AWS OIDC role
+      # and the repository/environment variables and secrets listed in docs/v5-automation.md.
+      - name: Configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy SAM stack
+        env:
+          STACK_NAME: ${{ vars.SAM_STACK_NAME }}
+          DB_HOST: ${{ vars.DB_HOST }}
+          DB_INSTANCE_IDENTIFIER: ${{ vars.DB_INSTANCE_IDENTIFIER }}
+          DB_NAME: ${{ vars.DB_NAME }}
+          DB_USER: ${{ vars.DB_USER }}
+          DB_PORT: ${{ vars.DB_PORT }}
+          VPC_SUBNET_IDS: ${{ vars.VPC_SUBNET_IDS }}
+          LAMBDA_SECURITY_GROUP_ID: ${{ vars.LAMBDA_SECURITY_GROUP_ID }}
+          RDS_PROXY_SECURITY_GROUP_ID: ${{ vars.RDS_PROXY_SECURITY_GROUP_ID }}
+          LAMBDA_EXECUTION_ROLE_ARN: ${{ vars.LAMBDA_EXECUTION_ROLE_ARN }}
+          RDS_PROXY_ROLE_ARN: ${{ vars.RDS_PROXY_ROLE_ARN }}
+          TU_AUTH_URL: ${{ vars.TU_AUTH_URL }}
+          FRONTEND_ORIGIN: ${{ vars.FRONTEND_ORIGIN }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          TU_APPLICATION_KEY: ${{ secrets.TU_APPLICATION_KEY }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          : "${STACK_NAME:?Set SAM_STACK_NAME in the aws-deploy environment}"
+          : "${DB_HOST:?Set DB_HOST}"
+          : "${DB_INSTANCE_IDENTIFIER:?Set DB_INSTANCE_IDENTIFIER}"
+          : "${DB_NAME:?Set DB_NAME}"
+          : "${DB_USER:?Set DB_USER}"
+          : "${DB_PORT:?Set DB_PORT}"
+          : "${VPC_SUBNET_IDS:?Set VPC_SUBNET_IDS as comma-separated private subnet IDs}"
+          : "${LAMBDA_SECURITY_GROUP_ID:?Set LAMBDA_SECURITY_GROUP_ID}"
+          : "${RDS_PROXY_SECURITY_GROUP_ID:?Set RDS_PROXY_SECURITY_GROUP_ID}"
+          : "${LAMBDA_EXECUTION_ROLE_ARN:?Set LAMBDA_EXECUTION_ROLE_ARN}"
+          : "${RDS_PROXY_ROLE_ARN:?Set RDS_PROXY_ROLE_ARN}"
+          : "${TU_AUTH_URL:?Set TU_AUTH_URL}"
+          : "${FRONTEND_ORIGIN:?Set FRONTEND_ORIGIN}"
+          : "${DB_PASSWORD:?Set DB_PASSWORD secret}"
+          : "${TU_APPLICATION_KEY:?Set TU_APPLICATION_KEY secret}"
+          : "${JWT_SECRET:?Set JWT_SECRET secret}"
+
+          sam deploy \
+            --template-file .aws-sam/build/template.yaml \
+            --stack-name "$STACK_NAME" \
+            --region "${{ vars.AWS_REGION }}" \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              "DbHost=$DB_HOST" \
+              "DbInstanceIdentifier=$DB_INSTANCE_IDENTIFIER" \
+              "DbName=$DB_NAME" \
+              "DbUser=$DB_USER" \
+              "DbPassword=$DB_PASSWORD" \
+              "DbPort=$DB_PORT" \
+              "VpcSubnetIds=$VPC_SUBNET_IDS" \
+              "LambdaSecurityGroupId=$LAMBDA_SECURITY_GROUP_ID" \
+              "RdsProxySecurityGroupId=$RDS_PROXY_SECURITY_GROUP_ID" \
+              "LambdaExecutionRoleArn=$LAMBDA_EXECUTION_ROLE_ARN" \
+              "RdsProxyRoleArn=$RDS_PROXY_ROLE_ARN" \
+              "TuApplicationKey=$TU_APPLICATION_KEY" \
+              "TuAuthUrl=$TU_AUTH_URL" \
+              "FrontendOrigin=$FRONTEND_ORIGIN" \
+              "JwtSecret=$JWT_SECRET" \
+              "EnableDemoLogin=false"
