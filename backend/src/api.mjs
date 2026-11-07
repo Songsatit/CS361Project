@@ -92,7 +92,7 @@ const response = (statusCode, body, extraHeaders = {}) => ({
   statusCode,
   headers: {
     'content-type': 'application/json; charset=utf-8',
-    'Access-Control-Allow-Origin': process.env.FRONTEND_ORIGIN ?? 'https://main.d3dm5h9pinlgfm.amplifyapp.com',
+    'Access-Control-Allow-Origin': process.env.FRONTEND_ORIGIN ?? 'https://main.d4mgfx74c182i.amplifyapp.com',
     'Access-Control-Allow-Headers': 'content-type,authorization,x-cs361-csrf',
     'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
     'Access-Control-Allow-Credentials': 'true',
