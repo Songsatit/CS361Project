@@ -1,0 +1,48 @@
+name: V5 - Build and Test
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, "feature/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Test and validate SAM
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run automated tests
+        run: npm test
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Setup AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+
+      - name: Validate infrastructure template
+        run: sam validate --lint --template-file template.yaml
+
+      - name: Build deployment package
+        run: sam build --template-file template.yaml
