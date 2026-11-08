@@ -423,30 +423,12 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/graduation/students/{studentId}/grades/{gradeRecordId}/classification
             Method: PATCH
-        GetMyGraduationReviewRequest:
+        GraduationReviewWorkflow:
           Type: HttpApi
           Properties:
             ApiId: !Ref CurriculumApi
-            Path: /api/graduation/me/review-request
-            Method: GET
-        SubmitMyGraduationReviewRequest:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/graduation/me/review-request/submit
-            Method: POST
-        ListGraduationReviewRequests:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/graduation/review-requests
-            Method: GET
-        DecideGraduationReviewRequest:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/graduation/review-requests/{reviewRequestId}/decision
-            Method: POST
+            Path: /api/graduation/{proxy+}
+            Method: ANY
         GetStudentGraduationCheck:
           Type: HttpApi
           Properties:

@@ -2959,6 +2959,14 @@ async function listGraduationImportBatches(event) {
 //   trailing slash is dropped so "/api/courses/" and "/api/courses" are the same route.
 export function normalizeRoute(event) {
   if (event.routeKey) {
+    // A greedy graduation route is used for the review workflow so SAM creates one
+    // Lambda permission instead of one permission per new endpoint. Resolve it back
+    // to the actual method/path before the router dispatches the request.
+    if (event.routeKey.includes('{proxy+}')) {
+      const method = event.requestContext?.http?.method ?? event.httpMethod;
+      const path = String(event.rawPath ?? event.path ?? '').replace(/(.)\/+$/, '$1');
+      return `${method} ${path}`;
+    }
     const isCourseDetail = event.routeKey === 'GET /api/courses/{courseId}'
       || event.routeKey === 'GET /api/courses/{courseCode}';
     const hasCourseId = Boolean(pathParameter(event, 'courseId') || pathParameter(event, 'courseCode'));
