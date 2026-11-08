@@ -2691,6 +2691,49 @@ async function decideSelfReportedGrade(event) {
   return response(200, { data: { id: recordId, verificationStatus: decision === 'verify' ? 'verified' : 'rejected' } });
 }
 
+// Staff/instructor may classify an outside-catalog row only for an assigned student.
+// Classification is separate from verification: it controls whether credits may satisfy
+// a graduation bucket, while the grade remains subject to the normal review workflow.
+async function classifySelfReportedGrade(event) {
+  const actor = actorFromRequest(event);
+  const studentId = String(pathParameter(event, 'studentId') ?? '').trim();
+  const recordId = Number(pathParameter(event, 'gradeRecordId'));
+  if (!graduationStudentIdPattern.test(studentId)) return response(400, { error: 'studentId is invalid' });
+  if (!Number.isInteger(recordId) || recordId < 1) return response(400, { error: 'gradeRecordId is invalid' });
+  if (!['instructor', 'staff'].includes(actor.role)) return response(403, { error: 'Forbidden' });
+  const assigned = await assignedGraduationStudentIds(actor.username);
+  if (!canViewGraduation(actor, studentId, assigned).allowed) return response(403, { error: 'Forbidden' });
+  const body = requestBody(event);
+  if (!body) return response(400, { error: 'Request body must be valid JSON' });
+  const category = String(body.category ?? '').trim().toLowerCase();
+  const allowedCategories = new Set(['free_elective', 'major_elective', 'minor', 'general_education', 'specific', 'not_counted']);
+  if (!allowedCategories.has(category)) return response(400, { error: 'category is invalid' });
+
+  let result;
+  try {
+    [result] = await pool.execute(
+      `UPDATE graduation_grade_record
+          SET credit_category = ?
+        WHERE grade_record_id = ? AND student_id = ?
+          AND source = 'self_reported' AND catalog_status = 'not_found'`,
+      [category === 'not_counted' ? null : category, recordId, studentId],
+    );
+  } catch (error) {
+    if (error?.code === 'ER_BAD_FIELD_ERROR') return response(503, { error: SELF_REPORT_MIGRATION_ERROR });
+    throw error;
+  }
+  if (!result.affectedRows) return response(404, { error: 'No outside-catalog row with this id' });
+  await writeAuditLog({
+    username: actor.username,
+    role: actor.role,
+    action: 'graduation_grade_classified',
+    entityType: 'student_graduation',
+    entityId: studentId,
+    newValue: { gradeRecordId: recordId, category },
+  });
+  return response(200, { data: { id: recordId, creditCategory: category === 'not_counted' ? null : category } });
+}
+
 async function listGraduationImportBatches(event) {
   const actor = actorFromRequest(event);
   if (actor.role !== 'staff') return response(403, { error: 'Only staff can view import history' });
@@ -2780,6 +2823,7 @@ export const handler = async (event) => {
     if (route === 'DELETE /api/graduation/me/grades/{gradeRecordId}') return await deleteSelfReportedGrade(event);
     if (route === 'PATCH /api/graduation/me/grades/{gradeRecordId}') return await updateSelfReportedGrade(event);
     if (route === 'POST /api/graduation/students/{studentId}/grades/{gradeRecordId}/verification') return await decideSelfReportedGrade(event);
+    if (route === 'PATCH /api/graduation/students/{studentId}/grades/{gradeRecordId}/classification') return await classifySelfReportedGrade(event);
     if (method !== 'GET') return response(405, { error: 'Method not allowed' });
     if (route === 'GET /api/courses') return await listCourses(event);
     if (route.endsWith('/prerequisites') && route.startsWith('GET /api/courses/')) return await listPrerequisites(event);

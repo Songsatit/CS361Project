@@ -417,6 +417,12 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/graduation/students/{studentId}/grades/{gradeRecordId}/verification
             Method: POST
+        ClassifySelfReportedGrade:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/graduation/students/{studentId}/grades/{gradeRecordId}/classification
+            Method: PATCH
         GetStudentGraduationCheck:
           Type: HttpApi
           Properties:

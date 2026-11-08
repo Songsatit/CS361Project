@@ -336,6 +336,14 @@ test('a self-reported course marked outside the catalog stays pending without a 
   assert.deepEqual(result.pendingReview, [{ courseCode: 'NEW999', reason: 'pending_catalog_review' }]);
 });
 
+test('a staff-assigned category makes an outside-catalog course countable for credits', () => {
+  const result = summarizeCreditBuckets([
+    { course_code: 'NEW999', credits: 3, grade: 'A', catalog_status: 'not_found', credit_category: 'free_elective' },
+  ]);
+  assert.equal(result.pendingReview.length, 0);
+  assert.equal(result.buckets.get('free_elective'), 3);
+});
+
 test('no rule for any condition never produces a met verdict', () => {
   const result = evaluateGraduation({
     conditions: DEMO_CONDITIONS,

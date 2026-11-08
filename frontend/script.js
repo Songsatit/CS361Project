@@ -1278,12 +1278,24 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
       }
       return `<button type="button" class="workflow-action workflow-action--primary" data-graduation-grade-edit="${esc(row.id)}">แก้ไข</button>${row.verificationStatus === "unverified" ? ` <button type="button" class="workflow-action workflow-action--muted" data-graduation-grade-delete="${esc(row.id)}">ลบ</button>` : ""}`;
     }
-    if (!waitingForReview(row)) return "";
-    if (mode === "reviewer" && !row.isInProgress) {
+    if (mode === "reviewer") {
+      const needsClassification = row.catalogStatus === "not_found" || row.catalogStatus === "pending_review";
+      const categoryOptions = [
+        ["free_elective", "เลือกเสรี"],
+        ["major_elective", "เลือกสาขา"],
+        ["minor", "วิชาโท"],
+        ["general_education", "ศึกษาทั่วไป"],
+        ["specific", "วิชาเฉพาะ"],
+        ["not_counted", "ไม่นับผลตรวจ"],
+      ];
+      const classification = needsClassification
+        ? `<label class="graduation-inline-classification">จัดหมวด <select data-graduation-grade-category="${esc(row.id)}" aria-label="หมวดของ ${esc(row.courseCode)}"><option value="">เลือกหมวด</option>${categoryOptions.map(([value, label]) => `<option value="${value}"${row.creditCategory === value ? " selected" : ""}>${label}</option>`).join("")}</select><button type="button" class="workflow-action workflow-action--muted" data-graduation-grade-classify="${esc(row.id)}">บันทึกหมวด</button></label>`
+        : "";
+      if (!waitingForReview(row) || row.isInProgress) return classification;
       // When student-entered grades count without review, "verify" is optional and left out.
       // "Reject" stays so a reviewer can still take a wrong row out of the result.
       const verifyButton = result.selfReportedCounts ? "" : `<button type="button" class="workflow-action workflow-action--primary" data-graduation-grade-decision="verify" data-grade-id="${esc(row.id)}">ยืนยัน</button> `;
-      return `${verifyButton}<button type="button" class="workflow-action workflow-action--muted" data-graduation-grade-decision="reject" data-grade-id="${esc(row.id)}">ปฏิเสธ</button>`;
+      return `${classification}${verifyButton}<button type="button" class="workflow-action workflow-action--muted" data-graduation-grade-decision="reject" data-grade-id="${esc(row.id)}">ปฏิเสธ</button>`;
     }
     return "";
   };
@@ -5260,6 +5272,32 @@ function bind() {
         await reloadGraduation();
       } catch (error) {
         alert(error.message ?? "บันทึกผลการตรวจไม่สำเร็จ");
+        button.disabled = false;
+      }
+    };
+  });
+
+  document.querySelectorAll("[data-graduation-grade-classify]").forEach(button => {
+    button.onclick = async () => {
+      const gradeId = button.dataset.graduationGradeClassify;
+      const studentId = state.graduationSelectedStudentId;
+      const category = button.closest("tr")?.querySelector("[data-graduation-grade-category]")?.value;
+      if (!gradeId || !studentId || !category) {
+        alert("กรุณาเลือกหมวดวิชาก่อนบันทึก");
+        return;
+      }
+      button.disabled = true;
+      try {
+        const response = await fetch(`${API_BASE}/api/graduation/students/${encodeURIComponent(studentId)}/grades/${encodeURIComponent(gradeId)}/classification`, {
+          method: "PATCH",
+          headers: draftApiHeaders(),
+          body: JSON.stringify({ category }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? "บันทึกหมวดวิชาไม่สำเร็จ");
+        await reloadGraduation();
+      } catch (error) {
+        alert(error.message ?? "บันทึกหมวดวิชาไม่สำเร็จ");
         button.disabled = false;
       }
     };
