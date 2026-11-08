@@ -263,8 +263,6 @@ function clearAuthSession() {
   state.graduationStudents = [];
   state.graduationBatches = [];
   state.graduationAssignments = [];
-  state.graduationReviewRequest = null;
-  state.graduationReviewRequests = [];
   state.graduationDirectory = { students: [], reviewers: [], available: true };
   state.graduationForm = { programId: "", entryYear: "", grades: {} };
   state.graduationCheckOpen = false;
@@ -1059,7 +1057,6 @@ function graduationCurriculumOptions(selectedId) {
 
 // Lets a student add one grade. The row stays "unverified" until instructor/staff confirm it.
 function renderGraduationGradeForm(result) {
-  if (state.graduationReviewRequest?.status === "pending_review") return "";
   const buddhistYear = new Date().getFullYear() + 543;
   return `<details class="graduation-extra"><summary>เพิ่มวิชาที่ไม่อยู่ในแผน (ทีละวิชา)</summary><form class="graduation-assignment-form graduation-grade-form" data-graduation-grade-form>
     <div>
@@ -1068,13 +1065,6 @@ function renderGraduationGradeForm(result) {
       <input name="academicYear" type="number" required min="2500" max="2700" value="${buddhistYear}" aria-label="ปีการศึกษา (พ.ศ.)">
       <select name="semester" required aria-label="ภาคเรียน"><option value="1">ภาค 1</option><option value="2">ภาค 2</option><option value="3">Summer</option></select>
       <input name="credits" type="number" step="0.5" min="0" max="12" placeholder="หน่วยกิต" aria-label="หน่วยกิต">
-      <select name="categoryIntent" aria-label="ความประสงค์ในการนับหมวด">
-        <option value="">ใช้หมวดจากหลักสูตร</option>
-        <option value="minor">ขอนับเป็นวิชาโท</option>
-        <option value="free_elective">ขอนับเป็นวิชาเลือกเสรี</option>
-        <option value="major_elective">ขอนับเป็นวิชาเลือกเฉพาะ</option>
-        <option value="general_education">ขอนับเป็นศึกษาทั่วไป</option>
-      </select>
       <select name="grade" aria-label="เกรด">${graduationGradeOptionsHtml("", { blankLabel: "เกรด", inProgress: false })}</select>
       <label class="graduation-inprogress"><input name="inProgress" type="checkbox"> กำลังเรียน</label>
       <button type="submit" class="workflow-action workflow-action--primary">เพิ่มรายการ</button>
@@ -1156,31 +1146,21 @@ function renderGraduationPlanForm(result) {
   if (chosenPlan) queueMicrotask(() => ensureGraduationPlan(chosenPlan));
   const terms = graduationPlanTerms({ plan: chosenPlan ? chosenPlan.gradTerms : program?.plan });
   const planLoading = Boolean(chosenPlan && !chosenPlan.gradTerms && !chosenPlan.gradError);
-  const lockedByReview = state.graduationReviewRequest?.status === "pending_review";
 
   // Courses already entered, by code, so a row that was sent is not asked for again.
   const existing = new Map();
   const note = (rows, label, locked) => (rows ?? []).forEach(row => existing.set(graduationCodeKey(row.courseCode), { label, locked, grade: row.grade }));
-  // A self-reported row may be included in `records` when the demo setting allows it to
-  // contribute to the calculation. That does not make it verified or immutable.
-  const noteCountedRows = rows => (rows ?? []).forEach(row => {
-    const selfReported = row.source === "self_reported";
-    const verified = row.verificationStatus === "verified";
-    note([row], selfReported && !verified ? "กรอกเอง · ยังไม่ยืนยัน" : "ยืนยันแล้ว", !selfReported || verified);
-  });
   // Rejected first, so a locked row for the same course always wins.
   note(result?.rejectedRecords, "ถูกปฏิเสธ กรอกใหม่ได้", false);
-  noteCountedRows(result?.records);
-  note(result?.pendingRecords, "กรอกเอง · ยังไม่ยืนยัน", lockedByReview);
+  note(result?.records, "ยืนยันแล้ว", true);
+  note(result?.pendingRecords, "ส่งแล้ว รอยืนยัน", true);
   note(result?.inProgressRecords, "กำลังเรียน (ส่งแล้ว)", true);
 
   const gradeOptions = selected => graduationGradeOptionsHtml(selected);
   const termTable = term => `<section class="graduation-plan-term"><div class="graduation-plan-term-head"><h4>ปี ${esc(term.year)} · ${esc(term.term === 3 ? "Summer" : `ภาค ${term.term}`)}</h4><label class="graduation-plan-bulk">ตั้งทุกวิชาในภาคนี้เป็น <select data-graduation-plan-bulk aria-label="ตั้งเกรดทั้งภาคเรียน">${graduationGradeOptionsHtml("", { blankLabel: "เลือก…" })}</select></label></div><table><thead><tr><th>วิชา</th><th>ชื่อวิชา</th><th>หน่วยกิต</th><th>เกรด</th></tr></thead><tbody>${term.courses.map(code => {
     const info = existing.get(graduationCodeKey(code));
     const course = COURSES[courseKey(code)] ?? {};
-    const cell = lockedByReview
-      ? `<span class="graduation-plan-readonly">${info ? `${esc(info.grade ?? "-")} · ${esc(info.label)}` : "ยังไม่มีข้อมูล"}</span>`
-      : info?.locked
+    const cell = info?.locked
       ? `<span class="graduation-plan-done">${esc(info.label)}</span>`
       : `<select data-graduation-plan-grade="${esc(code)}" aria-label="เกรด ${esc(code)}">${gradeOptions(form.grades?.[code] ?? "")}</select>${info ? `<small> ${esc(info.label)}</small>` : ""}`;
     return `<tr data-plan-row data-code="${esc(code)}" data-year="${esc(term.year)}" data-term="${esc(term.term)}" data-credits="${esc(course.credits ?? "")}"><td>${esc(code)}</td><td>${esc(course.name ?? "-")}</td><td>${esc(course.credits ?? "-")}</td><td>${cell}</td></tr>`;
@@ -1207,17 +1187,8 @@ function renderGraduationPlanForm(result) {
     ${!program ? `<p class="audit-empty">เลือกหลักสูตรเพื่อแสดงวิชาในแผน</p>`
       : planLoading ? `<p class="audit-empty">กำลังโหลดวิชาในแผนการเรียน...</p>`
       : !terms.length ? `<p class="audit-empty">${chosenPlan?.gradError ? esc(chosenPlan.gradError) : "หลักสูตรนี้ยังไม่มีแผนการเรียนให้กรอก"} ใช้ "เพิ่มวิชาที่ไม่อยู่ในแผน" ด้านล่างแทน</p>`
-      : lockedByReview ? `<div class="graduation-review-lock"><strong>ส่งตรวจแล้ว · รอเจ้าหน้าที่ตรวจสอบ</strong><p>ข้อมูลถูกล็อกชั่วคราวระหว่างตรวจสอบ หากต้องแก้ไขให้รอเจ้าหน้าที่ส่งกลับ</p></div><div class="graduation-year-controls"><span class="graduation-readonly-hint">รายการด้านล่างเป็นข้อมูลแบบอ่านอย่างเดียว</span></div>${formYears}`
       : `<form data-graduation-plan-submit><div class="graduation-year-controls"><button type="button" class="workflow-action workflow-action--muted" data-graduation-year-all="expand" data-prefix="form">ขยายทั้งหมด</button><button type="button" class="workflow-action workflow-action--muted" data-graduation-year-all="collapse" data-prefix="form">ย่อทั้งหมด</button></div>${formYears}<div class="graduation-plan-actions"><button type="submit" class="workflow-action workflow-action--primary">บันทึกเกรดที่กรอก</button></div></form>`}
   </section>`;
-}
-
-function renderGraduationReviewPanel(result) {
-  const request = state.graduationReviewRequest;
-  const labels = { pending_review: "ส่งแล้ว · รอเจ้าหน้าที่ตรวจสอบ", approved: "เจ้าหน้าที่ยืนยันแล้ว", returned: "ส่งกลับแก้ไข", draft: "ฉบับร่าง" };
-  if (!request) return `<section class="graduation-review-panel"><strong>พร้อมส่งตรวจการจบ</strong><p>เมื่อกรอกข้อมูลครบแล้ว กดปุ่มด้านล่างเพื่อส่งให้เจ้าหน้าที่ตรวจสอบ</p><button type="button" class="workflow-action workflow-action--primary" data-graduation-review-submit>ส่งตรวจสอบการจบ</button></section>`;
-  const returned = request.status === "returned";
-  return `<section class="graduation-review-panel graduation-review-panel--${esc(request.status)}"><strong>สถานะคำขอ: ${esc(labels[request.status] ?? request.status)}</strong>${request.reviewNote ? `<p>หมายเหตุเจ้าหน้าที่: ${esc(request.reviewNote)}</p>` : ""}${returned ? `<button type="button" class="workflow-action workflow-action--primary" data-graduation-review-submit>ส่งตรวจสอบอีกครั้ง</button>` : request.status === "pending_review" ? `<p>นักศึกษาแก้ไขข้อมูลไม่ได้จนกว่าเจ้าหน้าที่จะส่งกลับ</p>` : ""}</section>`;
 }
 
 // A row of tabs. `group` says which piece of state a click changes (see the click handler).
@@ -1235,17 +1206,6 @@ function renderGraduationGapPanel(result) {
   const needsCheck = conditions.filter(item => ["incomplete", "manual"].includes(item.status));
   const missingCourses = plan.filter(row => ["not_taken", "failed_or_incomplete"].includes(row.status));
   const waiting = plan.filter(row => ["in_progress", "pending_verification"].includes(row.status));
-  const pendingCreditReview = result.pendingCreditReview ?? [];
-  const creditBuckets = Object.entries(result.creditBuckets ?? {});
-  const creditBucketRequirements = result.creditBucketRequirements ?? {};
-  const creditBucketLabel = key => ({
-    general_education: "ศึกษาทั่วไป (GE)",
-    free_elective: "วิชาเลือกเสรี",
-    specific: "วิชาเฉพาะ",
-    major_elective: "วิชาเลือกเฉพาะ",
-    minor: "วิชาโท",
-    unclassified: "ยังไม่จัดหมวด",
-  }[key] ?? key);
   const missingCredits = missingCourses.reduce((sum, row) => sum + (Number(row.credits) || 0), 0);
   const creditRule = conditions.find(item => item.details?.earnedCredits != null && item.details?.required != null);
   const creditsLeft = creditRule ? Math.max(0, Number(creditRule.details.required) - Number(creditRule.details.earnedCredits)) : null;
@@ -1265,12 +1225,10 @@ function renderGraduationGapPanel(result) {
       ${creditsLeft !== null ? `<span>ยังขาดอีก <strong>${esc(creditsLeft)}</strong> หน่วยกิต</span>` : ""}
       <span>วิชาในแผนที่ยังไม่ผ่าน/ไม่ได้เรียน <strong>${esc(missingCourses.length)}</strong> วิชา${missingCredits ? ` (${esc(missingCredits)} หน่วยกิต)` : ""}</span>
     </div>
-    ${creditBuckets.length || Object.keys(creditBucketRequirements).length ? `<div class="graduation-credit-buckets" aria-label="หน่วยกิตแยกตามหมวด">${[...new Set([...Object.keys(creditBucketRequirements), ...creditBuckets.map(([key]) => key)])].map(key => { const earned = Number(result.creditBuckets?.[key] ?? 0); const required = Number(creditBucketRequirements[key] ?? 0); const percent = required > 0 ? Math.min(100, Math.round((earned / required) * 100)) : earned > 0 ? 100 : 0; return `<div class="graduation-credit-bucket"><div class="graduation-credit-bucket-head"><span>${esc(creditBucketLabel(key))}</span><strong>${esc(earned)}${required > 0 ? ` / ${esc(required)}` : ""} หน่วยกิต</strong></div><div class="graduation-credit-bar" role="progressbar" aria-valuenow="${esc(earned)}"${required > 0 ? ` aria-valuemax="${esc(required)}"` : ""}><span style="width:${percent}%"></span></div></div>`; }).join("")}</div>` : ""}
     ${nothingMissing && dataOk ? `<p class="graduation-gap-ok">ไม่พบสิ่งที่ขาดจากเงื่อนไขที่ระบบตรวจได้${needsCheck.length ? " (ยังเหลือข้อที่เจ้าหน้าที่ต้องตรวจ)" : ""}</p>` : ""}
     ${notPassed.length ? `<div class="graduation-gap-block"><h4>เงื่อนไขที่ยังไม่ผ่าน</h4><ul>${notPassed.map(item => `<li><strong>${esc(item.text)}</strong>${graduationDetailsText(item) ? `<small>${esc(graduationDetailsText(item))}</small>` : ""}</li>`).join("")}</ul></div>` : ""}
     ${missingCourses.length ? `<div class="graduation-gap-block"><h4>วิชาในแผนที่ยังขาด</h4><div class="graduation-table-wrap"><table><thead><tr><th>ปี/ภาค</th><th>วิชา</th><th>หน่วยกิต</th><th>สถานะ</th></tr></thead><tbody>${missingCourses.map(row => `<tr><td>${esc(termLabel(row))}</td><td>${esc(row.courseCode ?? "-")} ${esc(row.courseNameTh ?? "")}</td><td>${esc(row.credits ?? "-")}</td><td>${esc(statusText[row.status] ?? row.status)}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
     ${waiting.length ? `<div class="graduation-gap-block"><h4>ยังไม่นับ (กำลังเรียนหรือรอยืนยัน)</h4><ul>${waiting.map(row => `<li>${esc(row.courseCode ?? "-")} ${esc(row.courseNameTh ?? "")}<small>${esc(statusText[row.status] ?? row.status)}</small></li>`).join("")}</ul></div>` : ""}
-    ${pendingCreditReview.length ? `<div class="graduation-gap-block"><h4>วิชาที่รอเจ้าหน้าที่จัดหมวด</h4><ul>${pendingCreditReview.map(row => `<li>${esc(row.courseCode ?? "-")}<small>ยังไม่นับหน่วยกิตเพื่อจบ (${esc(row.reason ?? "รอตรวจ")})</small></li>`).join("")}</ul></div>` : ""}
     ${needsCheck.length ? `<div class="graduation-gap-block"><h4>เงื่อนไขที่ต้องให้เจ้าหน้าที่ตรวจ หรือระบบยังตรวจเองไม่ได้</h4><ul>${needsCheck.map(item => `<li>${esc(item.text)}${graduationDetailsText(item) ? `<small>${esc(graduationDetailsText(item))}</small>` : ""}</li>`).join("")}</ul></div>` : ""}
   </section>`;
 }
@@ -1284,8 +1242,7 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
     : source.basis === "self_reported" && source.status === "ok"
       ? "ข้อมูลที่นักศึกษากรอกเอง (ยังไม่ผ่านการยืนยัน)"
       : (graduationSourceLabels[source.status] ?? "ไม่ทราบสถานะข้อมูล");
-  const gradeRows = [...(result.records ?? []), ...(result.pendingRecords ?? []), ...(result.inProgressRecords ?? []), ...(result.rejectedRecords ?? [])]
-    .filter((row, index, rows) => rows.findIndex(item => item.id === row.id) === index);
+  const gradeRows = result.records ?? [];
   const planRows = result.plan ?? [];
   const gradeLabel = { A: "A", "B+": "B+", B: "B", "C+": "C+", C: "C", "D+": "D+", D: "D", F: "F", S: "S (ผ่าน ไม่มีเกรด)", P: "P (ผ่าน ไม่มีเกรด)", U: "U (ไม่ผ่าน)", W: "W (ถอน)", I: "I (ไม่สมบูรณ์)" };
   const planStatus = {
@@ -1299,7 +1256,7 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
   const sourceText = row => row.source === "self_reported"
     ? (row.verificationStatus === "verified" ? "นักศึกษากรอกเอง · เจ้าหน้าที่ยืนยันแล้ว"
       : row.verificationStatus === "rejected" ? "นักศึกษากรอกเอง · ถูกปฏิเสธ"
-      : `นักศึกษากรอกเอง · ${row.requestedCreditCategory ? `ขอนับเป็น ${({ minor: "วิชาโท", free_elective: "วิชาเลือกเสรี", major_elective: "วิชาเลือกเฉพาะ", general_education: "ศึกษาทั่วไป", specific: "วิชาเฉพาะ" }[row.requestedCreditCategory] ?? row.requestedCreditCategory)} · ` : ""}ยังไม่ยืนยัน`)
+      : "นักศึกษากรอกเอง · ยังไม่ยืนยัน")
     : "นำเข้าจากทะเบียน";
   // Only student-entered rows that nobody has decided yet can be acted on.
   const waitingForReview = row => row.source === "self_reported" && row.verificationStatus === "unverified";
@@ -1312,24 +1269,12 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
       }
       return `<button type="button" class="workflow-action workflow-action--primary" data-graduation-grade-edit="${esc(row.id)}">แก้ไข</button>${row.verificationStatus === "unverified" ? ` <button type="button" class="workflow-action workflow-action--muted" data-graduation-grade-delete="${esc(row.id)}">ลบ</button>` : ""}`;
     }
-    if (mode === "reviewer") {
-      const needsClassification = row.source === "self_reported" && (row.creditCategoryStatus === "pending" || row.catalogStatus === "not_found" || row.catalogStatus === "pending_review");
-      const categoryOptions = [
-        ["free_elective", "เลือกเสรี"],
-        ["major_elective", "เลือกสาขา"],
-        ["minor", "วิชาโท"],
-        ["general_education", "ศึกษาทั่วไป"],
-        ["specific", "วิชาเฉพาะ"],
-        ["not_counted", "ไม่นับผลตรวจ"],
-      ];
-      const classification = needsClassification
-        ? `<label class="graduation-inline-classification">จัดหมวด <select data-graduation-grade-category="${esc(row.id)}" aria-label="หมวดของ ${esc(row.courseCode)}"><option value="">เลือกหมวด</option>${categoryOptions.map(([value, label]) => `<option value="${value}"${(row.creditCategory ?? row.requestedCreditCategory) === value ? " selected" : ""}>${label}</option>`).join("")}</select><button type="button" class="workflow-action workflow-action--muted" data-graduation-grade-classify="${esc(row.id)}">ยืนยันหมวด</button></label>`
-        : "";
-      if (!waitingForReview(row) || row.isInProgress) return classification;
+    if (!waitingForReview(row)) return "";
+    if (mode === "reviewer" && !row.isInProgress) {
       // When student-entered grades count without review, "verify" is optional and left out.
       // "Reject" stays so a reviewer can still take a wrong row out of the result.
       const verifyButton = result.selfReportedCounts ? "" : `<button type="button" class="workflow-action workflow-action--primary" data-graduation-grade-decision="verify" data-grade-id="${esc(row.id)}">ยืนยัน</button> `;
-      return `${classification}${verifyButton}<button type="button" class="workflow-action workflow-action--muted" data-graduation-grade-decision="reject" data-grade-id="${esc(row.id)}">ปฏิเสธ</button>`;
+      return `${verifyButton}<button type="button" class="workflow-action workflow-action--muted" data-graduation-grade-decision="reject" data-grade-id="${esc(row.id)}">ปฏิเสธ</button>`;
     }
     return "";
   };
@@ -1531,7 +1476,7 @@ function renderGraduationStudentView() {
   const body = pageTab === "enter"
     ? `<p class="graduation-hint">กรอกเกรดตามวิชาในแผน แล้วกด "บันทึก" ถ้าต้องแก้เกรดที่กรอกไปแล้ว ไปที่แท็บ "ผลตรวจสอบของฉัน" &gt; "ผลการเรียน" แล้วกด "แก้ไข"</p>${renderGraduationPlanForm(result)}${renderGraduationGradeForm(result)}`
     : renderGraduationResult(result, "ผลตรวจสอบของนักศึกษา", "student");
-  return `${renderGraduationReviewPanel(result)}${tabs}${body}`;
+  return `${tabs}${body}`;
 }
 
 const graduationCohortOf = id => (/^\d{2}/.test(String(id)) ? String(id).slice(0, 2) : "อื่น ๆ");
@@ -1552,7 +1497,6 @@ function graduationRosterVisible() {
 // Instructor / staff page: a searchable list on the left, the chosen student's result on the right.
 function renderGraduationReviewerView(role) {
   const students = state.graduationStudents ?? [];
-  const reviewByStudent = new Map((state.graduationReviewRequests ?? []).map(request => [request.studentId, request]));
   const roster = state.graduationRoster ?? { query: "", cohort: "", data: "" };
   const visible = graduationRosterVisible();
   const visibleIds = new Set(visible.map(student => student.studentId));
@@ -1563,11 +1507,11 @@ function renderGraduationReviewerView(role) {
   // adds students any more: curriculum admins assign them.
   const isStaff = role === "staff";
 
-  const item = student => { const review = reviewByStudent.get(student.studentId); return `<li data-roster-item="${esc(student.studentId)}"${visibleIds.has(student.studentId) ? "" : " hidden"}><button type="button" class="graduation-roster-item${student.studentId === selectedId ? " is-active" : ""}" data-graduation-student="${esc(student.studentId)}"${student.studentId === selectedId ? ` aria-current="true"` : ""}>
+  const item = student => `<li data-roster-item="${esc(student.studentId)}"${visibleIds.has(student.studentId) ? "" : " hidden"}><button type="button" class="graduation-roster-item${student.studentId === selectedId ? " is-active" : ""}" data-graduation-student="${esc(student.studentId)}"${student.studentId === selectedId ? ` aria-current="true"` : ""}>
       <span class="graduation-roster-name">${esc(student.displayName ?? student.studentId)}</span>
       <span class="graduation-roster-meta">${esc(student.studentId)}${student.studyYear ? ` · ปี ${esc(student.studyYear)}` : ""}</span>
-      <span class="graduation-badge ${review?.status === "pending_review" ? "graduation-badge--warning" : student.hasData ? "graduation-badge--ok" : "graduation-badge--none"}">${review?.status === "pending_review" ? "รอตรวจจบ" : review?.status === "returned" ? "ส่งกลับแก้ไข" : review?.status === "approved" ? "ยืนยันแล้ว" : student.hasData ? "มีผลการเรียน" : "ยังไม่มีข้อมูล"}</span>
-    </button></li>`; };
+      <span class="graduation-badge ${student.hasData ? "graduation-badge--ok" : "graduation-badge--none"}">${student.hasData ? "มีผลการเรียน" : "ยังไม่มีข้อมูล"}</span>
+    </button></li>`;
 
   const roasterPanel = `<aside class="graduation-roster" aria-label="รายชื่อนักศึกษา">
     <div class="graduation-roster-head"><h2>นักศึกษา</h2><span class="graduation-roster-count" data-roster-count>${visible.length} / ${students.length} คน</span></div>
@@ -1589,13 +1533,8 @@ function renderGraduationReviewerView(role) {
       <button type="button" class="workflow-action workflow-action--muted" data-graduation-step="1"${position >= 0 && position < visible.length - 1 ? "" : " disabled"}>ถัดไป ›</button>
     </div>` : "";
 
-  const selectedReview = reviewByStudent.get(selectedId);
-  const reviewActions = role === "staff" && selectedReview?.status === "pending_review"
-    ? `<section class="graduation-review-panel graduation-review-panel--pending_review"><strong>คำขอตรวจสอบการจบ</strong><p>ตรวจผลการเรียนและจัดหมวดวิชาที่อยู่นอก catalog ให้เรียบร้อยก่อนอนุมัติ</p><div class="graduation-review-decision"><button type="button" class="workflow-action workflow-action--primary" data-graduation-review-decision="approve" data-review-request-id="${esc(selectedReview.id)}">อนุมัติการตรวจสอบจบ</button><button type="button" class="workflow-action workflow-action--muted" data-graduation-review-decision="return" data-review-request-id="${esc(selectedReview.id)}">ส่งกลับแก้ไข</button></div></section>`
-    : selectedReview ? `<section class="graduation-review-panel"><strong>สถานะคำขอ: ${esc(selectedReview.status)}</strong>${selectedReview.reviewNote ? `<p>หมายเหตุ: ${esc(selectedReview.reviewNote)}</p>` : ""}</section>` : "";
   const detail = `<section class="graduation-detail">
     ${nav}
-    ${reviewActions}
     ${state.graduationResult ? renderGraduationResult(state.graduationResult, `ผลตรวจสอบ ${selectedId}`, "reviewer") : (students.length ? `<p class="audit-empty graduation-detail-empty">เลือกนักศึกษาจากรายการด้านซ้ายเพื่อดูผล</p>` : "")}
     ${isStaff && selectedId ? `<section class="graduation-manage-student"><div><strong>จัดการรายการ</strong><span>เอา ${esc(selectedId)} ออกจากรายการตรวจของคุณ ผลการเรียนของนักศึกษาจะไม่ถูกลบ</span></div><button type="button" class="workflow-action workflow-action--muted" data-graduation-remove="${esc(selectedId)}">ลบนักศึกษาออกจากรายการ</button></section>` : ""}
     ${isStaff ? `<details class="graduation-import-history" data-graduation-year="ui:batches"${state.graduationYearOpen?.["ui:batches"] ? " open" : ""}><summary>ประวัติการนำเข้าข้อมูล</summary>${state.graduationBatches.length ? `<div class="graduation-table-wrap"><table><thead><tr><th>Batch</th><th>โหมด</th><th>สถานะ</th><th>จำนวนแถว</th><th>นำเข้าเมื่อ</th></tr></thead><tbody>${state.graduationBatches.map(batch => `<tr><td>${esc(batch.source_batch_id ?? batch.batch_id)}</td><td>${batch.data_mode === "demo" ? "ข้อมูลจำลอง" : "ข้อมูลจริง"}</td><td>${esc(batch.status)}</td><td>${esc(batch.row_total)}</td><td>${esc(batch.finished_at ? new Date(batch.finished_at).toLocaleString("th-TH") : "-")}</td></tr>`).join("")}</tbody></table></div>` : `<p class="audit-empty">ยังไม่มีประวัติการนำเข้า</p>`}</details>` : ""}
@@ -1661,20 +1600,11 @@ async function loadGraduationPage() {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error ?? "โหลดผลตรวจสอบไม่สำเร็จ");
       state.graduationResult = payload.data;
-      const curriculumId = state.graduationResult?.curriculum?.curriculumId;
-      if (curriculumId) {
-        const reviewResponse = await fetch(`${API_BASE}/api/graduation/me/review-request?curriculumId=${encodeURIComponent(curriculumId)}`);
-        const reviewPayload = await reviewResponse.json().catch(() => ({}));
-        if (reviewResponse.ok) state.graduationReviewRequest = reviewPayload.data ?? null;
-      }
     } else {
       const response = await fetch(`${API_BASE}/api/graduation/students`);
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error ?? "โหลดรายชื่อนักศึกษาไม่สำเร็จ");
       state.graduationStudents = payload.data ?? [];
-      const reviewResponse = await fetch(`${API_BASE}/api/graduation/review-requests`);
-      const reviewPayload = await reviewResponse.json().catch(() => ({}));
-      if (reviewResponse.ok) state.graduationReviewRequests = reviewPayload.data ?? [];
       if (role === "staff") {
         const batchesResponse = await fetch(`${API_BASE}/api/graduation/import-batches`);
         const batchesPayload = await batchesResponse.json().catch(() => ({}));
@@ -4970,54 +4900,6 @@ function bind() {
     };
   });
 
-  document.querySelectorAll("[data-graduation-review-submit]").forEach(button => {
-    button.onclick = async () => {
-      const curriculumId = state.graduationResult?.curriculum?.curriculumId;
-      if (!curriculumId || !confirm("ส่งผลการเรียนให้เจ้าหน้าที่ตรวจสอบการจบหรือไม่")) return;
-      button.disabled = true;
-      try {
-        const response = await fetch(`${API_BASE}/api/graduation/me/review-request/submit`, {
-          method: "POST",
-          headers: draftApiHeaders(),
-          body: JSON.stringify({ curriculumId }),
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload.error ?? "ส่งตรวจสอบการจบไม่สำเร็จ");
-        await reloadGraduation();
-      } catch (error) {
-        alert(error.message ?? "ส่งตรวจสอบการจบไม่สำเร็จ");
-        button.disabled = false;
-      }
-    };
-  });
-
-  document.querySelectorAll("[data-graduation-review-decision]").forEach(button => {
-    button.onclick = async () => {
-      const requestId = button.dataset.reviewRequestId;
-      const decision = button.dataset.graduationReviewDecision;
-      if (!requestId || !decision) return;
-      const note = decision === "return" ? prompt("เหตุผลที่ส่งกลับแก้ไข (บังคับ)") : prompt("หมายเหตุการอนุมัติ (ไม่ใส่ก็ได้)");
-      if (note === null || (decision === "return" && !note.trim())) {
-        if (decision === "return") alert("กรุณาระบุเหตุผลที่ส่งกลับแก้ไข");
-        return;
-      }
-      button.disabled = true;
-      try {
-        const response = await fetch(`${API_BASE}/api/graduation/review-requests/${encodeURIComponent(requestId)}/decision`, {
-          method: "POST",
-          headers: draftApiHeaders(),
-          body: JSON.stringify({ decision, note: note.trim() }),
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload.error ?? "บันทึกผลการตรวจสอบจบไม่สำเร็จ");
-        await reloadGraduation();
-      } catch (error) {
-        alert(error.message ?? "บันทึกผลการตรวจสอบจบไม่สำเร็จ");
-        button.disabled = false;
-      }
-    };
-  });
-
   // Re-fetches the graduation page data after a change, keeping the selected student.
   const reloadGraduation = async () => {
     state.graduationLoaded = false;
@@ -5275,7 +5157,6 @@ function bind() {
             credits: formData.get("credits") === "" ? undefined : Number(formData.get("credits")),
             grade: inProgress ? undefined : grade,
             inProgress,
-            categoryIntent: String(formData.get("categoryIntent") ?? "") || undefined,
           }),
         });
         const payload = await response.json().catch(() => ({}));
@@ -5370,32 +5251,6 @@ function bind() {
         await reloadGraduation();
       } catch (error) {
         alert(error.message ?? "บันทึกผลการตรวจไม่สำเร็จ");
-        button.disabled = false;
-      }
-    };
-  });
-
-  document.querySelectorAll("[data-graduation-grade-classify]").forEach(button => {
-    button.onclick = async () => {
-      const gradeId = button.dataset.graduationGradeClassify;
-      const studentId = state.graduationSelectedStudentId;
-      const category = button.closest("tr")?.querySelector("[data-graduation-grade-category]")?.value;
-      if (!gradeId || !studentId || !category) {
-        alert("กรุณาเลือกหมวดวิชาก่อนบันทึก");
-        return;
-      }
-      button.disabled = true;
-      try {
-        const response = await fetch(`${API_BASE}/api/graduation/students/${encodeURIComponent(studentId)}/grades/${encodeURIComponent(gradeId)}/classification`, {
-          method: "PATCH",
-          headers: draftApiHeaders(),
-          body: JSON.stringify({ category }),
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload.error ?? "บันทึกหมวดวิชาไม่สำเร็จ");
-        await reloadGraduation();
-      } catch (error) {
-        alert(error.message ?? "บันทึกหมวดวิชาไม่สำเร็จ");
         button.disabled = false;
       }
     };

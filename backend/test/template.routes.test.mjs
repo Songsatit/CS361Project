@@ -10,7 +10,6 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { normalizeRoute } from '../src/api.mjs';
 
 const backendDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const template = readFileSync(path.join(backendDir, 'template.yaml'), 'utf8');
@@ -72,19 +71,4 @@ test('POST /api/auth/logout is wired to the main router handler (src/api.handler
 
 test('GET /api/auth/me is wired to the main router handler (src/api.handler)', () => {
   assert.equal(routes.get('GET /api/auth/me'), 'src/api.handler');
-});
-
-test('graduation review workflow uses one greedy route/permission', () => {
-  assert.equal(routes.get('ANY /api/graduation/{proxy+}'), 'src/api.authHandler');
-});
-
-test('greedy graduation route restores the concrete student route and parameters', () => {
-  const event = {
-    routeKey: 'ANY /api/graduation/{proxy+}',
-    rawPath: '/api/graduation/students/6709650094',
-    requestContext: { http: { method: 'GET' } },
-    pathParameters: { proxy: 'students/6709650094' },
-  };
-  assert.equal(normalizeRoute(event), 'GET /api/graduation/students/{studentId}');
-  assert.equal(event.pathParameters.studentId, '6709650094');
 });
