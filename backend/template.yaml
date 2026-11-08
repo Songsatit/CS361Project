@@ -345,30 +345,6 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/curriculum-changes/{changeId}/decision
             Method: POST
-        GetMyGraduationCheck:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/graduation/me
-            Method: GET
-        ListAssignedGraduationStudents:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/graduation/students
-            Method: GET
-        AssignGraduationStudent:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/graduation/assignments
-            Method: POST
-        ListGraduationAssignments:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/graduation/assignments
-            Method: GET
         GetStudentContact:
           Type: HttpApi
           Properties:
@@ -381,66 +357,12 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/students/me/contact
             Method: PATCH
-        ListGraduationDirectory:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/graduation/directory
-            Method: GET
-        RemoveGraduationStudent:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/graduation/assignments/{studentId}
-            Method: DELETE
-        AddSelfReportedGrade:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/graduation/me/grades
-            Method: POST
-        UpdateSelfReportedGrade:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/graduation/me/grades/{gradeRecordId}
-            Method: PATCH
-        DeleteSelfReportedGrade:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/graduation/me/grades/{gradeRecordId}
-            Method: DELETE
-        DecideSelfReportedGrade:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/graduation/students/{studentId}/grades/{gradeRecordId}/verification
-            Method: POST
-        ClassifySelfReportedGrade:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/graduation/students/{studentId}/grades/{gradeRecordId}/classification
-            Method: PATCH
         GraduationReviewWorkflow:
           Type: HttpApi
           Properties:
             ApiId: !Ref CurriculumApi
             Path: /api/graduation/{proxy+}
             Method: ANY
-        GetStudentGraduationCheck:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/graduation/students/{studentId}
-            Method: GET
-        ListGraduationImportBatches:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/graduation/import-batches
-            Method: GET
         TuLogout:
           Type: HttpApi
           Properties:
