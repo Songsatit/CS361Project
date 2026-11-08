@@ -1150,9 +1150,16 @@ function renderGraduationPlanForm(result) {
   // Courses already entered, by code, so a row that was sent is not asked for again.
   const existing = new Map();
   const note = (rows, label, locked) => (rows ?? []).forEach(row => existing.set(graduationCodeKey(row.courseCode), { label, locked, grade: row.grade }));
+  // A self-reported row may be included in `records` when the demo setting allows it to
+  // contribute to the calculation. That does not make it verified or immutable.
+  const noteCountedRows = rows => (rows ?? []).forEach(row => {
+    const selfReported = row.source === "self_reported";
+    const verified = row.verificationStatus === "verified";
+    note([row], selfReported && !verified ? "กรอกเอง · ยังไม่ยืนยัน" : "ยืนยันแล้ว", !selfReported || verified);
+  });
   // Rejected first, so a locked row for the same course always wins.
   note(result?.rejectedRecords, "ถูกปฏิเสธ กรอกใหม่ได้", false);
-  note(result?.records, "ยืนยันแล้ว", true);
+  noteCountedRows(result?.records);
   note(result?.pendingRecords, "ส่งแล้ว รอยืนยัน", true);
   note(result?.inProgressRecords, "กำลังเรียน (ส่งแล้ว)", true);
 
@@ -1206,6 +1213,7 @@ function renderGraduationGapPanel(result) {
   const needsCheck = conditions.filter(item => ["incomplete", "manual"].includes(item.status));
   const missingCourses = plan.filter(row => ["not_taken", "failed_or_incomplete"].includes(row.status));
   const waiting = plan.filter(row => ["in_progress", "pending_verification"].includes(row.status));
+  const pendingCreditReview = result.pendingCreditReview ?? [];
   const missingCredits = missingCourses.reduce((sum, row) => sum + (Number(row.credits) || 0), 0);
   const creditRule = conditions.find(item => item.details?.earnedCredits != null && item.details?.required != null);
   const creditsLeft = creditRule ? Math.max(0, Number(creditRule.details.required) - Number(creditRule.details.earnedCredits)) : null;
@@ -1229,6 +1237,7 @@ function renderGraduationGapPanel(result) {
     ${notPassed.length ? `<div class="graduation-gap-block"><h4>เงื่อนไขที่ยังไม่ผ่าน</h4><ul>${notPassed.map(item => `<li><strong>${esc(item.text)}</strong>${graduationDetailsText(item) ? `<small>${esc(graduationDetailsText(item))}</small>` : ""}</li>`).join("")}</ul></div>` : ""}
     ${missingCourses.length ? `<div class="graduation-gap-block"><h4>วิชาในแผนที่ยังขาด</h4><div class="graduation-table-wrap"><table><thead><tr><th>ปี/ภาค</th><th>วิชา</th><th>หน่วยกิต</th><th>สถานะ</th></tr></thead><tbody>${missingCourses.map(row => `<tr><td>${esc(termLabel(row))}</td><td>${esc(row.courseCode ?? "-")} ${esc(row.courseNameTh ?? "")}</td><td>${esc(row.credits ?? "-")}</td><td>${esc(statusText[row.status] ?? row.status)}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
     ${waiting.length ? `<div class="graduation-gap-block"><h4>ยังไม่นับ (กำลังเรียนหรือรอยืนยัน)</h4><ul>${waiting.map(row => `<li>${esc(row.courseCode ?? "-")} ${esc(row.courseNameTh ?? "")}<small>${esc(statusText[row.status] ?? row.status)}</small></li>`).join("")}</ul></div>` : ""}
+    ${pendingCreditReview.length ? `<div class="graduation-gap-block"><h4>วิชาที่รอเจ้าหน้าที่จัดหมวด</h4><ul>${pendingCreditReview.map(row => `<li>${esc(row.courseCode ?? "-")}<small>ยังไม่นับหน่วยกิตเพื่อจบ (${esc(row.reason ?? "รอตรวจ")})</small></li>`).join("")}</ul></div>` : ""}
     ${needsCheck.length ? `<div class="graduation-gap-block"><h4>เงื่อนไขที่ต้องให้เจ้าหน้าที่ตรวจ หรือระบบยังตรวจเองไม่ได้</h4><ul>${needsCheck.map(item => `<li>${esc(item.text)}${graduationDetailsText(item) ? `<small>${esc(graduationDetailsText(item))}</small>` : ""}</li>`).join("")}</ul></div>` : ""}
   </section>`;
 }
@@ -1269,12 +1278,24 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
       }
       return `<button type="button" class="workflow-action workflow-action--primary" data-graduation-grade-edit="${esc(row.id)}">แก้ไข</button>${row.verificationStatus === "unverified" ? ` <button type="button" class="workflow-action workflow-action--muted" data-graduation-grade-delete="${esc(row.id)}">ลบ</button>` : ""}`;
     }
-    if (!waitingForReview(row)) return "";
-    if (mode === "reviewer" && !row.isInProgress) {
+    if (mode === "reviewer") {
+      const needsClassification = row.catalogStatus === "not_found" || row.catalogStatus === "pending_review";
+      const categoryOptions = [
+        ["free_elective", "เลือกเสรี"],
+        ["major_elective", "เลือกสาขา"],
+        ["minor", "วิชาโท"],
+        ["general_education", "ศึกษาทั่วไป"],
+        ["specific", "วิชาเฉพาะ"],
+        ["not_counted", "ไม่นับผลตรวจ"],
+      ];
+      const classification = needsClassification
+        ? `<label class="graduation-inline-classification">จัดหมวด <select data-graduation-grade-category="${esc(row.id)}" aria-label="หมวดของ ${esc(row.courseCode)}"><option value="">เลือกหมวด</option>${categoryOptions.map(([value, label]) => `<option value="${value}"${row.creditCategory === value ? " selected" : ""}>${label}</option>`).join("")}</select><button type="button" class="workflow-action workflow-action--muted" data-graduation-grade-classify="${esc(row.id)}">บันทึกหมวด</button></label>`
+        : "";
+      if (!waitingForReview(row) || row.isInProgress) return classification;
       // When student-entered grades count without review, "verify" is optional and left out.
       // "Reject" stays so a reviewer can still take a wrong row out of the result.
       const verifyButton = result.selfReportedCounts ? "" : `<button type="button" class="workflow-action workflow-action--primary" data-graduation-grade-decision="verify" data-grade-id="${esc(row.id)}">ยืนยัน</button> `;
-      return `${verifyButton}<button type="button" class="workflow-action workflow-action--muted" data-graduation-grade-decision="reject" data-grade-id="${esc(row.id)}">ปฏิเสธ</button>`;
+      return `${classification}${verifyButton}<button type="button" class="workflow-action workflow-action--muted" data-graduation-grade-decision="reject" data-grade-id="${esc(row.id)}">ปฏิเสธ</button>`;
     }
     return "";
   };
@@ -5251,6 +5272,32 @@ function bind() {
         await reloadGraduation();
       } catch (error) {
         alert(error.message ?? "บันทึกผลการตรวจไม่สำเร็จ");
+        button.disabled = false;
+      }
+    };
+  });
+
+  document.querySelectorAll("[data-graduation-grade-classify]").forEach(button => {
+    button.onclick = async () => {
+      const gradeId = button.dataset.graduationGradeClassify;
+      const studentId = state.graduationSelectedStudentId;
+      const category = button.closest("tr")?.querySelector("[data-graduation-grade-category]")?.value;
+      if (!gradeId || !studentId || !category) {
+        alert("กรุณาเลือกหมวดวิชาก่อนบันทึก");
+        return;
+      }
+      button.disabled = true;
+      try {
+        const response = await fetch(`${API_BASE}/api/graduation/students/${encodeURIComponent(studentId)}/grades/${encodeURIComponent(gradeId)}/classification`, {
+          method: "PATCH",
+          headers: draftApiHeaders(),
+          body: JSON.stringify({ category }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? "บันทึกหมวดวิชาไม่สำเร็จ");
+        await reloadGraduation();
+      } catch (error) {
+        alert(error.message ?? "บันทึกหมวดวิชาไม่สำเร็จ");
         button.disabled = false;
       }
     };
