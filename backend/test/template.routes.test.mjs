@@ -74,5 +74,5 @@ test('GET /api/auth/me is wired to the main router handler (src/api.handler)', (
 });
 
 test('graduation review workflow uses one greedy route/permission', () => {
-  assert.equal(routes.get('ANY /api/graduation/{proxy+}'), 'src/api.handler');
+  assert.equal(routes.get('ANY /api/graduation/{proxy+}'), 'src/api.authHandler');
 });

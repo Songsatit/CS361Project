@@ -357,12 +357,6 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/students/me/contact
             Method: PATCH
-        GraduationReviewWorkflow:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref CurriculumApi
-            Path: /api/graduation/{proxy+}
-            Method: ANY
         TuLogout:
           Type: HttpApi
           Properties:
@@ -402,6 +396,12 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/profile/student
             Method: GET
+        GraduationReviewWorkflow:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/graduation/{proxy+}
+            Method: ANY
 
 Outputs:
   ApiUrl:

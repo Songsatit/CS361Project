@@ -367,6 +367,10 @@ async function getStudentProfile(event) {
 
 export const authHandler = async (event) => {
   try {
+    // Graduation review routes share one greedy API Gateway permission on this
+    // lightweight function. The main router still enforces authentication and role scope.
+    const path = String(event.rawPath ?? event.path ?? '');
+    if (path.startsWith('/api/graduation/')) return await handler(event);
     const method = event.requestContext?.http?.method ?? event.httpMethod;
     if (method === 'GET') return await getStudentProfile(event);
     return await tuLogin(event);
