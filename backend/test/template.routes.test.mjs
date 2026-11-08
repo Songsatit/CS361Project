@@ -72,3 +72,10 @@ test('POST /api/auth/logout is wired to the main router handler (src/api.handler
 test('GET /api/auth/me is wired to the main router handler (src/api.handler)', () => {
   assert.equal(routes.get('GET /api/auth/me'), 'src/api.handler');
 });
+
+test('graduation review workflow routes are wired to the main router handler', () => {
+  assert.equal(routes.get('GET /api/graduation/me/review-request'), 'src/api.handler');
+  assert.equal(routes.get('POST /api/graduation/me/review-request/submit'), 'src/api.handler');
+  assert.equal(routes.get('GET /api/graduation/review-requests'), 'src/api.handler');
+  assert.equal(routes.get('POST /api/graduation/review-requests/{reviewRequestId}/decision'), 'src/api.handler');
+});
