@@ -3611,6 +3611,33 @@
   background: #fff;
 }
 
+.graduation-credit-bucket-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.graduation-credit-bar {
+  height: 0.45rem;
+  margin-top: 0.45rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #f0e6e9;
+}
+
+.graduation-credit-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary, #c9003d);
+}
+
+.graduation-readonly-hint {
+  color: #765f68;
+  font-size: 0.9rem;
+}
+
 .graduation-credit-bucket span {
   color: #666;
   font-size: 0.88rem;
