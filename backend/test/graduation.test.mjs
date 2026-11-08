@@ -18,9 +18,12 @@ import {
 } from '../src/graduation/adapter.mjs';
 import {
   canViewGraduation,
+  classifyCourseCredit,
   evaluateGraduation,
   partitionGradeRecords,
   resolveDataSource,
+  summarize,
+  summarizeCreditBuckets,
 } from '../src/graduation/evaluate.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -256,6 +259,81 @@ test('partial import with a rejected row for this student blocks that student on
 test('partial import with an unidentifiable rejected row blocks every student', () => {
   const status = resolveDataSource({ latestBatch: batch({ status: 'partial' }), unidentifiedRejectedInLatest: 1, asOf: new Date(), now: new Date() });
   assert.equal(status.status, 'import_partial');
+});
+
+// ---------- Updated V4 rules: repeat attempts and non-catalog courses ----------
+
+test('default all-attempt GPA counts every graded attempt but earned credits once', () => {
+  const summary = summarize([
+    { course_code: 'CS101', academic_year: 2566, semester: 1, credits: 3, grade: 'F' },
+    { course_code: 'CS101', academic_year: 2567, semester: 1, credits: 3, grade: 'D' },
+    { course_code: 'CS101', academic_year: 2568, semester: 1, credits: 3, grade: 'C' },
+  ]);
+  assert.equal(summary.gpaCredits, 9);
+  assert.equal(summary.earnedCredits, 3);
+  assert.equal(summary.gpa, 1);
+});
+
+test('latest attempt policy remains available per curriculum setting', () => {
+  const records = [
+    { course_code: 'CS101', academic_year: 2566, semester: 1, credits: 3, grade: 'F' },
+    { course_code: 'CS101', academic_year: 2567, semester: 1, credits: 3, grade: 'C' },
+  ];
+  const summary = summarize(records, { attemptPolicy: 'latest' });
+  assert.equal(summary.gpaCredits, 3);
+  assert.equal(summary.gpa, 2);
+  assert.equal(summary.earnedCredits, 3);
+});
+
+test('W and I do not contribute GPA or earned credits', () => {
+  const summary = summarize([
+    { course_code: 'CS101', academic_year: 2566, semester: 1, credits: 3, grade: 'W' },
+    { course_code: 'CS102', academic_year: 2566, semester: 1, credits: 3, grade: 'I' },
+    { course_code: 'CS103', academic_year: 2566, semester: 1, credits: 3, grade: 'C' },
+  ]);
+  assert.equal(summary.gpaCredits, 3);
+  assert.equal(summary.earnedCredits, 3);
+  assert.equal(summary.gpa, 2);
+});
+
+test('an unverified student grade is not reported as verified or locked', () => {
+  const result = evaluateGraduation({
+    conditions: [{ order: 1, text: 'minimum grade' }],
+    rules: [{ condition_order: 1, rule_type: 'min_grade_each', params: { courses: ['CS101'], min_grade: 'C' } }],
+    records: [{
+      course_code: 'CS101', academic_year: 2566, semester: 1, credits: 3, grade: 'C',
+      source: 'self_reported', verification_status: 'unverified',
+    }],
+    dataSource: ok('ok'),
+    countSelfReported: true,
+  });
+  assert.equal(result.verdict, 'met');
+  assert.equal(result.totals.earnedCredits, 3);
+});
+
+test('general education level 100 is not eligible for free elective credit', () => {
+  const classification = classifyCourseCredit(
+    { course_code: 'TU100' },
+    { category: 'ศึกษาทั่วไป', courseCatalog: new Map([['TU100', { course_group: 'ศึกษาทั่วไป' }]]) },
+  );
+  assert.equal(classification.freeElectiveEligible, false);
+  assert.equal(classification.reviewStatus, 'classified');
+});
+
+test('unknown catalog courses remain pending review and are not counted automatically', () => {
+  const result = summarizeCreditBuckets(
+    [{ course_code: 'NEW999', credits: 3, grade: 'A' }],
+    { courseCatalog: new Map() },
+  );
+  assert.deepEqual(result.pendingReview, [{ courseCode: 'NEW999', reason: 'pending_catalog_review' }]);
+  assert.equal(result.buckets.size, 0);
+});
+
+test('a self-reported course marked outside the catalog stays pending without a category', () => {
+  const result = summarizeCreditBuckets([
+    { course_code: 'NEW999', credits: 3, grade: 'A', catalog_status: 'not_found' },
+  ]);
+  assert.deepEqual(result.pendingReview, [{ courseCode: 'NEW999', reason: 'pending_catalog_review' }]);
 });
 
 test('no rule for any condition never produces a met verdict', () => {

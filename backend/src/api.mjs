@@ -1795,7 +1795,8 @@ const GRADUATION_SOURCE_KEY = 'registrar-demo';
 const graduationStudentIdPattern = /^[A-Za-z0-9]{1,20}$/;
 
 // Columns added by migration 015. Selected only when that migration is applied.
-const GRADE_SOURCE_COLUMNS = 'g.source, g.verification_status, g.is_in_progress, g.verification_note, g.verified_at,';
+const GRADE_SOURCE_COLUMNS = 'g.source, g.verification_status, g.is_in_progress, g.verification_note, g.verified_at, g.catalog_status, g.credit_category,';
+const GRADE_SOURCE_COLUMNS_015 = 'g.source, g.verification_status, g.is_in_progress, g.verification_note, g.verified_at,';
 
 // batch_id is NULL for self-reported rows (migration 015), so batches are joined with LEFT JOIN.
 // An inner join would silently drop every row a student entered.
@@ -1820,10 +1821,16 @@ async function loadGradeRecords(studentId) {
   try {
     return await queryRows(gradeRecordsSql(GRADE_SOURCE_COLUMNS), [studentId]);
   } catch (error) {
-    // Keep the check working on a database that has not applied migration 015 yet. Every row
-    // there is a registrar import, which partitionGradeRecords treats as verified.
     if (error?.code !== 'ER_BAD_FIELD_ERROR') throw error;
-    return queryRows(gradeRecordsSql(''), [studentId]);
+    try {
+      // Migration 015 may exist before the newer catalog metadata migration 019.
+      return await queryRows(gradeRecordsSql(GRADE_SOURCE_COLUMNS_015), [studentId]);
+    } catch (sourceError) {
+      // Keep the check working on a database that has not applied migration 015 yet. Every row
+      // there is a registrar import, which partitionGradeRecords treats as verified.
+      if (sourceError?.code !== 'ER_BAD_FIELD_ERROR') throw sourceError;
+      return queryRows(gradeRecordsSql(''), [studentId]);
+    }
   }
 }
 
@@ -1841,6 +1848,8 @@ function shapeGradeRecord(record) {
     dataMode: record.data_mode ?? null,
     source: record.source ?? 'imported',
     verificationStatus: record.verification_status ?? 'verified',
+    catalogStatus: record.catalog_status ?? 'found',
+    creditCategory: record.credit_category ?? null,
     isInProgress: Number(record.is_in_progress ?? 0) === 1,
     verificationNote: record.verification_note ?? null,
   };
@@ -1917,6 +1926,34 @@ async function buildGraduationResult(studentId) {
   const curriculumId = pickCurriculum(records.filter((record) => record.verification_status !== 'rejected'))
     ?? pickCurriculum(records);
   const allCurriculumRecords = records.filter((record) => record.curriculum_id === curriculumId);
+  let attemptPolicy = 'all';
+  try {
+    const [curriculumPolicy] = await queryRows(
+      'SELECT graduation_attempt_policy FROM curriculum WHERE curriculum_id = ? LIMIT 1',
+      [curriculumId],
+    );
+    if (curriculumPolicy?.graduation_attempt_policy === 'latest') attemptPolicy = 'latest';
+  } catch (error) {
+    // Migration 019 can be applied independently. Until then, use the agreed
+    // default rather than making the whole graduation check unavailable.
+    if (error?.code !== 'ER_BAD_FIELD_ERROR') throw error;
+  }
+  let courseCatalog = null;
+  try {
+    const catalogRows = await queryRows(
+      `SELECT REPLACE(c.course_code, ' ', '') AS course_code,
+              cc.course_group, cc.requirement_type
+         FROM curriculum_course cc
+         JOIN course c ON c.course_id = cc.course_id
+        WHERE cc.curriculum_id = ?`,
+      [curriculumId],
+    );
+    courseCatalog = new Map(catalogRows.map(row => [String(row.course_code).toUpperCase(), row]));
+  } catch (error) {
+    // Older environments may not have curriculum placement metadata yet. Keep
+    // the existing calculation rather than failing the entire graduation check.
+    if (error?.code !== 'ER_BAD_FIELD_ERROR' && error?.code !== 'ER_NO_SUCH_TABLE') throw error;
+  }
   // Verified, finished rows feed the verdict, and so do undecided student-entered rows while
   // countSelfReported is on. The rest are returned separately and labelled.
   const { counted, pending, rejected, inProgress } = partitionGradeRecords(allCurriculumRecords, { countSelfReported });
@@ -1952,6 +1989,8 @@ async function buildGraduationResult(studentId) {
     })),
     records: curriculumRecords,
     dataSource,
+    attemptPolicy,
+    courseCatalog,
   });
 
   const [studyPlan = null] = await queryRows(
@@ -2025,6 +2064,9 @@ async function buildGraduationResult(studentId) {
     selfReportedCounts: countSelfReported,
     dataSource,
     totals: evaluation.totals,
+    attemptPolicy,
+    creditBuckets: evaluation.creditBuckets,
+    pendingCreditReview: evaluation.pendingCreditReview,
     conditions: evaluation.conditions,
     // `records` are the rows the verdict is based on. The groups below are never counted.
     records: curriculumRecords.map(shapeGradeRecord),
@@ -2454,6 +2496,7 @@ async function saveSelfReportedGrade(actor, body) {
       ORDER BY active DESC, course_id LIMIT 1`,
     [courseCode],
   );
+  const catalogStatus = catalogCourse ? 'found' : 'not_found';
   const credits = catalogCourse ? Number(catalogCourse.credits_total) : Number(body.credits);
   if (!Number.isFinite(credits) || credits < 0 || credits > 12 || (credits * 2) % 1 !== 0) {
     return response(400, { error: 'credits must be between 0 and 12 in steps of 0.5' });
@@ -2490,9 +2533,9 @@ async function saveSelfReportedGrade(actor, body) {
       const [inserted] = await pool.execute(
         `INSERT INTO graduation_grade_record
           (student_id, curriculum_id, academic_year, semester, course_code, credits, grade,
-           source, verification_status, is_in_progress, row_hash, batch_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'self_reported', 'unverified', ?, ?, NULL)`,
-        [studentId, curriculumId, academicYear, semester, courseCode, credits, grade, inProgress ? 1 : 0, rowHash],
+           catalog_status, credit_category, source, verification_status, is_in_progress, row_hash, batch_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'self_reported', 'unverified', ?, ?, NULL)`,
+        [studentId, curriculumId, academicYear, semester, courseCode, credits, grade, catalogStatus, inProgress ? 1 : 0, rowHash],
       );
       recordId = Number(inserted.insertId);
     }
@@ -2520,6 +2563,8 @@ async function saveSelfReportedGrade(actor, body) {
     isInProgress: inProgress,
     source: 'self_reported',
     verificationStatus: 'unverified',
+    catalogStatus,
+    creditCategory: null,
   } });
 }
 

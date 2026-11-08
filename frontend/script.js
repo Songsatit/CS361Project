@@ -1150,9 +1150,16 @@ function renderGraduationPlanForm(result) {
   // Courses already entered, by code, so a row that was sent is not asked for again.
   const existing = new Map();
   const note = (rows, label, locked) => (rows ?? []).forEach(row => existing.set(graduationCodeKey(row.courseCode), { label, locked, grade: row.grade }));
+  // A self-reported row may be included in `records` when the demo setting allows it to
+  // contribute to the calculation. That does not make it verified or immutable.
+  const noteCountedRows = rows => (rows ?? []).forEach(row => {
+    const selfReported = row.source === "self_reported";
+    const verified = row.verificationStatus === "verified";
+    note([row], selfReported && !verified ? "กรอกเอง · ยังไม่ยืนยัน" : "ยืนยันแล้ว", !selfReported || verified);
+  });
   // Rejected first, so a locked row for the same course always wins.
   note(result?.rejectedRecords, "ถูกปฏิเสธ กรอกใหม่ได้", false);
-  note(result?.records, "ยืนยันแล้ว", true);
+  noteCountedRows(result?.records);
   note(result?.pendingRecords, "ส่งแล้ว รอยืนยัน", true);
   note(result?.inProgressRecords, "กำลังเรียน (ส่งแล้ว)", true);
 
@@ -1206,6 +1213,7 @@ function renderGraduationGapPanel(result) {
   const needsCheck = conditions.filter(item => ["incomplete", "manual"].includes(item.status));
   const missingCourses = plan.filter(row => ["not_taken", "failed_or_incomplete"].includes(row.status));
   const waiting = plan.filter(row => ["in_progress", "pending_verification"].includes(row.status));
+  const pendingCreditReview = result.pendingCreditReview ?? [];
   const missingCredits = missingCourses.reduce((sum, row) => sum + (Number(row.credits) || 0), 0);
   const creditRule = conditions.find(item => item.details?.earnedCredits != null && item.details?.required != null);
   const creditsLeft = creditRule ? Math.max(0, Number(creditRule.details.required) - Number(creditRule.details.earnedCredits)) : null;
@@ -1229,6 +1237,7 @@ function renderGraduationGapPanel(result) {
     ${notPassed.length ? `<div class="graduation-gap-block"><h4>เงื่อนไขที่ยังไม่ผ่าน</h4><ul>${notPassed.map(item => `<li><strong>${esc(item.text)}</strong>${graduationDetailsText(item) ? `<small>${esc(graduationDetailsText(item))}</small>` : ""}</li>`).join("")}</ul></div>` : ""}
     ${missingCourses.length ? `<div class="graduation-gap-block"><h4>วิชาในแผนที่ยังขาด</h4><div class="graduation-table-wrap"><table><thead><tr><th>ปี/ภาค</th><th>วิชา</th><th>หน่วยกิต</th><th>สถานะ</th></tr></thead><tbody>${missingCourses.map(row => `<tr><td>${esc(termLabel(row))}</td><td>${esc(row.courseCode ?? "-")} ${esc(row.courseNameTh ?? "")}</td><td>${esc(row.credits ?? "-")}</td><td>${esc(statusText[row.status] ?? row.status)}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
     ${waiting.length ? `<div class="graduation-gap-block"><h4>ยังไม่นับ (กำลังเรียนหรือรอยืนยัน)</h4><ul>${waiting.map(row => `<li>${esc(row.courseCode ?? "-")} ${esc(row.courseNameTh ?? "")}<small>${esc(statusText[row.status] ?? row.status)}</small></li>`).join("")}</ul></div>` : ""}
+    ${pendingCreditReview.length ? `<div class="graduation-gap-block"><h4>วิชาที่รอเจ้าหน้าที่จัดหมวด</h4><ul>${pendingCreditReview.map(row => `<li>${esc(row.courseCode ?? "-")}<small>ยังไม่นับหน่วยกิตเพื่อจบ (${esc(row.reason ?? "รอตรวจ")})</small></li>`).join("")}</ul></div>` : ""}
     ${needsCheck.length ? `<div class="graduation-gap-block"><h4>เงื่อนไขที่ต้องให้เจ้าหน้าที่ตรวจ หรือระบบยังตรวจเองไม่ได้</h4><ul>${needsCheck.map(item => `<li>${esc(item.text)}${graduationDetailsText(item) ? `<small>${esc(graduationDetailsText(item))}</small>` : ""}</li>`).join("")}</ul></div>` : ""}
   </section>`;
 }
