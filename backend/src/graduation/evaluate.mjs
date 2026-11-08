@@ -18,7 +18,6 @@ export const ACCEPTED_GRADES = new Set([
   ...NO_RESULT_GRADES,
 ]);
 export const DEFAULT_SNAPSHOT_MAX_AGE_DAYS = 30;
-export const DEFAULT_GRADE_ATTEMPT_POLICY = 'all';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const EPSILON = 1e-9;
@@ -36,56 +35,6 @@ export function earnsCredit(grade) {
 const normalizeCourse = (code) => String(code ?? '').replace(/\s+/g, '');
 const attemptOrder = (record) => Number(record.academic_year) * 10 + Number(record.semester);
 const roundTo = (value, digits) => Math.round(value * 10 ** digits) / 10 ** digits;
-
-const categoryText = value => String(value ?? '').trim().toLowerCase();
-const isGeneralEducation = value => categoryText(value).includes('ศึกษาทั่วไป')
-  || categoryText(value).includes('general_education')
-  || categoryText(value).includes('general education');
-const isFreeElective = value => categoryText(value).includes('วิชาเลือกเสรี')
-  || categoryText(value).includes('free_elective')
-  || categoryText(value).includes('free elective');
-
-// Course placement/category is data, not a hard-coded credit rule.
-export function classifyCourseCredit(record, { courseCatalog = null, category = null } = {}) {
-  const code = normalizeCourse(record.course_code);
-  const catalogProvided = courseCatalog instanceof Map;
-  const catalogCourse = catalogProvided ? courseCatalog.get(code) : undefined;
-  if (record.credit_category_status === 'pending') {
-    return { category: record.requested_credit_category ?? null, countable: false, reviewStatus: 'pending_category_review', freeElectiveEligible: false };
-  }
-  if ((record.catalog_status === 'not_found' && !record.credit_category) || (catalogProvided && !catalogCourse && !record.credit_category)) {
-    return { category: null, countable: false, reviewStatus: 'pending_catalog_review', freeElectiveEligible: false };
-  }
-  const sourceCategory = category
-    ?? record.credit_category
-    ?? catalogCourse?.requirement_type
-    ?? catalogCourse?.course_group
-    ?? null;
-  const general100 = isGeneralEducation(sourceCategory) && /100$/.test(code);
-  return {
-    category: sourceCategory,
-    countable: true,
-    reviewStatus: general100 ? 'classified' : (sourceCategory ? 'classified' : 'pending_category_review'),
-    freeElectiveEligible: isFreeElective(sourceCategory) && !general100,
-  };
-}
-
-export function summarizeCreditBuckets(records, options = {}) {
-  const latest = latestAttempts(records);
-  const buckets = new Map();
-  const pendingReview = [];
-  for (const record of latest.values()) {
-    if (!earnsCredit(record.grade)) continue;
-    const classification = classifyCourseCredit(record, options);
-    if (!classification.countable) {
-      pendingReview.push({ courseCode: record.course_code, reason: classification.reviewStatus });
-      continue;
-    }
-    const key = classification.freeElectiveEligible ? 'free_elective' : (classification.category ?? 'unclassified');
-    buckets.set(key, Number(buckets.get(key) ?? 0) + Number(record.credits));
-  }
-  return { buckets, pendingReview };
-}
 
 // Splits grade rows by how far they can be trusted. Only `counted` rows may feed the verdict.
 //   inProgress - the course is still being taken, so it is shown apart and never evaluated
@@ -126,12 +75,7 @@ export function pickCurriculum(records) {
   return best?.curriculum_id ?? null;
 }
 
-export function normalizeGradeAttemptPolicy(policy) {
-  return policy === 'latest' ? 'latest' : DEFAULT_GRADE_ATTEMPT_POLICY;
-}
-
-// Each course counts once for earned credits. GPA can use every attempt or only the
-// latest attempt, according to the curriculum setting.
+// Each course counts once, using its most recent attempt.
 function latestAttempts(records) {
   const latest = new Map();
   for (const record of records) {
@@ -143,47 +87,20 @@ function latestAttempts(records) {
 }
 
 export function summarize(records) {
-  const options = arguments[1] ?? {};
-  const attemptPolicy = normalizeGradeAttemptPolicy(options.attemptPolicy);
   const latest = latestAttempts(records);
-  const gpaRecords = attemptPolicy === 'latest' ? [...latest.values()] : records;
   let earnedCredits = 0;
-  let gpaCredits = 0;
+  let gradedCredits = 0;
   let weightedPoints = 0;
-  const earnedByCourse = new Map();
   for (const record of latest.values()) {
     const credits = Number(record.credits);
-    const code = normalizeCourse(record.course_code);
-    if (earnsCredit(record.grade) && !earnedByCourse.has(code)) {
-      earnedByCourse.set(code, credits);
-      earnedCredits += credits;
-    }
-  }
-  for (const record of gpaRecords) {
-    const credits = Number(record.credits);
+    if (earnsCredit(record.grade)) earnedCredits += credits;
     const points = gradePoints(record.grade);
     if (points !== null) {
-      gpaCredits += credits;
+      gradedCredits += credits;
       weightedPoints += points * credits;
     }
   }
-  const creditAllocation = options.courseCatalog instanceof Map
-    ? summarizeCreditBuckets(records, options)
-    : null;
-  if (creditAllocation) {
-    const excluded = new Set(creditAllocation.pendingReview.map(item => normalizeCourse(item.courseCode)));
-    earnedCredits -= [...excluded].reduce((sum, code) => sum + Number(latest.get(code)?.credits ?? 0), 0);
-  }
-  return {
-    latest,
-    attemptPolicy,
-    earnedCredits,
-    gpaCredits,
-    weightedPoints,
-    gpa: gpaCredits > 0 ? weightedPoints / gpaCredits : null,
-    creditBuckets: creditAllocation?.buckets ?? null,
-    pendingCreditReview: creditAllocation?.pendingReview ?? [],
-  };
+  return { latest, earnedCredits, gpa: gradedCredits > 0 ? weightedPoints / gradedCredits : null };
 }
 
 const incomplete = (reason, details = {}) => ({ status: 'incomplete', reason, details });
@@ -280,7 +197,7 @@ export function evaluateRule(rule, summary) {
 
 // dataSource.status values: ok, stale, import_failed, import_partial,
 // student_rows_rejected, no_source.
-export function evaluateGraduation({ conditions, rules, records, dataSource, attemptPolicy = DEFAULT_GRADE_ATTEMPT_POLICY, courseCatalog = null }) {
+export function evaluateGraduation({ conditions, rules, records, dataSource }) {
   const rulesByOrder = new Map(rules.map((rule) => [Number(rule.condition_order), rule]));
   const dataOk = dataSource.status === 'ok';
 
@@ -298,7 +215,7 @@ export function evaluateGraduation({ conditions, rules, records, dataSource, att
     };
   }
 
-  const summary = summarize(records, { attemptPolicy, courseCatalog });
+  const summary = summarize(records);
   const results = conditions.map((condition) => {
     const rule = rulesByOrder.get(condition.order);
     const outcome = rule ? evaluateRule(rule, summary) : incomplete('no_rule');
@@ -332,8 +249,6 @@ export function evaluateGraduation({ conditions, rules, records, dataSource, att
     totals: dataOk
       ? { earnedCredits: roundTo(summary.earnedCredits, 1), gpa: summary.gpa === null ? null : roundTo(summary.gpa, 2) }
       : null,
-    creditBuckets: dataOk ? Object.fromEntries(summary.creditBuckets ?? []) : null,
-    pendingCreditReview: dataOk ? summary.pendingCreditReview : [],
   };
 }
 

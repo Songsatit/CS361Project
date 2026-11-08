@@ -92,7 +92,7 @@ const response = (statusCode, body, extraHeaders = {}) => ({
   statusCode,
   headers: {
     'content-type': 'application/json; charset=utf-8',
-    'Access-Control-Allow-Origin': process.env.FRONTEND_ORIGIN ?? 'https://main.d3dm5h9pinlgfm.amplifyapp.com',
+    'Access-Control-Allow-Origin': process.env.FRONTEND_ORIGIN ?? 'https://main.d4mgfx74c182i.amplifyapp.com',
     'Access-Control-Allow-Headers': 'content-type,authorization,x-cs361-csrf',
     'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
     'Access-Control-Allow-Credentials': 'true',
@@ -367,10 +367,6 @@ async function getStudentProfile(event) {
 
 export const authHandler = async (event) => {
   try {
-    // Graduation review routes share one greedy API Gateway permission on this
-    // lightweight function. The main router still enforces authentication and role scope.
-    const path = String(event.rawPath ?? event.path ?? event.requestContext?.http?.path ?? '');
-    if (path.startsWith('/api/graduation/')) return await handler(event);
     const method = event.requestContext?.http?.method ?? event.httpMethod;
     if (method === 'GET') return await getStudentProfile(event);
     return await tuLogin(event);
@@ -439,54 +435,6 @@ export async function writeAuditLog({
 
 function pathParameter(event, name) {
   return event.pathParameters?.[name] ?? event.pathParameters?.[name.toLowerCase()];
-}
-
-function normalizeGraduationGreedyRoute(event, method, path) {
-  const parts = path.split('/').filter(Boolean);
-  const graduationIndex = parts.indexOf('graduation');
-  const tail = graduationIndex >= 0 ? parts.slice(graduationIndex + 1) : [];
-  const params = { ...(event.pathParameters ?? {}) };
-  const set = (name, value) => { params[name] = decodeURIComponent(value); };
-  let route = `${method} ${path}`;
-  if (tail[0] === 'me' && tail.length === 1 && method === 'GET') {
-    route = 'GET /api/graduation/me';
-  } else if (tail[0] === 'me' && tail[1] === 'review-request' && tail.length === 2 && method === 'GET') {
-    route = 'GET /api/graduation/me/review-request';
-  } else if (tail[0] === 'me' && tail[1] === 'review-request' && tail[2] === 'submit' && tail.length === 3 && method === 'POST') {
-    route = 'POST /api/graduation/me/review-request/submit';
-  } else if (tail[0] === 'me' && tail[1] === 'grades' && tail.length === 2 && method === 'POST') {
-    route = 'POST /api/graduation/me/grades';
-  } else if (tail[0] === 'me' && tail[1] === 'grades' && tail.length === 3 && ['PATCH', 'DELETE'].includes(method)) {
-    set('gradeRecordId', tail[2]);
-    route = `${method} /api/graduation/me/grades/{gradeRecordId}`;
-  } else if (tail[0] === 'students' && tail.length === 2 && method === 'GET') {
-    set('studentId', tail[1]);
-    route = 'GET /api/graduation/students/{studentId}';
-  } else if (tail[0] === 'students' && tail.length === 1 && method === 'GET') {
-    route = 'GET /api/graduation/students';
-  } else if (tail[0] === 'students' && tail[2] === 'grades' && tail.length === 5
-    && ['POST', 'PATCH'].includes(method)) {
-    set('studentId', tail[1]);
-    set('gradeRecordId', tail[3]);
-    if (tail[4] === 'verification' && method === 'POST') route = 'POST /api/graduation/students/{studentId}/grades/{gradeRecordId}/verification';
-    if (tail[4] === 'classification' && method === 'PATCH') route = 'PATCH /api/graduation/students/{studentId}/grades/{gradeRecordId}/classification';
-  } else if (tail[0] === 'assignments' && tail.length === 1 && ['GET', 'POST'].includes(method)) {
-    route = `${method} /api/graduation/assignments`;
-  } else if (tail[0] === 'assignments' && tail.length === 2 && method === 'DELETE') {
-    set('studentId', tail[1]);
-    route = 'DELETE /api/graduation/assignments/{studentId}';
-  } else if (tail[0] === 'directory' && tail.length === 1 && method === 'GET') {
-    route = 'GET /api/graduation/directory';
-  } else if (tail[0] === 'import-batches' && tail.length === 1 && method === 'GET') {
-    route = 'GET /api/graduation/import-batches';
-  } else if (tail[0] === 'review-requests' && tail.length === 1 && method === 'GET') {
-    route = 'GET /api/graduation/review-requests';
-  } else if (tail[0] === 'review-requests' && tail.length === 3 && tail[2] === 'decision' && method === 'POST') {
-    set('reviewRequestId', tail[1]);
-    route = 'POST /api/graduation/review-requests/{reviewRequestId}/decision';
-  }
-  event.pathParameters = params;
-  return route;
 }
 
 async function listCourses(event) {
@@ -1847,9 +1795,7 @@ const GRADUATION_SOURCE_KEY = 'registrar-demo';
 const graduationStudentIdPattern = /^[A-Za-z0-9]{1,20}$/;
 
 // Columns added by migration 015. Selected only when that migration is applied.
-const GRADE_SOURCE_COLUMNS = 'g.source, g.verification_status, g.is_in_progress, g.verification_note, g.verified_at, g.catalog_status, g.requested_credit_category, g.credit_category_status, g.credit_category,';
-const GRADE_SOURCE_COLUMNS_019 = 'g.source, g.verification_status, g.is_in_progress, g.verification_note, g.verified_at, g.catalog_status, g.credit_category,';
-const GRADE_SOURCE_COLUMNS_015 = 'g.source, g.verification_status, g.is_in_progress, g.verification_note, g.verified_at,';
+const GRADE_SOURCE_COLUMNS = 'g.source, g.verification_status, g.is_in_progress, g.verification_note, g.verified_at,';
 
 // batch_id is NULL for self-reported rows (migration 015), so batches are joined with LEFT JOIN.
 // An inner join would silently drop every row a student entered.
@@ -1874,21 +1820,10 @@ async function loadGradeRecords(studentId) {
   try {
     return await queryRows(gradeRecordsSql(GRADE_SOURCE_COLUMNS), [studentId]);
   } catch (error) {
+    // Keep the check working on a database that has not applied migration 015 yet. Every row
+    // there is a registrar import, which partitionGradeRecords treats as verified.
     if (error?.code !== 'ER_BAD_FIELD_ERROR') throw error;
-    try {
-      // Migration 015 may exist before the newer catalog metadata migration 019.
-      try {
-        return await queryRows(gradeRecordsSql(GRADE_SOURCE_COLUMNS_019), [studentId]);
-      } catch (catalogError) {
-        if (catalogError?.code !== 'ER_BAD_FIELD_ERROR') throw catalogError;
-        return await queryRows(gradeRecordsSql(GRADE_SOURCE_COLUMNS_015), [studentId]);
-      }
-    } catch (sourceError) {
-      // Keep the check working on a database that has not applied migration 015 yet. Every row
-      // there is a registrar import, which partitionGradeRecords treats as verified.
-      if (sourceError?.code !== 'ER_BAD_FIELD_ERROR') throw sourceError;
-      return queryRows(gradeRecordsSql(''), [studentId]);
-    }
+    return queryRows(gradeRecordsSql(''), [studentId]);
   }
 }
 
@@ -1906,10 +1841,6 @@ function shapeGradeRecord(record) {
     dataMode: record.data_mode ?? null,
     source: record.source ?? 'imported',
     verificationStatus: record.verification_status ?? 'verified',
-    catalogStatus: record.catalog_status ?? 'found',
-    requestedCreditCategory: record.requested_credit_category ?? null,
-    creditCategoryStatus: record.credit_category_status ?? 'confirmed',
-    creditCategory: record.credit_category ?? null,
     isInProgress: Number(record.is_in_progress ?? 0) === 1,
     verificationNote: record.verification_note ?? null,
   };
@@ -1986,34 +1917,6 @@ async function buildGraduationResult(studentId) {
   const curriculumId = pickCurriculum(records.filter((record) => record.verification_status !== 'rejected'))
     ?? pickCurriculum(records);
   const allCurriculumRecords = records.filter((record) => record.curriculum_id === curriculumId);
-  let attemptPolicy = 'all';
-  try {
-    const [curriculumPolicy] = await queryRows(
-      'SELECT graduation_attempt_policy FROM curriculum WHERE curriculum_id = ? LIMIT 1',
-      [curriculumId],
-    );
-    if (curriculumPolicy?.graduation_attempt_policy === 'latest') attemptPolicy = 'latest';
-  } catch (error) {
-    // Migration 019 can be applied independently. Until then, use the agreed
-    // default rather than making the whole graduation check unavailable.
-    if (error?.code !== 'ER_BAD_FIELD_ERROR') throw error;
-  }
-  let courseCatalog = null;
-  try {
-    const catalogRows = await queryRows(
-      `SELECT REPLACE(c.course_code, ' ', '') AS course_code,
-              c.credits_total, cc.course_group, cc.requirement_type
-         FROM curriculum_course cc
-         JOIN course c ON c.course_id = cc.course_id
-        WHERE cc.curriculum_id = ?`,
-      [curriculumId],
-    );
-    courseCatalog = new Map(catalogRows.map(row => [String(row.course_code).toUpperCase(), row]));
-  } catch (error) {
-    // Older environments may not have curriculum placement metadata yet. Keep
-    // the existing calculation rather than failing the entire graduation check.
-    if (error?.code !== 'ER_BAD_FIELD_ERROR' && error?.code !== 'ER_NO_SUCH_TABLE') throw error;
-  }
   // Verified, finished rows feed the verdict, and so do undecided student-entered rows while
   // countSelfReported is on. The rest are returned separately and labelled.
   const { counted, pending, rejected, inProgress } = partitionGradeRecords(allCurriculumRecords, { countSelfReported });
@@ -2049,26 +1952,7 @@ async function buildGraduationResult(studentId) {
     })),
     records: curriculumRecords,
     dataSource,
-    attemptPolicy,
-    courseCatalog,
   });
-
-  const creditBucketRequirements = { general_education: 0, specific: 0, minor: 0, free_elective: 0 };
-  const countedCatalogCourses = new Set();
-  for (const row of courseCatalog?.values?.() ?? []) {
-    const code = String(row.course_code ?? '').toUpperCase();
-    if (countedCatalogCourses.has(code)) continue;
-    countedCatalogCourses.add(code);
-    const text = `${row.course_group ?? ''} ${row.requirement_type ?? ''}`.toLowerCase();
-    const bucket = text.includes('ศึกษาทั่วไป') || text.includes('general')
-      ? 'general_education'
-      : text.includes('วิชาโท') || text.includes('minor')
-        ? 'minor'
-        : text.includes('เลือกเสรี') || text.includes('free')
-          ? 'free_elective'
-          : 'specific';
-    creditBucketRequirements[bucket] += Number(row.credits_total) || 0;
-  }
 
   const [studyPlan = null] = await queryRows(
     `SELECT study_plan_id, plan_name, plan_name_th, plan_name_en, pathway_id
@@ -2141,10 +2025,6 @@ async function buildGraduationResult(studentId) {
     selfReportedCounts: countSelfReported,
     dataSource,
     totals: evaluation.totals,
-    attemptPolicy,
-    creditBuckets: evaluation.creditBuckets,
-    creditBucketRequirements,
-    pendingCreditReview: evaluation.pendingCreditReview,
     conditions: evaluation.conditions,
     // `records` are the rows the verdict is based on. The groups below are never counted.
     records: curriculumRecords.map(shapeGradeRecord),
@@ -2520,7 +2400,7 @@ async function listAllGraduationAssignments(event) {
   })) });
 }
 
-const SELF_REPORT_MIGRATION_ERROR = 'Self-reported grades need migrations 015 and 021 on the database';
+const SELF_REPORT_MIGRATION_ERROR = 'Self-reported grades need migration 015 on the database';
 const normalizeGradeCourseCode = (value) => String(value ?? '').replace(/\s+/g, '').toUpperCase();
 
 // A student adds a grade for themselves. The row is stored as self_reported + unverified, so
@@ -2557,9 +2437,6 @@ async function saveSelfReportedGrade(actor, body) {
   const semester = Number(body.semester);
   const inProgress = body.inProgress === true;
   const grade = inProgress ? '-' : String(body.grade ?? '').trim().toUpperCase();
-  const requestedCategory = String(body.categoryIntent ?? '').trim().toLowerCase() || null;
-  const allowedRequestedCategories = new Set(['free_elective', 'major_elective', 'minor', 'general_education', 'specific']);
-  if (requestedCategory && !allowedRequestedCategories.has(requestedCategory)) return response(400, { error: 'categoryIntent is invalid' });
 
   if (!curriculumId || curriculumId.length > 50) return response(400, { error: 'curriculumId is required' });
   if (!/^[A-Z0-9]{2,30}$/.test(courseCode)) return response(400, { error: 'courseCode is invalid' });
@@ -2569,13 +2446,6 @@ async function saveSelfReportedGrade(actor, body) {
 
   const [curriculum] = await queryRows('SELECT curriculum_id FROM curriculum WHERE curriculum_id = ? LIMIT 1', [curriculumId]);
   if (!curriculum) return response(400, { error: 'curriculumId does not exist' });
-  try {
-    if (await graduationReviewBlocksEdit(studentId, curriculumId)) {
-      return response(409, { error: 'This graduation review is pending staff review; editing is locked' });
-    }
-  } catch (error) {
-    if (error?.code !== 'ER_NO_SUCH_TABLE') throw error;
-  }
 
   // The catalog is the source of truth for credits when it knows the course.
   const [catalogCourse] = await queryRows(
@@ -2584,7 +2454,6 @@ async function saveSelfReportedGrade(actor, body) {
       ORDER BY active DESC, course_id LIMIT 1`,
     [courseCode],
   );
-  const catalogStatus = catalogCourse ? 'found' : 'not_found';
   const credits = catalogCourse ? Number(catalogCourse.credits_total) : Number(body.credits);
   if (!Number.isFinite(credits) || credits < 0 || credits > 12 || (credits * 2) % 1 !== 0) {
     return response(400, { error: 'credits must be between 0 and 12 in steps of 0.5' });
@@ -2611,21 +2480,19 @@ async function saveSelfReportedGrade(actor, body) {
       if (!editable) return response(409, { error: 'A grade for this course and term already exists' });
       await pool.execute(
         `UPDATE graduation_grade_record
-            SET credits = ?, grade = ?, is_in_progress = ?, requested_credit_category = ?,
-                credit_category_status = ?, credit_category = NULL, row_hash = ?, verification_status = 'unverified',
+            SET credits = ?, grade = ?, is_in_progress = ?, row_hash = ?, verification_status = 'unverified',
                 verified_by = NULL, verified_at = NULL, verification_note = NULL
           WHERE grade_record_id = ? AND student_id = ?`,
-        [credits, grade, inProgress ? 1 : 0, requestedCategory, requestedCategory ? 'pending' : (catalogStatus === 'not_found' ? 'pending' : 'confirmed'), rowHash, existing.grade_record_id, studentId],
+        [credits, grade, inProgress ? 1 : 0, rowHash, existing.grade_record_id, studentId],
       );
       recordId = Number(existing.grade_record_id);
     } else {
       const [inserted] = await pool.execute(
         `INSERT INTO graduation_grade_record
           (student_id, curriculum_id, academic_year, semester, course_code, credits, grade,
-           catalog_status, requested_credit_category, credit_category_status, credit_category,
            source, verification_status, is_in_progress, row_hash, batch_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'self_reported', 'unverified', ?, ?, NULL)`,
-        [studentId, curriculumId, academicYear, semester, courseCode, credits, grade, catalogStatus, requestedCategory, requestedCategory ? 'pending' : (catalogStatus === 'not_found' ? 'pending' : 'confirmed'), inProgress ? 1 : 0, rowHash],
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'self_reported', 'unverified', ?, ?, NULL)`,
+        [studentId, curriculumId, academicYear, semester, courseCode, credits, grade, inProgress ? 1 : 0, rowHash],
       );
       recordId = Number(inserted.insertId);
     }
@@ -2653,10 +2520,6 @@ async function saveSelfReportedGrade(actor, body) {
     isInProgress: inProgress,
     source: 'self_reported',
     verificationStatus: 'unverified',
-    catalogStatus,
-    requestedCreditCategory: requestedCategory,
-    creditCategoryStatus: requestedCategory || catalogStatus === 'not_found' ? 'pending' : 'confirmed',
-    creditCategory: null,
   } });
 }
 
@@ -2682,13 +2545,6 @@ async function updateSelfReportedGrade(event) {
       [recordId, actor.username],
     );
     if (!row) return response(404, { error: 'Grade row not found' });
-    try {
-      if (await graduationReviewBlocksEdit(actor.username, row.curriculum_id)) {
-        return response(409, { error: 'This graduation review is pending staff review; editing is locked' });
-      }
-    } catch (error) {
-      if (error?.code !== 'ER_NO_SUCH_TABLE') throw error;
-    }
     if (!['unverified', 'rejected'].includes(row.verification_status)) return response(409, { error: 'A verified grade can no longer be changed' });
     const rowHash = crypto.createHash('sha256')
       .update(JSON.stringify([actor.username, row.curriculum_id, Number(row.academic_year), Number(row.semester), row.course_code, Number(row.credits), grade, inProgress]))
@@ -2725,15 +2581,6 @@ async function deleteSelfReportedGrade(event) {
   if (!Number.isInteger(recordId) || recordId < 1) return response(400, { error: 'gradeRecordId is invalid' });
   let result;
   try {
-    const [row] = await queryRows(
-      `SELECT curriculum_id FROM graduation_grade_record
-        WHERE grade_record_id = ? AND student_id = ?
-          AND source = 'self_reported' AND verification_status = 'unverified'`,
-      [recordId, actor.username],
-    );
-    if (row && await graduationReviewBlocksEdit(actor.username, row.curriculum_id)) {
-      return response(409, { error: 'This graduation review is pending staff review; editing is locked' });
-    }
     [result] = await pool.execute(
       `DELETE FROM graduation_grade_record
         WHERE grade_record_id = ? AND student_id = ?
@@ -2799,229 +2646,6 @@ async function decideSelfReportedGrade(event) {
   return response(200, { data: { id: recordId, verificationStatus: decision === 'verify' ? 'verified' : 'rejected' } });
 }
 
-// Staff/instructor may classify an outside-catalog row only for an assigned student.
-// Classification is separate from verification: it controls whether credits may satisfy
-// a graduation bucket, while the grade remains subject to the normal review workflow.
-async function classifySelfReportedGrade(event) {
-  const actor = actorFromRequest(event);
-  const studentId = String(pathParameter(event, 'studentId') ?? '').trim();
-  const recordId = Number(pathParameter(event, 'gradeRecordId'));
-  if (!graduationStudentIdPattern.test(studentId)) return response(400, { error: 'studentId is invalid' });
-  if (!Number.isInteger(recordId) || recordId < 1) return response(400, { error: 'gradeRecordId is invalid' });
-  if (!['instructor', 'staff'].includes(actor.role)) return response(403, { error: 'Forbidden' });
-  const assigned = await assignedGraduationStudentIds(actor.username);
-  if (!canViewGraduation(actor, studentId, assigned).allowed) return response(403, { error: 'Forbidden' });
-  const body = requestBody(event);
-  if (!body) return response(400, { error: 'Request body must be valid JSON' });
-  const category = String(body.category ?? '').trim().toLowerCase();
-  const allowedCategories = new Set(['free_elective', 'major_elective', 'minor', 'general_education', 'specific', 'not_counted']);
-  if (!allowedCategories.has(category)) return response(400, { error: 'category is invalid' });
-
-  let result;
-  try {
-    [result] = await pool.execute(
-      `UPDATE graduation_grade_record
-          SET credit_category = ?, credit_category_status = 'confirmed'
-        WHERE grade_record_id = ? AND student_id = ?
-          AND source = 'self_reported'`,
-      [category === 'not_counted' ? null : category, recordId, studentId],
-    );
-  } catch (error) {
-    if (error?.code === 'ER_BAD_FIELD_ERROR') return response(503, { error: SELF_REPORT_MIGRATION_ERROR });
-    throw error;
-  }
-  if (!result.affectedRows) return response(404, { error: 'No outside-catalog row with this id' });
-  await writeAuditLog({
-    username: actor.username,
-    role: actor.role,
-    action: 'graduation_grade_classified',
-    entityType: 'student_graduation',
-    entityId: studentId,
-    newValue: { gradeRecordId: recordId, category },
-  });
-  return response(200, { data: { id: recordId, creditCategory: category === 'not_counted' ? null : category } });
-}
-
-const GRADUATION_REVIEW_MIGRATION_ERROR = 'Graduation review workflow needs migration 020 on the database';
-
-function shapeGraduationReviewRequest(row) {
-  if (!row) return null;
-  return {
-    id: Number(row.review_request_id),
-    studentId: row.student_id,
-    curriculumId: row.curriculum_id,
-    status: row.status,
-    submittedBy: row.submitted_by ?? null,
-    submittedAt: row.submitted_at ?? null,
-    reviewedBy: row.reviewed_by ?? null,
-    reviewedAt: row.reviewed_at ?? null,
-    reviewNote: row.review_note ?? null,
-    createdAt: row.created_at ?? null,
-    updatedAt: row.updated_at ?? null,
-    selfReportedCount: row.self_reported_count == null ? null : Number(row.self_reported_count),
-    outsideCatalogCount: row.outside_catalog_count == null ? null : Number(row.outside_catalog_count),
-    unverifiedCount: row.unverified_count == null ? null : Number(row.unverified_count),
-  };
-}
-
-async function latestGraduationReview(studentId, curriculumId) {
-  const [row] = await queryRows(
-    `SELECT review_request_id, student_id, curriculum_id, status, submitted_by, submitted_at,
-            reviewed_by, reviewed_at, review_note, created_at, updated_at
-       FROM graduation_review_request
-      WHERE student_id = ? AND curriculum_id = ?
-      ORDER BY review_request_id DESC
-      LIMIT 1`,
-    [studentId, curriculumId],
-  );
-  return row ?? null;
-}
-
-async function graduationReviewBlocksEdit(studentId, curriculumId) {
-  const row = await latestGraduationReview(studentId, curriculumId);
-  return row?.status === 'pending_review' ? row : null;
-}
-
-async function getMyGraduationReviewRequest(event) {
-  const actor = actorFromRequest(event);
-  if (actor.role !== 'student') return response(403, { error: 'Only students can view their own review request' });
-  const curriculumId = String(event.queryStringParameters?.curriculumId ?? '').trim();
-  if (!curriculumId || curriculumId.length > 50) return response(400, { error: 'curriculumId is required' });
-  try {
-    return response(200, { data: shapeGraduationReviewRequest(await latestGraduationReview(actor.username, curriculumId)) });
-  } catch (error) {
-    if (error?.code === 'ER_NO_SUCH_TABLE') return response(503, { error: GRADUATION_REVIEW_MIGRATION_ERROR });
-    throw error;
-  }
-}
-
-async function submitMyGraduationReview(event) {
-  const actor = actorFromRequest(event);
-  if (actor.role !== 'student') return response(403, { error: 'Only students can submit their own review request' });
-  const body = requestBody(event);
-  if (!body) return response(400, { error: 'Request body must be valid JSON' });
-  const curriculumId = String(body.curriculumId ?? '').trim();
-  if (!curriculumId || curriculumId.length > 50) return response(400, { error: 'curriculumId is required' });
-  const [curriculum] = await queryRows('SELECT curriculum_id FROM curriculum WHERE curriculum_id = ? LIMIT 1', [curriculumId]);
-  if (!curriculum) return response(400, { error: 'curriculumId does not exist' });
-
-  try {
-    const current = await latestGraduationReview(actor.username, curriculumId);
-    if (current?.status === 'pending_review') return response(409, { error: 'This graduation review is already pending staff review' });
-    if (current?.status === 'approved') return response(409, { error: 'This graduation review has already been approved' });
-    let requestId;
-    if (current) {
-      await pool.execute(
-        `UPDATE graduation_review_request
-            SET status = 'pending_review', submitted_by = ?, submitted_at = CURRENT_TIMESTAMP,
-                reviewed_by = NULL, reviewed_at = NULL, review_note = NULL
-          WHERE review_request_id = ?`,
-        [actor.username, current.review_request_id],
-      );
-      requestId = Number(current.review_request_id);
-    } else {
-      const [result] = await pool.execute(
-        `INSERT INTO graduation_review_request
-          (student_id, curriculum_id, status, submitted_by, submitted_at)
-         VALUES (?, ?, 'pending_review', ?, CURRENT_TIMESTAMP)`,
-        [actor.username, curriculumId, actor.username],
-      );
-      requestId = Number(result.insertId);
-    }
-    await writeAuditLog({
-      username: actor.username,
-      role: actor.role,
-      action: 'graduation_review_submitted',
-      entityType: 'graduation_review',
-      entityId: String(requestId),
-      newValue: { studentId: actor.username, curriculumId },
-    });
-    return response(201, { data: { id: requestId, status: 'pending_review', curriculumId } });
-  } catch (error) {
-    if (error?.code === 'ER_NO_SUCH_TABLE') return response(503, { error: GRADUATION_REVIEW_MIGRATION_ERROR });
-    throw error;
-  }
-}
-
-async function listGraduationReviewRequests(event) {
-  const actor = actorFromRequest(event);
-  if (!['instructor', 'staff'].includes(actor.role)) return response(403, { error: 'Only assigned reviewers can view graduation requests' });
-  try {
-    const rows = await queryRows(
-      `SELECT r.review_request_id, r.student_id, r.curriculum_id, r.status, r.submitted_by,
-              r.submitted_at, r.reviewed_by, r.reviewed_at, r.review_note, r.created_at, r.updated_at,
-              COUNT(CASE WHEN g.source = 'self_reported' THEN 1 END) AS self_reported_count,
-              COUNT(CASE WHEN g.source = 'self_reported' AND g.catalog_status = 'not_found' THEN 1 END) AS outside_catalog_count,
-              COUNT(CASE WHEN g.source = 'self_reported' AND g.verification_status = 'unverified' THEN 1 END) AS unverified_count
-         FROM graduation_review_request r
-         JOIN graduation_student_assignment a ON a.student_id = r.student_id AND a.assignee_username = ?
-         LEFT JOIN graduation_grade_record g ON g.student_id = r.student_id AND g.curriculum_id = r.curriculum_id
-        WHERE r.review_request_id = (
-          SELECT MAX(r2.review_request_id)
-            FROM graduation_review_request r2
-           WHERE r2.student_id = r.student_id AND r2.curriculum_id = r.curriculum_id
-        )
-        GROUP BY r.review_request_id, r.student_id, r.curriculum_id, r.status, r.submitted_by,
-                 r.submitted_at, r.reviewed_by, r.reviewed_at, r.review_note, r.created_at, r.updated_at
-        ORDER BY CASE WHEN r.status = 'pending_review' THEN 0 ELSE 1 END, r.updated_at DESC`,
-      [actor.username],
-    );
-    return response(200, { data: rows.map(shapeGraduationReviewRequest) });
-  } catch (error) {
-    if (error?.code === 'ER_NO_SUCH_TABLE') return response(503, { error: GRADUATION_REVIEW_MIGRATION_ERROR });
-    throw error;
-  }
-}
-
-async function decideGraduationReviewRequest(event) {
-  const actor = actorFromRequest(event);
-  if (actor.role !== 'staff') return response(403, { error: 'Only staff can decide graduation review requests' });
-  const requestId = Number(pathParameter(event, 'reviewRequestId'));
-  if (!Number.isInteger(requestId) || requestId < 1) return response(400, { error: 'reviewRequestId is invalid' });
-  const body = requestBody(event);
-  if (!body) return response(400, { error: 'Request body must be valid JSON' });
-  const decision = String(body.decision ?? '').trim();
-  const note = String(body.note ?? '').trim().slice(0, 1000) || null;
-  if (!['approve', 'return'].includes(decision)) return response(400, { error: 'decision must be approve or return' });
-  try {
-    const [request] = await queryRows(
-      `SELECT r.* FROM graduation_review_request r
-        JOIN graduation_student_assignment a ON a.student_id = r.student_id AND a.assignee_username = ?
-       WHERE r.review_request_id = ? LIMIT 1`,
-      [actor.username, requestId],
-    );
-    if (!request) return response(404, { error: 'Graduation review request not found' });
-    if (request.status !== 'pending_review') return response(409, { error: 'Only pending review requests can be decided' });
-    if (decision === 'approve') {
-      const [{ count }] = await queryRows(
-        `SELECT COUNT(*) AS count FROM graduation_grade_record
-          WHERE student_id = ? AND curriculum_id = ? AND source = 'self_reported'
-            AND verification_status = 'unverified'`,
-        [request.student_id, request.curriculum_id],
-      );
-      if (Number(count) > 0) return response(409, { error: 'Verify or reject every self-reported grade before approving this review' });
-    }
-    await pool.execute(
-      `UPDATE graduation_review_request
-          SET status = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, review_note = ?
-        WHERE review_request_id = ? AND status = 'pending_review'`,
-      [decision === 'approve' ? 'approved' : 'returned', actor.username, note, requestId],
-    );
-    await writeAuditLog({
-      username: actor.username,
-      role: actor.role,
-      action: decision === 'approve' ? 'graduation_review_approved' : 'graduation_review_returned',
-      entityType: 'graduation_review',
-      entityId: String(requestId),
-      newValue: { studentId: request.student_id, curriculumId: request.curriculum_id, note },
-    });
-    return response(200, { data: { id: requestId, status: decision === 'approve' ? 'approved' : 'returned', reviewNote: note } });
-  } catch (error) {
-    if (error?.code === 'ER_NO_SUCH_TABLE') return response(503, { error: GRADUATION_REVIEW_MIGRATION_ERROR });
-    throw error;
-  }
-}
-
 async function listGraduationImportBatches(event) {
   const actor = actorFromRequest(event);
   if (actor.role !== 'staff') return response(403, { error: 'Only staff can view import history' });
@@ -3044,14 +2668,6 @@ async function listGraduationImportBatches(event) {
 //   trailing slash is dropped so "/api/courses/" and "/api/courses" are the same route.
 export function normalizeRoute(event) {
   if (event.routeKey) {
-    // A greedy graduation route is used for the review workflow so SAM creates one
-    // Lambda permission instead of one permission per new endpoint. Resolve it back
-    // to the actual method/path before the router dispatches the request.
-    if (event.routeKey.includes('{proxy+}')) {
-      const method = event.requestContext?.http?.method ?? event.httpMethod;
-      const path = String(event.rawPath ?? event.path ?? event.requestContext?.http?.path ?? '').replace(/(.)\/+$/, '$1');
-      return normalizeGraduationGreedyRoute(event, method, path);
-    }
     const isCourseDetail = event.routeKey === 'GET /api/courses/{courseId}'
       || event.routeKey === 'GET /api/courses/{courseCode}';
     const hasCourseId = Boolean(pathParameter(event, 'courseId') || pathParameter(event, 'courseCode'));
@@ -3118,10 +2734,7 @@ export const handler = async (event) => {
     if (route === 'POST /api/graduation/me/grades') return await addSelfReportedGrade(event);
     if (route === 'DELETE /api/graduation/me/grades/{gradeRecordId}') return await deleteSelfReportedGrade(event);
     if (route === 'PATCH /api/graduation/me/grades/{gradeRecordId}') return await updateSelfReportedGrade(event);
-    if (route === 'POST /api/graduation/me/review-request/submit') return await submitMyGraduationReview(event);
-    if (route === 'POST /api/graduation/review-requests/{reviewRequestId}/decision') return await decideGraduationReviewRequest(event);
     if (route === 'POST /api/graduation/students/{studentId}/grades/{gradeRecordId}/verification') return await decideSelfReportedGrade(event);
-    if (route === 'PATCH /api/graduation/students/{studentId}/grades/{gradeRecordId}/classification') return await classifySelfReportedGrade(event);
     if (method !== 'GET') return response(405, { error: 'Method not allowed' });
     if (route === 'GET /api/courses') return await listCourses(event);
     if (route.endsWith('/prerequisites') && route.startsWith('GET /api/courses/')) return await listPrerequisites(event);
@@ -3143,9 +2756,7 @@ export const handler = async (event) => {
     if (route === 'GET /api/curriculum-changes') return await listCurriculumChanges(event);
     if (route === 'GET /api/students/me/contact') return await getStudentContact(event);
     if (route === 'GET /api/graduation/me') return await graduationForStudent(event);
-    if (route === 'GET /api/graduation/me/review-request') return await getMyGraduationReviewRequest(event);
     if (route === 'GET /api/graduation/students') return await listAssignedGraduationStudents(event);
-    if (route === 'GET /api/graduation/review-requests') return await listGraduationReviewRequests(event);
     if (route === 'GET /api/graduation/assignments') return await listAllGraduationAssignments(event);
     if (route === 'GET /api/graduation/directory') return await listGraduationDirectory(event);
     if (route === 'GET /api/graduation/students/{studentId}') return await graduationForStudentId(event);
