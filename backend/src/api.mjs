@@ -1847,7 +1847,8 @@ const GRADUATION_SOURCE_KEY = 'registrar-demo';
 const graduationStudentIdPattern = /^[A-Za-z0-9]{1,20}$/;
 
 // Columns added by migration 015. Selected only when that migration is applied.
-const GRADE_SOURCE_COLUMNS = 'g.source, g.verification_status, g.is_in_progress, g.verification_note, g.verified_at, g.catalog_status, g.credit_category,';
+const GRADE_SOURCE_COLUMNS = 'g.source, g.verification_status, g.is_in_progress, g.verification_note, g.verified_at, g.catalog_status, g.requested_credit_category, g.credit_category_status, g.credit_category,';
+const GRADE_SOURCE_COLUMNS_019 = 'g.source, g.verification_status, g.is_in_progress, g.verification_note, g.verified_at, g.catalog_status, g.credit_category,';
 const GRADE_SOURCE_COLUMNS_015 = 'g.source, g.verification_status, g.is_in_progress, g.verification_note, g.verified_at,';
 
 // batch_id is NULL for self-reported rows (migration 015), so batches are joined with LEFT JOIN.
@@ -1876,7 +1877,12 @@ async function loadGradeRecords(studentId) {
     if (error?.code !== 'ER_BAD_FIELD_ERROR') throw error;
     try {
       // Migration 015 may exist before the newer catalog metadata migration 019.
-      return await queryRows(gradeRecordsSql(GRADE_SOURCE_COLUMNS_015), [studentId]);
+      try {
+        return await queryRows(gradeRecordsSql(GRADE_SOURCE_COLUMNS_019), [studentId]);
+      } catch (catalogError) {
+        if (catalogError?.code !== 'ER_BAD_FIELD_ERROR') throw catalogError;
+        return await queryRows(gradeRecordsSql(GRADE_SOURCE_COLUMNS_015), [studentId]);
+      }
     } catch (sourceError) {
       // Keep the check working on a database that has not applied migration 015 yet. Every row
       // there is a registrar import, which partitionGradeRecords treats as verified.
@@ -1901,6 +1907,8 @@ function shapeGradeRecord(record) {
     source: record.source ?? 'imported',
     verificationStatus: record.verification_status ?? 'verified',
     catalogStatus: record.catalog_status ?? 'found',
+    requestedCreditCategory: record.requested_credit_category ?? null,
+    creditCategoryStatus: record.credit_category_status ?? 'confirmed',
     creditCategory: record.credit_category ?? null,
     isInProgress: Number(record.is_in_progress ?? 0) === 1,
     verificationNote: record.verification_note ?? null,
@@ -1994,7 +2002,7 @@ async function buildGraduationResult(studentId) {
   try {
     const catalogRows = await queryRows(
       `SELECT REPLACE(c.course_code, ' ', '') AS course_code,
-              cc.course_group, cc.requirement_type
+              c.credits_total, cc.course_group, cc.requirement_type
          FROM curriculum_course cc
          JOIN course c ON c.course_id = cc.course_id
         WHERE cc.curriculum_id = ?`,
@@ -2044,6 +2052,23 @@ async function buildGraduationResult(studentId) {
     attemptPolicy,
     courseCatalog,
   });
+
+  const creditBucketRequirements = { general_education: 0, specific: 0, minor: 0, free_elective: 0 };
+  const countedCatalogCourses = new Set();
+  for (const row of courseCatalog?.values?.() ?? []) {
+    const code = String(row.course_code ?? '').toUpperCase();
+    if (countedCatalogCourses.has(code)) continue;
+    countedCatalogCourses.add(code);
+    const text = `${row.course_group ?? ''} ${row.requirement_type ?? ''}`.toLowerCase();
+    const bucket = text.includes('ศึกษาทั่วไป') || text.includes('general')
+      ? 'general_education'
+      : text.includes('วิชาโท') || text.includes('minor')
+        ? 'minor'
+        : text.includes('เลือกเสรี') || text.includes('free')
+          ? 'free_elective'
+          : 'specific';
+    creditBucketRequirements[bucket] += Number(row.credits_total) || 0;
+  }
 
   const [studyPlan = null] = await queryRows(
     `SELECT study_plan_id, plan_name, plan_name_th, plan_name_en, pathway_id
@@ -2118,6 +2143,7 @@ async function buildGraduationResult(studentId) {
     totals: evaluation.totals,
     attemptPolicy,
     creditBuckets: evaluation.creditBuckets,
+    creditBucketRequirements,
     pendingCreditReview: evaluation.pendingCreditReview,
     conditions: evaluation.conditions,
     // `records` are the rows the verdict is based on. The groups below are never counted.
@@ -2494,7 +2520,7 @@ async function listAllGraduationAssignments(event) {
   })) });
 }
 
-const SELF_REPORT_MIGRATION_ERROR = 'Self-reported grades need migration 015 on the database';
+const SELF_REPORT_MIGRATION_ERROR = 'Self-reported grades need migrations 015 and 021 on the database';
 const normalizeGradeCourseCode = (value) => String(value ?? '').replace(/\s+/g, '').toUpperCase();
 
 // A student adds a grade for themselves. The row is stored as self_reported + unverified, so
@@ -2531,6 +2557,9 @@ async function saveSelfReportedGrade(actor, body) {
   const semester = Number(body.semester);
   const inProgress = body.inProgress === true;
   const grade = inProgress ? '-' : String(body.grade ?? '').trim().toUpperCase();
+  const requestedCategory = String(body.categoryIntent ?? '').trim().toLowerCase() || null;
+  const allowedRequestedCategories = new Set(['free_elective', 'major_elective', 'minor', 'general_education', 'specific']);
+  if (requestedCategory && !allowedRequestedCategories.has(requestedCategory)) return response(400, { error: 'categoryIntent is invalid' });
 
   if (!curriculumId || curriculumId.length > 50) return response(400, { error: 'curriculumId is required' });
   if (!/^[A-Z0-9]{2,30}$/.test(courseCode)) return response(400, { error: 'courseCode is invalid' });
@@ -2582,19 +2611,21 @@ async function saveSelfReportedGrade(actor, body) {
       if (!editable) return response(409, { error: 'A grade for this course and term already exists' });
       await pool.execute(
         `UPDATE graduation_grade_record
-            SET credits = ?, grade = ?, is_in_progress = ?, row_hash = ?, verification_status = 'unverified',
+            SET credits = ?, grade = ?, is_in_progress = ?, requested_credit_category = ?,
+                credit_category_status = ?, credit_category = NULL, row_hash = ?, verification_status = 'unverified',
                 verified_by = NULL, verified_at = NULL, verification_note = NULL
           WHERE grade_record_id = ? AND student_id = ?`,
-        [credits, grade, inProgress ? 1 : 0, rowHash, existing.grade_record_id, studentId],
+        [credits, grade, inProgress ? 1 : 0, requestedCategory, requestedCategory ? 'pending' : (catalogStatus === 'not_found' ? 'pending' : 'confirmed'), rowHash, existing.grade_record_id, studentId],
       );
       recordId = Number(existing.grade_record_id);
     } else {
       const [inserted] = await pool.execute(
         `INSERT INTO graduation_grade_record
           (student_id, curriculum_id, academic_year, semester, course_code, credits, grade,
-           catalog_status, credit_category, source, verification_status, is_in_progress, row_hash, batch_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'self_reported', 'unverified', ?, ?, NULL)`,
-        [studentId, curriculumId, academicYear, semester, courseCode, credits, grade, catalogStatus, inProgress ? 1 : 0, rowHash],
+           catalog_status, requested_credit_category, credit_category_status, credit_category,
+           source, verification_status, is_in_progress, row_hash, batch_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'self_reported', 'unverified', ?, ?, NULL)`,
+        [studentId, curriculumId, academicYear, semester, courseCode, credits, grade, catalogStatus, requestedCategory, requestedCategory ? 'pending' : (catalogStatus === 'not_found' ? 'pending' : 'confirmed'), inProgress ? 1 : 0, rowHash],
       );
       recordId = Number(inserted.insertId);
     }
@@ -2623,6 +2654,8 @@ async function saveSelfReportedGrade(actor, body) {
     source: 'self_reported',
     verificationStatus: 'unverified',
     catalogStatus,
+    requestedCreditCategory: requestedCategory,
+    creditCategoryStatus: requestedCategory || catalogStatus === 'not_found' ? 'pending' : 'confirmed',
     creditCategory: null,
   } });
 }
@@ -2788,9 +2821,9 @@ async function classifySelfReportedGrade(event) {
   try {
     [result] = await pool.execute(
       `UPDATE graduation_grade_record
-          SET credit_category = ?
+          SET credit_category = ?, credit_category_status = 'confirmed'
         WHERE grade_record_id = ? AND student_id = ?
-          AND source = 'self_reported' AND catalog_status = 'not_found'`,
+          AND source = 'self_reported'`,
       [category === 'not_counted' ? null : category, recordId, studentId],
     );
   } catch (error) {

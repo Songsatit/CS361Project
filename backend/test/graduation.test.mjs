@@ -344,6 +344,21 @@ test('a staff-assigned category makes an outside-catalog course countable for cr
   assert.equal(result.buckets.get('free_elective'), 3);
 });
 
+test('a student category request stays pending until staff confirms it', () => {
+  const result = summarizeCreditBuckets([
+    {
+      course_code: 'CSMINOR1',
+      credits: 3,
+      grade: 'A',
+      catalog_status: 'found',
+      requested_credit_category: 'minor',
+      credit_category_status: 'pending',
+    },
+  ], { courseCatalog: new Map([['CSMINOR1', { course_group: 'วิชาเฉพาะ' }]]) });
+  assert.deepEqual(result.pendingReview, [{ courseCode: 'CSMINOR1', reason: 'pending_category_review' }]);
+  assert.equal(result.buckets.size, 0);
+});
+
 test('no rule for any condition never produces a met verdict', () => {
   const result = evaluateGraduation({
     conditions: DEMO_CONDITIONS,

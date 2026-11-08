@@ -50,6 +50,9 @@ export function classifyCourseCredit(record, { courseCatalog = null, category = 
   const code = normalizeCourse(record.course_code);
   const catalogProvided = courseCatalog instanceof Map;
   const catalogCourse = catalogProvided ? courseCatalog.get(code) : undefined;
+  if (record.credit_category_status === 'pending') {
+    return { category: record.requested_credit_category ?? null, countable: false, reviewStatus: 'pending_category_review', freeElectiveEligible: false };
+  }
   if ((record.catalog_status === 'not_found' && !record.credit_category) || (catalogProvided && !catalogCourse && !record.credit_category)) {
     return { category: null, countable: false, reviewStatus: 'pending_catalog_review', freeElectiveEligible: false };
   }
