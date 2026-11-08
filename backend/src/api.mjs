@@ -369,7 +369,7 @@ export const authHandler = async (event) => {
   try {
     // Graduation review routes share one greedy API Gateway permission on this
     // lightweight function. The main router still enforces authentication and role scope.
-    const path = String(event.rawPath ?? event.path ?? '');
+    const path = String(event.rawPath ?? event.path ?? event.requestContext?.http?.path ?? '');
     if (path.startsWith('/api/graduation/')) return await handler(event);
     const method = event.requestContext?.http?.method ?? event.httpMethod;
     if (method === 'GET') return await getStudentProfile(event);
@@ -439,6 +439,54 @@ export async function writeAuditLog({
 
 function pathParameter(event, name) {
   return event.pathParameters?.[name] ?? event.pathParameters?.[name.toLowerCase()];
+}
+
+function normalizeGraduationGreedyRoute(event, method, path) {
+  const parts = path.split('/').filter(Boolean);
+  const graduationIndex = parts.indexOf('graduation');
+  const tail = graduationIndex >= 0 ? parts.slice(graduationIndex + 1) : [];
+  const params = { ...(event.pathParameters ?? {}) };
+  const set = (name, value) => { params[name] = decodeURIComponent(value); };
+  let route = `${method} ${path}`;
+  if (tail[0] === 'me' && tail.length === 1 && method === 'GET') {
+    route = 'GET /api/graduation/me';
+  } else if (tail[0] === 'me' && tail[1] === 'review-request' && tail.length === 2 && method === 'GET') {
+    route = 'GET /api/graduation/me/review-request';
+  } else if (tail[0] === 'me' && tail[1] === 'review-request' && tail[2] === 'submit' && tail.length === 3 && method === 'POST') {
+    route = 'POST /api/graduation/me/review-request/submit';
+  } else if (tail[0] === 'me' && tail[1] === 'grades' && tail.length === 2 && method === 'POST') {
+    route = 'POST /api/graduation/me/grades';
+  } else if (tail[0] === 'me' && tail[1] === 'grades' && tail.length === 3 && ['PATCH', 'DELETE'].includes(method)) {
+    set('gradeRecordId', tail[2]);
+    route = `${method} /api/graduation/me/grades/{gradeRecordId}`;
+  } else if (tail[0] === 'students' && tail.length === 2 && method === 'GET') {
+    set('studentId', tail[1]);
+    route = 'GET /api/graduation/students/{studentId}';
+  } else if (tail[0] === 'students' && tail.length === 1 && method === 'GET') {
+    route = 'GET /api/graduation/students';
+  } else if (tail[0] === 'students' && tail[2] === 'grades' && tail.length === 5
+    && ['POST', 'PATCH'].includes(method)) {
+    set('studentId', tail[1]);
+    set('gradeRecordId', tail[3]);
+    if (tail[4] === 'verification' && method === 'POST') route = 'POST /api/graduation/students/{studentId}/grades/{gradeRecordId}/verification';
+    if (tail[4] === 'classification' && method === 'PATCH') route = 'PATCH /api/graduation/students/{studentId}/grades/{gradeRecordId}/classification';
+  } else if (tail[0] === 'assignments' && tail.length === 1 && ['GET', 'POST'].includes(method)) {
+    route = `${method} /api/graduation/assignments`;
+  } else if (tail[0] === 'assignments' && tail.length === 2 && method === 'DELETE') {
+    set('studentId', tail[1]);
+    route = 'DELETE /api/graduation/assignments/{studentId}';
+  } else if (tail[0] === 'directory' && tail.length === 1 && method === 'GET') {
+    route = 'GET /api/graduation/directory';
+  } else if (tail[0] === 'import-batches' && tail.length === 1 && method === 'GET') {
+    route = 'GET /api/graduation/import-batches';
+  } else if (tail[0] === 'review-requests' && tail.length === 1 && method === 'GET') {
+    route = 'GET /api/graduation/review-requests';
+  } else if (tail[0] === 'review-requests' && tail.length === 3 && tail[2] === 'decision' && method === 'POST') {
+    set('reviewRequestId', tail[1]);
+    route = 'POST /api/graduation/review-requests/{reviewRequestId}/decision';
+  }
+  event.pathParameters = params;
+  return route;
 }
 
 async function listCourses(event) {
@@ -2968,8 +3016,8 @@ export function normalizeRoute(event) {
     // to the actual method/path before the router dispatches the request.
     if (event.routeKey.includes('{proxy+}')) {
       const method = event.requestContext?.http?.method ?? event.httpMethod;
-      const path = String(event.rawPath ?? event.path ?? '').replace(/(.)\/+$/, '$1');
-      return `${method} ${path}`;
+      const path = String(event.rawPath ?? event.path ?? event.requestContext?.http?.path ?? '').replace(/(.)\/+$/, '$1');
+      return normalizeGraduationGreedyRoute(event, method, path);
     }
     const isCourseDetail = event.routeKey === 'GET /api/courses/{courseId}'
       || event.routeKey === 'GET /api/courses/{courseCode}';

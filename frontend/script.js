@@ -1149,6 +1149,7 @@ function renderGraduationPlanForm(result) {
   if (chosenPlan) queueMicrotask(() => ensureGraduationPlan(chosenPlan));
   const terms = graduationPlanTerms({ plan: chosenPlan ? chosenPlan.gradTerms : program?.plan });
   const planLoading = Boolean(chosenPlan && !chosenPlan.gradTerms && !chosenPlan.gradError);
+  const lockedByReview = state.graduationReviewRequest?.status === "pending_review";
 
   // Courses already entered, by code, so a row that was sent is not asked for again.
   const existing = new Map();
@@ -1170,7 +1171,9 @@ function renderGraduationPlanForm(result) {
   const termTable = term => `<section class="graduation-plan-term"><div class="graduation-plan-term-head"><h4>ปี ${esc(term.year)} · ${esc(term.term === 3 ? "Summer" : `ภาค ${term.term}`)}</h4><label class="graduation-plan-bulk">ตั้งทุกวิชาในภาคนี้เป็น <select data-graduation-plan-bulk aria-label="ตั้งเกรดทั้งภาคเรียน">${graduationGradeOptionsHtml("", { blankLabel: "เลือก…" })}</select></label></div><table><thead><tr><th>วิชา</th><th>ชื่อวิชา</th><th>หน่วยกิต</th><th>เกรด</th></tr></thead><tbody>${term.courses.map(code => {
     const info = existing.get(graduationCodeKey(code));
     const course = COURSES[courseKey(code)] ?? {};
-    const cell = info?.locked
+    const cell = lockedByReview
+      ? `<span class="graduation-plan-readonly">${info ? `${esc(info.grade ?? "-")} · ${esc(info.label)}` : "ยังไม่มีข้อมูล"}</span>`
+      : info?.locked
       ? `<span class="graduation-plan-done">${esc(info.label)}</span>`
       : `<select data-graduation-plan-grade="${esc(code)}" aria-label="เกรด ${esc(code)}">${gradeOptions(form.grades?.[code] ?? "")}</select>${info ? `<small> ${esc(info.label)}</small>` : ""}`;
     return `<tr data-plan-row data-code="${esc(code)}" data-year="${esc(term.year)}" data-term="${esc(term.term)}" data-credits="${esc(course.credits ?? "")}"><td>${esc(code)}</td><td>${esc(course.name ?? "-")}</td><td>${esc(course.credits ?? "-")}</td><td>${cell}</td></tr>`;
@@ -1186,7 +1189,6 @@ function renderGraduationPlanForm(result) {
     return `<details class="graduation-year" data-graduation-year="${key}"${open ? " open" : ""}><summary><strong>ปี ${esc(year)}</strong><span>${count} วิชา</span></summary>${yearTerms.map(termTable).join("")}</details>`;
   }).join("");
 
-  const lockedByReview = state.graduationReviewRequest?.status === "pending_review";
   return `<section class="graduation-plan-form" data-graduation-plan-form>
     <h3>เพิ่มผลการเรียนของฉัน</h3>
     <p class="graduation-student-meta">เลือกหลักสูตร แล้วกรอกเกรดตามวิชาในแผนได้เลย เว้นวิชาที่ยังไม่เรียนไว้ วิชาที่ได้เฉพาะหน่วยกิตโดยไม่มีเกรด (ผ่าน/ไม่ผ่าน) ให้เลือก S ในกลุ่ม "ไม่มีเกรด" ระบบนับหน่วยกิตให้แต่ไม่นำไปคิด GPA รายการที่ส่งจะแสดงเป็น "กรอกเอง · ยังไม่ยืนยัน" กำกับไว้เสมอ</p>
@@ -1227,6 +1229,15 @@ function renderGraduationGapPanel(result) {
   const missingCourses = plan.filter(row => ["not_taken", "failed_or_incomplete"].includes(row.status));
   const waiting = plan.filter(row => ["in_progress", "pending_verification"].includes(row.status));
   const pendingCreditReview = result.pendingCreditReview ?? [];
+  const creditBuckets = Object.entries(result.creditBuckets ?? {});
+  const creditBucketLabel = key => ({
+    general_education: "ศึกษาทั่วไป (GE)",
+    free_elective: "วิชาเลือกเสรี",
+    specific: "วิชาเฉพาะ",
+    major_elective: "วิชาเลือกเฉพาะ",
+    minor: "วิชาโท",
+    unclassified: "ยังไม่จัดหมวด",
+  }[key] ?? key);
   const missingCredits = missingCourses.reduce((sum, row) => sum + (Number(row.credits) || 0), 0);
   const creditRule = conditions.find(item => item.details?.earnedCredits != null && item.details?.required != null);
   const creditsLeft = creditRule ? Math.max(0, Number(creditRule.details.required) - Number(creditRule.details.earnedCredits)) : null;
@@ -1246,6 +1257,7 @@ function renderGraduationGapPanel(result) {
       ${creditsLeft !== null ? `<span>ยังขาดอีก <strong>${esc(creditsLeft)}</strong> หน่วยกิต</span>` : ""}
       <span>วิชาในแผนที่ยังไม่ผ่าน/ไม่ได้เรียน <strong>${esc(missingCourses.length)}</strong> วิชา${missingCredits ? ` (${esc(missingCredits)} หน่วยกิต)` : ""}</span>
     </div>
+    ${creditBuckets.length ? `<div class="graduation-credit-buckets" aria-label="หน่วยกิตแยกตามหมวด">${creditBuckets.map(([key, credits]) => `<div class="graduation-credit-bucket"><span>${esc(creditBucketLabel(key))}</span><strong>${esc(credits)} หน่วยกิต</strong></div>`).join("")}</div>` : ""}
     ${nothingMissing && dataOk ? `<p class="graduation-gap-ok">ไม่พบสิ่งที่ขาดจากเงื่อนไขที่ระบบตรวจได้${needsCheck.length ? " (ยังเหลือข้อที่เจ้าหน้าที่ต้องตรวจ)" : ""}</p>` : ""}
     ${notPassed.length ? `<div class="graduation-gap-block"><h4>เงื่อนไขที่ยังไม่ผ่าน</h4><ul>${notPassed.map(item => `<li><strong>${esc(item.text)}</strong>${graduationDetailsText(item) ? `<small>${esc(graduationDetailsText(item))}</small>` : ""}</li>`).join("")}</ul></div>` : ""}
     ${missingCourses.length ? `<div class="graduation-gap-block"><h4>วิชาในแผนที่ยังขาด</h4><div class="graduation-table-wrap"><table><thead><tr><th>ปี/ภาค</th><th>วิชา</th><th>หน่วยกิต</th><th>สถานะ</th></tr></thead><tbody>${missingCourses.map(row => `<tr><td>${esc(termLabel(row))}</td><td>${esc(row.courseCode ?? "-")} ${esc(row.courseNameTh ?? "")}</td><td>${esc(row.credits ?? "-")}</td><td>${esc(statusText[row.status] ?? row.status)}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
