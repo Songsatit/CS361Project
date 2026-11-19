@@ -17,6 +17,7 @@ import crypto from 'node:crypto';
 
 process.env.JWT_SECRET = 'test-secret-not-for-deployment';
 process.env.ENABLE_DEMO_LOGIN = 'true';
+process.env.TU_APPLICATION_KEY = 'test-application-key-not-for-deployment';
 
 // Build a scrypt hash in the exact encoding verifyPassword expects: scrypt$saltHex$digestHex.
 function scryptHash(password) {
@@ -27,7 +28,7 @@ function scryptHash(password) {
 // Set the demo staff password hash before importing the module so demoAccounts picks it up.
 process.env.DEMO_STAFF_PASSWORD_HASH = scryptHash('demo-staff-pass');
 
-const { roleFromTuType, demoLogin } = await import('../src/api.mjs');
+const { roleFromTuType, demoLogin, tuLogin } = await import('../src/api.mjs');
 
 // A fake allowlist table. queryFn receives (sql, params); params[0] is the lower-cased username.
 function allowlistStub(table) {
@@ -102,4 +103,114 @@ test('a demo staff account logs in with its code-defined staff role', () => {
 
 test('a demo login with the wrong password is rejected', () => {
   assert.equal(demoLogin('staff', 'wrong-password'), null);
+});
+
+function loginEvent(username = 'b65test01') {
+  return {
+    body: JSON.stringify({ username, password: 'not-a-real-password' }),
+    requestContext: { http: { sourceIp: '127.0.0.1' } },
+  };
+}
+
+test('TU 200 with status=false is treated as a password failure', async () => {
+  const originalFetch = globalThis.fetch;
+  let failedLoginCalls = 0;
+  globalThis.fetch = async (_url, options) => {
+    assert.ok(options.signal instanceof AbortSignal);
+    assert.equal(options.signal.aborted, false);
+    return new Response(JSON.stringify({ status: false }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+  try {
+    const result = await tuLogin(loginEvent(), {
+      isLoginLockedFn: async () => 0,
+      failedLoginFn: async () => {
+        failedLoginCalls += 1;
+        return { statusCode: 401, body: JSON.stringify({ error: 'Invalid username or password' }) };
+      },
+    });
+    assert.equal(result.statusCode, 401);
+    assert.equal(failedLoginCalls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('TU 403 is returned as 502 without recording a login failure', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalError = console.error;
+  const logs = [];
+  let failedLoginCalls = 0;
+  console.error = (...args) => logs.push(args);
+  globalThis.fetch = async () => new Response('', { status: 403 });
+  try {
+    const result = await tuLogin(loginEvent(), {
+      isLoginLockedFn: async () => 0,
+      failedLoginFn: async () => {
+        failedLoginCalls += 1;
+        return { statusCode: 401 };
+      },
+    });
+    assert.equal(result.statusCode, 502);
+    assert.deepEqual(JSON.parse(result.body), { error: 'TU authentication service unavailable' });
+    assert.equal(failedLoginCalls, 0);
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0][1].status, 403);
+    assert.equal(logs[0][1].type, 'HTTPError');
+    assert.doesNotMatch(JSON.stringify(logs), /b65test01|not-a-real-password/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalError;
+  }
+});
+
+test('TU fetch failure is returned as 502 without recording a login failure', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalError = console.error;
+  const logs = [];
+  let failedLoginCalls = 0;
+  console.error = (...args) => logs.push(args);
+  globalThis.fetch = async () => { throw new TypeError('simulated timeout'); };
+  try {
+    const result = await tuLogin(loginEvent(), {
+      isLoginLockedFn: async () => 0,
+      failedLoginFn: async () => {
+        failedLoginCalls += 1;
+        return { statusCode: 401 };
+      },
+    });
+    assert.equal(result.statusCode, 502);
+    assert.equal(failedLoginCalls, 0);
+    assert.equal(logs[0][1].status, null);
+    assert.equal(logs[0][1].type, 'TypeError');
+    assert.doesNotMatch(JSON.stringify(logs), /b65test01|not-a-real-password|simulated timeout/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalError;
+  }
+});
+
+test('TU 200 with status=true keeps the successful login flow', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    status: true,
+    username: 'b65test01',
+    type: 'employee',
+  }), { status: 200 });
+  try {
+    const result = await tuLogin(loginEvent(), {
+      isLoginLockedFn: async () => 0,
+      resetLoginAttemptsFn: async () => {},
+      safeLoginAuditFn: async () => {},
+      signAccessTokenFn: () => 'test-token',
+      recordDirectoryLoginFn: async () => {},
+    });
+    assert.equal(result.statusCode, 200);
+    assert.equal(JSON.parse(result.body).user.role, 'staff');
+    assert.match(result.headers['Set-Cookie'], /HttpOnly/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
