@@ -16,7 +16,7 @@ cookie จึงถูกส่งไปกับทุก request เพรา�
    | ช่อง | ค่า |
    | --- | --- |
    | Source address | `/api/<*>` |
-   | Target address | `https://qowe6iixr6.execute-api.us-east-1.amazonaws.com/api/<*>` |
+   | Target address | `https://zr7hcd7xn3.execute-api.us-east-1.amazonaws.com/api/<*>` |
    | Type | **Rewrite (200)** |
 
 3. ต้องเป็น **Rewrite (200)** เท่านั้น **ห้ามใช้ Redirect (301/302)** เพราะ redirect จะทำให้
@@ -34,11 +34,9 @@ cookie จึงถูกส่งไปกับทุก request เพรา�
 
 ## หมายเหตุ CSP (`customHttp.yml`)
 
-`connect-src` ปัจจุบันมีทั้ง `'self'` และ URL `execute-api...` อยู่แล้ว
+`connect-src` เหลือ `'self'` เท่านั้นแล้ว
 - `'self'` ครอบคลุมการเรียก `/api/*` แบบ same-origin หลังตั้ง rewrite
-- ยังคง URL `execute-api...` ไว้ชั่วคราวเพื่อให้ rollback ได้โดยไม่ต้องแก้ CSP ซ้ำ หาก rewrite มีปัญหา
-- **PR ถัดไป**: หลังยืนยันว่า `/api/*` ทำงานผ่าน rewrite แล้ว ให้ลบ URL `execute-api...` ออกจาก
-  `connect-src` เพื่อปิดช่องเรียก API ข้ามโดเมนโดยตรง
+- ห้ามเรียก API ผ่านโดเมน `execute-api` โดยตรงจาก frontend เพราะระบบใช้ rewrite เพื่อให้ cookie เป็น same-site
 
 ## เช็กลิสต์ทดสอบในเบราว์เซอร์จริง (ทำเองหลัง deploy ห้ามใช้ curl)
 
@@ -52,5 +50,5 @@ cookie จึงถูกส่งไปกับทุก request เพรา�
       (ดูใน Network tab)
 - [ ] Logout แล้ว cookie `token` หายไปจาก Application tab และกลับสู่สถานะไม่ล็อกอิน
 - [ ] ปล่อยให้ token หมดอายุ (15 นาที) แล้วเรียก API ต้องได้ 401 และ frontend เด้งออกจากระบบเอง
-- [ ] ถ้า cookie ไม่ถูกส่ง: เช็กว่า request ยิงไป `/api/*` (โดเมนเดียวกับหน้าเว็บ) จริง ไม่ใช่
-      `execute-api...` โดยตรง และ rule เป็น Rewrite 200 ไม่ใช่ redirect
+- [ ] ถ้า cookie ไม่ถูกส่ง: เช็กว่า request ยิงไป `/api/*` ผ่านโดเมนเดียวกับหน้าเว็บ และ rule เป็น
+      Rewrite 200 ไม่ใช่ redirect
