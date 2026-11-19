@@ -238,8 +238,8 @@ async function failedLogin(event, username) {
   return invalidLoginResponse();
 }
 
-function tuUpstreamUnavailable(status, type) {
-  console.error('TU authentication upstream error', { status, type });
+function tuUpstreamUnavailable(status) {
+  console.error('TU authentication upstream error', { status });
   return response(502, { error: 'TU authentication service unavailable' });
 }
 
@@ -304,10 +304,10 @@ export async function tuLogin(event, dependencies = {}) {
       },
     );
   } catch (error) {
-    return tuUpstreamUnavailable(null, error?.name ?? 'Error');
+    return tuUpstreamUnavailable(null);
   }
-  if (!authResponse.ok) {
-    return tuUpstreamUnavailable(authResponse.status, 'HTTPError');
+  if (!authResponse.ok && authResponse.status !== 400) {
+    return tuUpstreamUnavailable(authResponse.status);
   }
   const payload = await authResponse.json().catch(() => ({}));
   if (payload.status !== true) {

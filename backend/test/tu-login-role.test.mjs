@@ -138,6 +138,25 @@ test('TU 200 with status=false is treated as a password failure', async () => {
   }
 });
 
+test('TU 400 is treated as a password failure and records the attempt', async () => {
+  const originalFetch = globalThis.fetch;
+  let failedLoginCalls = 0;
+  globalThis.fetch = async () => new Response(JSON.stringify({ message: 'User or Password Invalid!' }), { status: 400 });
+  try {
+    const result = await tuLogin(loginEvent(), {
+      isLoginLockedFn: async () => 0,
+      failedLoginFn: async () => {
+        failedLoginCalls += 1;
+        return { statusCode: 401, body: JSON.stringify({ error: 'Invalid username or password' }) };
+      },
+    });
+    assert.equal(result.statusCode, 401);
+    assert.equal(failedLoginCalls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('TU 403 is returned as 502 without recording a login failure', async () => {
   const originalFetch = globalThis.fetch;
   const originalError = console.error;
@@ -158,7 +177,7 @@ test('TU 403 is returned as 502 without recording a login failure', async () => 
     assert.equal(failedLoginCalls, 0);
     assert.equal(logs.length, 1);
     assert.equal(logs[0][1].status, 403);
-    assert.equal(logs[0][1].type, 'HTTPError');
+    assert.deepEqual(logs[0][1], { status: 403 });
     assert.doesNotMatch(JSON.stringify(logs), /b65test01|not-a-real-password/);
   } finally {
     globalThis.fetch = originalFetch;
@@ -183,12 +202,30 @@ test('TU fetch failure is returned as 502 without recording a login failure', as
     });
     assert.equal(result.statusCode, 502);
     assert.equal(failedLoginCalls, 0);
-    assert.equal(logs[0][1].status, null);
-    assert.equal(logs[0][1].type, 'TypeError');
+    assert.deepEqual(logs[0][1], { status: null });
     assert.doesNotMatch(JSON.stringify(logs), /b65test01|not-a-real-password|simulated timeout/);
   } finally {
     globalThis.fetch = originalFetch;
     console.error = originalError;
+  }
+});
+
+test('TU 401 is returned as 502 without recording a login failure', async () => {
+  const originalFetch = globalThis.fetch;
+  let failedLoginCalls = 0;
+  globalThis.fetch = async () => new Response('', { status: 401 });
+  try {
+    const result = await tuLogin(loginEvent(), {
+      isLoginLockedFn: async () => 0,
+      failedLoginFn: async () => {
+        failedLoginCalls += 1;
+        return { statusCode: 401 };
+      },
+    });
+    assert.equal(result.statusCode, 502);
+    assert.equal(failedLoginCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 
