@@ -162,8 +162,17 @@ curl --silent --show-error --request POST \
   --data '{"UserName":"DEMO-NOT-A-REAL-USER","PassWord":"DEMO-NOT-A-REAL-PASSWORD"}'
 ```
 
-ผลที่คาดหวังคือ HTTP 200 และ `status:false` สำหรับข้อมูลปลอม ไม่ใช่ HTTP 403
-ถ้าได้ 403 ให้ตรวจ Application-Key กับผู้ดูแลก่อนทดสอบระบบต่อ
+ผลที่คาดหวังคือ HTTP 400 พร้อมข้อความ `User or Password Invalid!` สำหรับข้อมูลปลอม
+ซึ่งหมายความว่า Application-Key ถูกต้องแต่ username/password ไม่ถูกต้อง
+
+- HTTP 400 `User or Password Invalid!` = key ถูกต้อง และข้อมูล login ไม่ถูกต้อง
+- HTTP 401 = ไม่ได้ส่ง `Application-Key`
+- HTTP 403 `invalid token` = Application-Key ไม่ถูกต้อง
+
+สามารถขอหรือจัดการ Application-Key ได้ที่
+[TU API Authkey](https://restapi.tu.ac.th/tuapi/Authkey)
+
+ถ้าได้ 401 หรือ 403 ให้ตรวจ header และ Application-Key กับผู้ดูแลก่อนทดสอบระบบต่อ
 
 ## ควบคุมค่าใช้จ่ายและ teardown
 
