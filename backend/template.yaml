@@ -1,14 +1,26 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: CS361 curriculum read API backed by Amazon RDS MySQL through RDS Proxy
+Description: CS361 curriculum API (HTTP API + Lambda) backed by Amazon RDS MySQL, RDS Proxy optional
+
+Metadata:
+  cfn-lint:
+    config:
+      ignore_checks:
+        - W1030  # optional proxy parameters default to empty strings when UseProxy=false
 
 Parameters:
   DbHost:
     Type: String
-    Description: RDS instance endpoint hostname (used by the proxy target)
+    Description: RDS instance endpoint hostname. Lambda connects here directly when UseProxy=false
   DbInstanceIdentifier:
     Type: String
-    Description: Existing RDS DB instance identifier to attach to the proxy
+    Default: ''
+    Description: RDS DB instance identifier to attach to the proxy (only needed when UseProxy=true)
+  UseProxy:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+    Description: Put RDS Proxy between Lambda and RDS. It costs about 22 USD per month, so keep it off unless testing it
   DbName:
     Type: String
     Default: curriculum
@@ -27,14 +39,16 @@ Parameters:
     Type: AWS::EC2::SecurityGroup::Id
     Description: Security group attached to Lambda; allow it in the RDS security group on port 3306
   RdsProxySecurityGroupId:
-    Type: AWS::EC2::SecurityGroup::Id
-    Description: Security group for RDS Proxy; allow inbound MySQL from the Lambda security group
+    Type: String
+    Default: ''
+    Description: Security group for RDS Proxy (only needed when UseProxy=true)
   LambdaExecutionRoleArn:
     Type: String
     Description: Existing IAM execution role ARN for Lambda
   RdsProxyRoleArn:
     Type: String
-    Description: Existing IAM role ARN trusted by rds.amazonaws.com and allowed to read the database secret
+    Default: ''
+    Description: IAM role ARN trusted by rds.amazonaws.com that can read the database secret (only needed when UseProxy=true)
   TuApplicationKey:
     Type: String
     NoEcho: true
@@ -44,7 +58,7 @@ Parameters:
     Default: https://restapi.tu.ac.th/api/v1/auth/Ad/verify2
   FrontendOrigin:
     Type: String
-    Default: https://main.d4mgfx74c182i.amplifyapp.com
+    Description: Origin of the deployed frontend, for example https://main.xxxx.amplifyapp.com (no trailing slash)
   JwtSecret:
     Type: String
     NoEcho: true
@@ -87,14 +101,53 @@ Parameters:
     AllowedValues: ['true', 'false']
     Description: When true, grades a student entered count in the graduation check without staff review (the grade data is a mock). They stay labelled self-reported and unverified. Set false to count only verified rows.
 
+  FunctionMemoryMb:
+    Type: Number
+    Default: 256
+    Description: Lambda memory in MB (V6 tuning knob)
+  FunctionTimeoutSeconds:
+    Type: Number
+    Default: 10
+    Description: Lambda timeout in seconds. API Gateway HTTP API cuts requests at 30 seconds anyway
+  ReadReservedConcurrency:
+    Type: Number
+    Default: 0
+    Description: Reserved concurrency for the API function. 0 means no reservation. Needs a Lambda account limit above 100 plus the reserved amount
+  AuthReservedConcurrency:
+    Type: Number
+    Default: 0
+    Description: Reserved concurrency for the login function. 0 means no reservation
+  LogRetentionDays:
+    Type: Number
+    Default: 7
+    AllowedValues: [1, 3, 5, 7, 14, 30]
+    Description: CloudWatch Logs retention for the Lambda functions
+  ApiThrottleRate:
+    Type: Number
+    Default: 20
+    Description: Default HTTP API steady-state requests per second
+  ApiThrottleBurst:
+    Type: Number
+    Default: 50
+    Description: Default HTTP API burst limit
+
+Conditions:
+  UseProxy: !Equals [!Ref UseProxy, 'true']
+  HasReadReservation: !Not [!Equals [!Ref ReadReservedConcurrency, 0]]
+  HasAuthReservation: !Not [!Equals [!Ref AuthReservedConcurrency, 0]]
+
 Globals:
   Function:
     Runtime: nodejs22.x
-    Timeout: 28
-    MemorySize: 256
+    Architectures:
+      - arm64
+    Timeout: !Ref FunctionTimeoutSeconds
+    MemorySize: !Ref FunctionMemoryMb
+    Tags:
+      Project: cs361
     Environment:
       Variables:
-        DB_HOST: !GetAtt CurriculumDbProxy.Endpoint
+        DB_HOST: !If [UseProxy, !GetAtt CurriculumDbProxy.Endpoint, !Ref DbHost]
         DB_PORT: !Ref DbPort
         DB_NAME: !Ref DbName
         DB_USER: !Ref DbUser
@@ -119,12 +172,14 @@ Globals:
 Resources:
   CurriculumDbSecret:
     Type: AWS::SecretsManager::Secret
+    Condition: UseProxy
     Properties:
       Description: Credentials used by the CS361 RDS Proxy
       SecretString: !Sub '{"username":"${DbUser}","password":"${DbPassword}"}'
 
   CurriculumDbProxy:
     Type: AWS::RDS::DBProxy
+    Condition: UseProxy
     Properties:
       DBProxyName: cs361-curriculum-proxy
       EngineFamily: MYSQL
@@ -140,6 +195,7 @@ Resources:
 
   CurriculumDbProxyTargetGroup:
     Type: AWS::RDS::DBProxyTargetGroup
+    Condition: UseProxy
     Properties:
       DBProxyName: !Ref CurriculumDbProxy
       TargetGroupName: default
@@ -169,12 +225,28 @@ Resources:
           - x-cs361-csrf
         AllowCredentials: true
       DefaultRouteSettings:
-        ThrottlingBurstLimit: 50
-        ThrottlingRateLimit: 20
+        ThrottlingBurstLimit: !Ref ApiThrottleBurst
+        ThrottlingRateLimit: !Ref ApiThrottleRate
+
+  ReadFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-read'
+      RetentionInDays: !Ref LogRetentionDays
+
+  AuthFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-auth'
+      RetentionInDays: !Ref LogRetentionDays
 
   CurriculumReadFunction:
     Type: AWS::Serverless::Function
     Properties:
+      FunctionName: !Sub '${AWS::StackName}-read'
+      ReservedConcurrentExecutions: !If [HasReadReservation, !Ref ReadReservedConcurrency, !Ref 'AWS::NoValue']
+      LoggingConfig:
+        LogGroup: !Ref ReadFunctionLogGroup
       Role: !Ref LambdaExecutionRoleArn
       CodeUri: .
       Handler: src/api.handler
@@ -445,6 +517,10 @@ Resources:
   AuthFunction:
     Type: AWS::Serverless::Function
     Properties:
+      FunctionName: !Sub '${AWS::StackName}-auth'
+      ReservedConcurrentExecutions: !If [HasAuthReservation, !Ref AuthReservedConcurrency, !Ref 'AWS::NoValue']
+      LoggingConfig:
+        LogGroup: !Ref AuthFunctionLogGroup
       Role: !Ref LambdaExecutionRoleArn
       CodeUri: .
       Handler: src/api.authHandler
@@ -469,10 +545,43 @@ Resources:
             Path: /api/profile/student
             Method: GET
 
+  DbInitLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-dbinit'
+      RetentionInDays: !Ref LogRetentionDays
+
+  # Not exposed through the API. Invoked by hand with aws lambda invoke (see docs/learner-lab-runbook.md)
+  DbInitFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-dbinit'
+      LoggingConfig:
+        LogGroup: !Ref DbInitLogGroup
+      Role: !Ref LambdaExecutionRoleArn
+      CodeUri: .
+      Handler: src/db-init.handler
+      Timeout: 300
+      MemorySize: 512
+      VpcConfig:
+        SubnetIds: !Ref VpcSubnetIds
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroupId
+      Environment:
+        Variables:
+          DB_DIRECT_HOST: !Ref DbHost
+
 Outputs:
   ApiUrl:
     Description: Base URL for the deployed HTTP API
     Value: !Sub "https://${CurriculumApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}"
   RdsProxyEndpoint:
+    Condition: UseProxy
     Description: RDS Proxy endpoint used by Lambda
     Value: !GetAtt CurriculumDbProxy.Endpoint
+  DbInitFunctionName:
+    Description: Invoke once to create the database, import the dump and create the app user
+    Value: !Ref DbInitFunction
+  ApiId:
+    Description: HTTP API id, used in the Amplify /api rewrite target
+    Value: !Ref CurriculumApi
