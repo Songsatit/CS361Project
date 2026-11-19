@@ -2,7 +2,7 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
   CS361 network and database. VPC, two private subnets, security groups and a single-AZ RDS MySQL.
   Outbound internet for Lambda (TU login) has three modes: none (free), instance (NAT instance,
-  about 7 USD per month) or gateway (NAT Gateway, about 37 USD per month). Creates no IAM roles (Learner Lab).
+  about 10 USD per month) or gateway (NAT Gateway, about 37 USD per month). Creates no IAM roles (Learner Lab).
 
 Metadata:
   cfn-lint:
@@ -36,11 +36,12 @@ Parameters:
     AllowedValues: [none, instance, gateway]
     Default: instance
     Description: >-
-      none = no internet from Lambda (login to TU times out). instance = t4g.nano NAT instance, cheap enough to leave on.
+      none = no internet from Lambda (login to TU times out). instance = t4g.micro NAT instance, cheap enough to leave on.
       gateway = managed NAT Gateway, most reliable but costs about 0.045 USD per hour plus the public IPv4 address
   NatInstanceType:
     Type: String
-    Default: t4g.nano
+    Default: t4g.micro
+    Description: t4g.nano (512 MB) runs out of memory while dnf installs iptables-services, so use micro or larger
   NatInstanceAmiParameter:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
@@ -231,6 +232,11 @@ Resources:
         Fn::Base64: |
           #!/bin/bash
           set -ex
+          # small instances run out of memory during dnf, so add swap first
+          dd if=/dev/zero of=/swapfile bs=1M count=1024
+          chmod 600 /swapfile
+          mkswap /swapfile
+          swapon /swapfile
           dnf install -y iptables-services
           systemctl enable --now iptables
           echo 'net.ipv4.ip_forward = 1' > /etc/sysctl.d/99-nat.conf
