@@ -1,0 +1,351 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  CS361 network and database. VPC, two private subnets, security groups and a single-AZ RDS MySQL.
+  Outbound internet for Lambda (TU login) has three modes: none (free), instance (NAT instance,
+  about 7 USD per month) or gateway (NAT Gateway, about 37 USD per month). Creates no IAM roles (Learner Lab).
+
+Metadata:
+  cfn-lint:
+    config:
+      ignore_checks:
+        - W1030
+        - W1011  # Learner Lab: passed as NoEcho parameter from CloudShell, never committed
+
+Parameters:
+  DbMasterUsername:
+    Type: String
+    Default: admin
+  DbMasterPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 12
+    Description: Master password. Use it only for import and migration, the app uses a separate limited user
+  DbInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+  DbEngineVersion:
+    Type: String
+    Default: '8.4'
+    Description: MySQL engine version. The dump was taken from 8.4.9. If RDS rejects it, list valid ones with aws rds describe-db-engine-versions --engine mysql
+  DbAllocatedStorageGb:
+    Type: Number
+    Default: 20
+    MinValue: 20
+  NatMode:
+    Type: String
+    AllowedValues: [none, instance, gateway]
+    Default: instance
+    Description: >-
+      none = no internet from Lambda (login to TU times out). instance = t4g.nano NAT instance, cheap enough to leave on.
+      gateway = managed NAT Gateway, most reliable but costs about 0.045 USD per hour plus the public IPv4 address
+  NatInstanceType:
+    Type: String
+    Default: t4g.nano
+  NatInstanceAmiParameter:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: Public SSM parameter that resolves to the latest Amazon Linux 2023 arm64 AMI (used only when NatMode=instance)
+
+Conditions:
+  UseNatGateway: !Equals [!Ref NatMode, gateway]
+  UseNatInstance: !Equals [!Ref NatMode, instance]
+  UseAnyNat: !Not [!Equals [!Ref NatMode, none]]
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.20.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-vpc'
+        - Key: Project
+          Value: cs361
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-private-a'
+        - Key: Project
+          Value: cs361
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-private-b'
+        - Key: Project
+          Value: cs361
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-private-rt'
+        - Key: Project
+          Value: cs361
+
+  PrivateRouteTableAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateRouteTableAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTable
+
+  # ---- Optional outbound path (NatMode=instance or gateway) ----
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Condition: UseAnyNat
+    Properties:
+      Tags:
+        - Key: Project
+          Value: cs361
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Condition: UseAnyNat
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Condition: UseAnyNat
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.100.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-public-a'
+        - Key: Project
+          Value: cs361
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Condition: UseAnyNat
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Project
+          Value: cs361
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    Condition: UseAnyNat
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicRouteTableAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: UseAnyNat
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # -- mode: gateway --
+  NatEip:
+    Type: AWS::EC2::EIP
+    Condition: UseNatGateway
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Project
+          Value: cs361
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Condition: UseNatGateway
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      SubnetId: !Ref PublicSubnet
+      Tags:
+        - Key: Project
+          Value: cs361
+
+  # -- mode: instance (iptables masquerade on Amazon Linux 2023) --
+  NatInstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: UseNatInstance
+    Properties:
+      GroupDescription: NAT instance. HTTP and HTTPS from Lambda only, no SSH
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+      Tags:
+        - Key: Project
+          Value: cs361
+
+  NatInstance:
+    Type: AWS::EC2::Instance
+    Condition: UseNatInstance
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      ImageId: !Ref NatInstanceAmiParameter
+      InstanceType: !Ref NatInstanceType
+      SourceDestCheck: false
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          SubnetId: !Ref PublicSubnet
+          AssociatePublicIpAddress: true
+          GroupSet:
+            - !Ref NatInstanceSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-nat'
+        - Key: Project
+          Value: cs361
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -ex
+          dnf install -y iptables-services
+          systemctl enable --now iptables
+          echo 'net.ipv4.ip_forward = 1' > /etc/sysctl.d/99-nat.conf
+          sysctl -p /etc/sysctl.d/99-nat.conf
+          IFACE=$(ip -o -4 route show to default | awk '{print $5}' | head -n1)
+          iptables -t nat -A POSTROUTING -o "$IFACE" -s 10.20.0.0/16 -j MASQUERADE
+          iptables -F FORWARD
+          service iptables save
+
+  PrivateDefaultRoute:
+    Type: AWS::EC2::Route
+    Condition: UseAnyNat
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !If [UseNatGateway, !Ref NatGateway, !Ref 'AWS::NoValue']
+      InstanceId: !If [UseNatInstance, !Ref NatInstance, !Ref 'AWS::NoValue']
+
+  # ---- Security groups ----
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Lambda functions. No inbound, all outbound
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Project
+          Value: cs361
+
+  RdsProxySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS Proxy. MySQL from Lambda only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+      Tags:
+        - Key: Project
+          Value: cs361
+
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS MySQL. MySQL from Lambda and RDS Proxy only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref RdsProxySecurityGroup
+      Tags:
+        - Key: Project
+          Value: cs361
+
+  # ---- Database ----
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: CS361 private subnets
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      Tags:
+        - Key: Project
+          Value: cs361
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub '${AWS::StackName}-db'
+      Engine: mysql
+      EngineVersion: !Ref DbEngineVersion
+      DBInstanceClass: !Ref DbInstanceClass
+      AllocatedStorage: !Ref DbAllocatedStorageGb
+      StorageType: gp3
+      StorageEncrypted: true
+      MultiAZ: false
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 1
+      CopyTagsToSnapshot: true
+      MonitoringInterval: 0
+      EnablePerformanceInsights: false
+      AutoMinorVersionUpgrade: true
+      DeletionProtection: false
+      MasterUsername: !Ref DbMasterUsername
+      MasterUserPassword: !Ref DbMasterPassword
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DbSecurityGroup
+      Tags:
+        - Key: Project
+          Value: cs361
+
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+  PrivateSubnetIds:
+    Description: Pass to template.yaml as VpcSubnetIds
+    Value: !Join [',', [!Ref PrivateSubnetA, !Ref PrivateSubnetB]]
+  LambdaSecurityGroupId:
+    Value: !Ref LambdaSecurityGroup
+  RdsProxySecurityGroupId:
+    Value: !Ref RdsProxySecurityGroup
+  DbHost:
+    Description: Pass to template.yaml as DbHost
+    Value: !GetAtt Database.Endpoint.Address
+  DbInstanceIdentifier:
+    Value: !Ref Database
+  NatModeInUse:
+    Value: !Ref NatMode
