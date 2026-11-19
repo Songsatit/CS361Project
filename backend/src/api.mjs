@@ -238,7 +238,20 @@ async function failedLogin(event, username) {
   return invalidLoginResponse();
 }
 
-async function tuLogin(event) {
+function tuUpstreamUnavailable(status, type) {
+  console.error('TU authentication upstream error', { status, type });
+  return response(502, { error: 'TU authentication service unavailable' });
+}
+
+export async function tuLogin(event, dependencies = {}) {
+  const {
+    isLoginLockedFn = isLoginLocked,
+    failedLoginFn = failedLogin,
+    resetLoginAttemptsFn = resetLoginAttempts,
+    safeLoginAuditFn = safeLoginAudit,
+    signAccessTokenFn = signAccessToken,
+    recordDirectoryLoginFn = recordDirectoryLogin,
+  } = dependencies;
   let body;
   try {
     body = JSON.parse(event.body ?? '{}');
@@ -251,17 +264,17 @@ async function tuLogin(event) {
   if (!username || !password) {
     return response(400, { error: 'username and password are required' });
   }
-  const retryAfter = await isLoginLocked(event, username);
+  const retryAfter = await isLoginLockedFn(event, username);
   if (retryAfter > 0) {
-    await safeLoginAudit({ username, action: 'login_locked', event, newValue: { locked: true } });
+    await safeLoginAuditFn({ username, action: 'login_locked', event, newValue: { locked: true } });
     return response(429, { error: 'Too many failed login attempts. Try again later.' }, { 'Retry-After': String(retryAfter) });
   }
   const demoUser = demoLogin(username, password);
   if (demoUser) {
     try {
-      await resetLoginAttempts(event, username);
-      const token = signAccessToken(demoUser);
-      await safeLoginAudit({ username, action: 'login_success', event, newValue: { role: demoUser.role } });
+      await resetLoginAttemptsFn(event, username);
+      const token = signAccessTokenFn(demoUser);
+      await safeLoginAuditFn({ username, action: 'login_success', event, newValue: { role: demoUser.role } });
       // Token is set as an HttpOnly cookie. It stays in the body too for the transition.
       return response(200, { token, user: demoUser }, { 'Set-Cookie': authCookie(token, AUTH_COOKIE_MAX_AGE) });
     } catch (error) {
@@ -269,27 +282,36 @@ async function tuLogin(event) {
       return response(503, { error: 'JWT authentication is not configured' });
     }
   }
-  if (demoUsernames.has(username.toLowerCase())) return failedLogin(event, username);
+  if (demoUsernames.has(username.toLowerCase())) return failedLoginFn(event, username);
 
   if (!process.env.TU_APPLICATION_KEY) {
     console.error('TU_APPLICATION_KEY is not configured');
     return response(503, { error: 'TU authentication is not configured' });
   }
 
-  const authResponse = await fetch(
-    process.env.TU_AUTH_URL ?? 'https://restapi.tu.ac.th/api/v1/auth/Ad/verify2',
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Application-Key': process.env.TU_APPLICATION_KEY,
+  let authResponse;
+  try {
+    authResponse = await fetch(
+      process.env.TU_AUTH_URL ?? 'https://restapi.tu.ac.th/api/v1/auth/Ad/verify2',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Application-Key': process.env.TU_APPLICATION_KEY,
+        },
+        body: JSON.stringify({ UserName: username, PassWord: password }),
+        signal: AbortSignal.timeout(8000),
       },
-      body: JSON.stringify({ UserName: username, PassWord: password }),
-    },
-  );
+    );
+  } catch (error) {
+    return tuUpstreamUnavailable(null, error?.name ?? 'Error');
+  }
+  if (!authResponse.ok) {
+    return tuUpstreamUnavailable(authResponse.status, 'HTTPError');
+  }
   const payload = await authResponse.json().catch(() => ({}));
-  if (!authResponse.ok || payload.status !== true) {
-    return failedLogin(event, username);
+  if (payload.status !== true) {
+    return failedLoginFn(event, username);
   }
 
   const user = {
@@ -310,11 +332,11 @@ async function tuLogin(event) {
   };
 
   try {
-    await resetLoginAttempts(event, username);
-    const token = signAccessToken(user);
-    await safeLoginAudit({ username, action: 'login_success', event, newValue: { role: user.role } });
+    await resetLoginAttemptsFn(event, username);
+    const token = signAccessTokenFn(user);
+    await safeLoginAuditFn({ username, action: 'login_success', event, newValue: { role: user.role } });
     // List this person in the graduation directory (only people who sign in themselves).
-    await recordDirectoryLogin(user);
+    await recordDirectoryLoginFn(user);
     // Token is set as an HttpOnly cookie. It stays in the body too for the transition.
     return response(200, { token, user }, { 'Set-Cookie': authCookie(token, AUTH_COOKIE_MAX_AGE) });
   } catch (error) {
