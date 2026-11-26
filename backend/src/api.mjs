@@ -19,8 +19,15 @@ const allowedRoles = new Set(['student', 'instructor', 'curriculum_admin', 'staf
 const jwtIssuer = 'cs361-curriculum-api';
 const jwtAudience = 'cs361-frontend';
 
-const PREREQUISITE_MINIMUM_BY_COURSE = Object.freeze({
-  CS403: 'C', CS404: 'C', CS335: 'C', CNC303: 'C', CNC304: 'C', CNC403: 'C', CNC404: 'C',
+const PREREQUISITE_MINIMUM_BY_EDGE = Object.freeze({
+  'CS403:CS303': 'C', 'CS404:CS304': 'C', 'CS335:CS331': 'C',
+  'CNC303:CNC235': 'C', 'CNC304:CNC235': 'C', 'CNC403:CNC303': 'C', 'CNC404:CNC304': 'C',
+});
+const PREREQUISITE_ANY_OF = Object.freeze({
+  CS111: ['CS102', 'CS103'], CS221: ['CS101', 'CP200'], CS223: ['CS222', 'CS233'],
+  CS224: ['CS222', 'CS233'], CS232: ['CS222', 'CS233'], CS251: ['CS213', 'CS216'],
+  CS255: ['CS102', 'CS103'], CS264: ['CS222', 'CS233'], CS271: ['CS213', 'CS216'],
+  CS320: ['CS222', 'CS233'], CS363: ['CS234', 'CS331'], CS367: ['CS234', 'CS331'],
 });
 
 // Name of the HttpOnly cookie that carries the access token.
@@ -1979,11 +1986,14 @@ async function buildGraduationResult(studentId) {
     for (const row of prerequisiteRows) {
       const target = String(row.course_code ?? '').replace(/\s+/g, '').toUpperCase();
       if (!byTarget.has(target)) byTarget.set(target, []);
-      byTarget.get(target).push({ prerequisiteCode: row.prerequisite_code, minimumGrade: PREREQUISITE_MINIMUM_BY_COURSE[target] ?? 'D' });
+      const required = String(row.prerequisite_code ?? '').replace(/\s+/g, '').toUpperCase();
+      byTarget.get(target).push({ prerequisiteCode: required, minimumGrade: PREREQUISITE_MINIMUM_BY_EDGE[`${target}:${required}`] ?? null });
     }
     for (const [target, rulesForCourse] of byTarget) {
       const attempt = curriculumRecords.find(row => String(row.course_code ?? '').replace(/\s+/g, '').toUpperCase() === target);
-      const result = evaluatePrerequisites(curriculumRecords, rulesForCourse, {
+      const anyOf = PREREQUISITE_ANY_OF[target];
+      const rules = anyOf ? [{ anyOf, minimumGrade: null }] : rulesForCourse;
+      const result = evaluatePrerequisites(curriculumRecords, rules, {
         currentCourseCode: target,
         currentAcademicYear: attempt?.academic_year,
         currentSemester: attempt?.semester,

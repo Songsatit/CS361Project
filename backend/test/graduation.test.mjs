@@ -347,6 +347,17 @@ test('prerequisite evaluation uses any passing attempt and emits timing warnings
   assert.equal(failed.warnings[0].reason, 'not_studied');
 });
 
+test('prerequisite OR groups do not require the other alternative and do not invent D', async () => {
+  const { evaluatePrerequisites } = await import('../src/graduation/prerequisite-evaluate.mjs');
+  const result = evaluatePrerequisites([
+    { course_code: 'CS102', grade: 'S', academic_year: 2566, semester: 1 },
+  ], [{ anyOf: ['CS102', 'CS103'], minimumGrade: null }], {
+    currentCourseCode: 'CS111', currentAcademicYear: 2567, currentSemester: 1,
+  });
+  assert.equal(result.passed, true);
+  assert.equal(result.warnings.length, 0);
+});
+
 test('mandatory course below C is not counted and appears as missing', () => {
   const result = evaluateByCategory([categoryRow('CS101', 'major_core', 3, 'D')], { curriculumId: 'BSC-CS-2566' });
   const core = result.categories.find(item => item.code === 'major_core');

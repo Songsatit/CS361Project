@@ -51,7 +51,9 @@ function evaluateGroup(group, records, config) {
   if (group.type === 'all') {
     const subResults = children.map(child => evaluateGroup(child, records, config));
     result.groups = subResults;
-    result.earnedCredits = fromMilliCredits(Math.min(creditSum, required));
+    result.earnedCredits = children.length
+      ? subResults.reduce((sum, child) => sum + Number(child.earnedCredits || 0), 0)
+      : fromMilliCredits(Math.min(creditSum, required));
     result.passed = (children.length ? subResults.every(item => item.passed) : creditSum >= required);
   } else if (group.type === 'one_of') {
     const options = (group.courses ?? []).map(course => evaluateGroup({ type: 'all', requiredCredits: group.requiredCredits, courses: [course] }, records, config));
