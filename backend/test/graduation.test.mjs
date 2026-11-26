@@ -135,6 +135,45 @@ test('category backfill updates only category fields and reports uncategorized r
   assert.match(updates[0].sql, /WHERE grade_record_id = \? AND category_code IS NULL/);
 });
 
+test('backfill preserves attempts, grades, source type, and curriculum-specific categories', async () => {
+  const state = [
+    { grade_record_id: 11, curriculum_id: 'BSC-CS-2566', course_code: 'REPEAT1', attempt_no: 1, grade: 'A', entry_type: 'catalog', course_group: 'วิชาเฉพาะ–วิชาแกน', course_type_code: null, category_code: null },
+    { grade_record_id: 12, curriculum_id: 'BSC-CS-2566', course_code: 'REPEAT1', attempt_no: 2, grade: 'F', entry_type: 'catalog', course_group: 'วิชาเฉพาะ–วิชาแกน', course_type_code: null, category_code: null },
+    { grade_record_id: 13, curriculum_id: 'BSC-CS-2566', course_code: 'SELF1', attempt_no: 1, grade: 'S', entry_type: 'catalog', course_group: 'วิชาศึกษาทั่วไป', course_type_code: null, category_code: null },
+    { grade_record_id: 14, curriculum_id: 'BSC-CS-2566', course_code: 'FREE1', attempt_no: 1, grade: 'U', entry_type: 'free_elective', course_group: null, course_type_code: null, category_code: null },
+    { grade_record_id: 15, curriculum_id: 'BSC-CNC-2568', course_code: 'SAME1', attempt_no: 1, grade: 'W', entry_type: 'catalog', course_group: 'วิชาเฉพาะ–วิชาบังคับ', course_type_code: null, category_code: null },
+  ];
+  const before = state.map(row => ({ id: row.grade_record_id, grade: row.grade, attempt: row.attempt_no }));
+  const conn = {
+    async query() {
+      return [state.filter(row => row.category_code == null).map(({ grade_record_id, curriculum_id, course_code, entry_type, course_group, course_type_code }) => ({ grade_record_id, curriculum_id, course_code, entry_type, course_group, course_type_code }))];
+    },
+    async execute(sql, [code, label, id]) {
+      const row = state.find(item => item.grade_record_id === id);
+      row.category_code = code;
+      row.category_label = label;
+    },
+  };
+  const first = await backfillCategories(conn, { apply: true });
+  const second = await backfillCategories(conn, { apply: true });
+  assert.equal(first.scanned, 5);
+  assert.deepEqual(first.categoryCounts, { major_core: 2, general_education: 1, free_elective: 1, major_required: 1 });
+  assert.deepEqual(second, { scanned: 0, updated: 0, categoryCounts: {}, uncategorizedCount: 0, uncategorizedCourseCodes: [] });
+  assert.deepEqual(state.map(row => ({ id: row.grade_record_id, grade: row.grade, attempt: row.attempt_no })), before);
+  assert.equal(state[0].category_code, state[1].category_code);
+  assert.equal(state[2].category_code, 'general_education');
+  assert.equal(state[3].category_code, 'free_elective');
+  assert.equal(state[4].category_code, 'major_required');
+});
+
+test('rollback migration is additive reversal only and does not rewrite grade data', () => {
+  const sql = readFileSync(path.join(here, '..', 'migrations', 'rollback', '020_graduation_grade_categories.down.sql'), 'utf8');
+  assert.match(sql, /DROP COLUMN category_label/);
+  assert.match(sql, /DROP COLUMN category_code/);
+  assert.doesNotMatch(sql, /UPDATE\s+graduation_grade_record/i);
+  assert.doesNotMatch(sql, /DELETE\s+FROM\s+graduation_grade_record/i);
+});
+
 // ---------- Adapter: CSV parsing and contract validation ----------
 
 test('parseCsv handles BOM, CRLF, quoted fields, and doubled quotes', () => {

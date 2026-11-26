@@ -32,9 +32,13 @@ export async function backfillCategories(conn, { apply = false } = {}) {
     }
   }
   const uncategorized = updates.filter(item => item.category.code === 'uncategorized');
+  const categoryCounts = Object.fromEntries(
+    updates.reduce((counts, item) => counts.set(item.category.code, (counts.get(item.category.code) ?? 0) + 1), new Map()),
+  );
   return {
     scanned: updates.length,
     updated: apply ? updates.length : 0,
+    categoryCounts,
     uncategorizedCount: uncategorized.length,
     uncategorizedCourseCodes: [...new Set(uncategorized.map(item => item.row.course_code))].sort(),
   };
