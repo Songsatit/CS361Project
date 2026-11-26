@@ -1201,14 +1201,15 @@ function renderGraduationPlanForm(result) {
       const pillClass = selectedGrade === "F" || selectedGrade === "U" ? "graduation-grade-pill--warning" : selectedGrade ? "graduation-grade-pill--pass" : "graduation-grade-pill--empty";
       const cell = info?.locked
         ? `<span class="graduation-plan-done" title="${esc(info.label)}">🔒 ${esc(info.label)}</span>`
-        : `<div class="graduation-grade-editor"><button type="button" class="graduation-grade-pill ${pillClass}" data-graduation-grade-pill aria-label="เลือกเกรด ${esc(code)}">${esc(selectedGrade || "-")}</button><select hidden class="graduation-grade-select" data-graduation-plan-grade="${esc(code)}" aria-label="เกรด ${esc(code)}">${gradeOptions(selectedGrade)}</select><small>${esc(info?.label ?? "คลิกเกรดเพื่อแก้ไข")}</small></div>`;
+        : `<div class="graduation-grade-editor"><button type="button" class="graduation-grade-pill ${pillClass}" data-graduation-grade-pill aria-label="เลือกเกรด ${esc(code)}">${esc(selectedGrade || "-")}</button><small>${esc(info?.label ?? "คลิกเกรดเพื่อแก้ไข")}</small></div>`;
       const actual = info?.academicYear && info?.semester ? `${Number(info.academicYear) - Number(form.entryYear) + 1}-${info.semester}` : `${term.year}-${term.term}`;
       const moved = actual !== `${term.year}-${term.term}` || Number(info?.attemptNo ?? 1) > 1;
       const termText = moved ? `ปี ${actual.split("-")[0]} · ภาค ${actual.split("-")[1]}` : "ตามแผน";
       const termEditor = info?.locked
         ? `<span class="graduation-plan-done">${esc(termText)} (รอบ ${esc(info?.attemptNo ?? 1)})</span>`
-        : `<div class="graduation-term-editor"><span class="graduation-plan-muted" data-graduation-plan-summary>${esc(termText)} (รอบ ${esc(info?.attemptNo ?? 1)})</span><button type="button" class="graduation-inline-edit" data-graduation-plan-edit>แก้ไข</button><div class="graduation-term-controls" data-graduation-plan-controls${moved ? " data-open" : ""}><select data-graduation-plan-move aria-label="เทอมที่เรียนจริงของ ${esc(code)}">${termChoices.replace(`value="${actual}"`, `value="${actual}" selected`)}</select><input data-graduation-plan-attempt type="number" min="1" max="9" value="${esc(info?.attemptNo ?? 1)}" placeholder="รอบ" aria-label="รอบที่เรียน ${esc(code)}"></div></div>`;
-      return { label: categoryByCode.get(graduationCodeKey(code)) ?? "ยังไม่จัดหมวด", html: `<tr class="graduation-plan-row${selectedGrade && !["F", "U", "W"].includes(selectedGrade) ? " graduation-plan-row--passed" : ""}" data-plan-row data-code="${esc(code)}" data-year="${esc(term.year)}" data-term="${esc(term.term)}" data-credits="${esc(course.credits ?? "")}"><td><strong>${esc(code)}</strong></td><td>${esc(course.name ?? "-")}</td><td>${esc(course.credits ?? "-")}</td><td>${termEditor}</td><td>${cell}</td></tr>` };
+        : `<div class="graduation-term-editor"><span class="graduation-plan-muted" data-graduation-plan-summary>${esc(termText)} (รอบ ${esc(info?.attemptNo ?? 1)})</span><button type="button" class="graduation-inline-edit" data-graduation-plan-edit>แก้ไข</button></div>`;
+      const [actualYear, actualTerm] = actual.split("-").map(Number);
+      return { label: categoryByCode.get(graduationCodeKey(code)) ?? "ยังไม่จัดหมวด", html: `<tr class="graduation-plan-row${selectedGrade && !["F", "U", "W"].includes(selectedGrade) ? " graduation-plan-row--passed" : ""}" data-plan-row data-code="${esc(code)}" data-year="${esc(term.year)}" data-term="${esc(term.term)}" data-actual-year="${esc(actualYear)}" data-actual-term="${esc(actualTerm)}" data-attempt="${esc(info?.attemptNo ?? 1)}" data-term-options="${esc(termChoices)}" data-credits="${esc(course.credits ?? "")}"><td><strong>${esc(code)}</strong></td><td>${esc(course.name ?? "-")}</td><td>${esc(course.credits ?? "-")}</td><td>${termEditor}</td><td>${cell}</td></tr>` };
     });
     const grouped = new Map();
     plannedRows.forEach(row => { if (!grouped.has(row.label)) grouped.set(row.label, []); grouped.get(row.label).push(row.html); });
@@ -5059,14 +5060,22 @@ function bind() {
     select.onchange = () => {
       const value = select.value;
       if (!value) return;
-      select.closest(".graduation-plan-term")?.querySelectorAll("[data-graduation-plan-grade]").forEach(courseSelect => {
-        courseSelect.value = value;
-        state.graduationForm.grades[courseSelect.dataset.graduationPlanGrade] = value;
-        const pill = courseSelect.closest(".graduation-grade-editor")?.querySelector("[data-graduation-grade-pill]");
-        if (pill) {
-          pill.textContent = value;
-          pill.className = `graduation-grade-pill ${value === "F" || value === "U" ? "graduation-grade-pill--warning" : "graduation-grade-pill--pass"}`;
-        }
+      select.closest(".graduation-plan-term")?.querySelectorAll("[data-graduation-grade-pill]").forEach(pill => {
+        const code = pill.closest("[data-plan-row]")?.dataset.code;
+        if (code) state.graduationForm.grades[code] = value;
+        pill.textContent = value;
+        pill.className = `graduation-grade-pill ${value === "F" || value === "U" ? "graduation-grade-pill--warning" : "graduation-grade-pill--pass"}`;
+        const row = pill.closest("[data-plan-row]");
+        if (row) row.classList.toggle("graduation-plan-row--passed", !["F", "U", "W"].includes(value));
+        const small = pill.closest(".graduation-grade-editor")?.querySelector("small");
+        if (small) small.textContent = "คลิกเกรดเพื่อแก้ไข";
+        /* Keep the same visual mode after a bulk action; no native select is left open. */
+        const oldSelect = pill.closest(".graduation-grade-editor")?.querySelector("select");
+        oldSelect?.remove();
+        const pillAgain = pill.closest(".graduation-grade-editor")?.querySelector("[data-graduation-grade-pill]");
+        if (pillAgain) pillAgain.hidden = false;
+        const label = pill.closest(".graduation-grade-editor")?.querySelector("small");
+        if (label) label.textContent = "คลิกเกรดเพื่อแก้ไข";
       });
       select.value = "";
     };
@@ -5074,32 +5083,50 @@ function bind() {
   document.querySelectorAll("[data-graduation-plan-entry]").forEach(input => {
     input.onchange = () => { state.graduationForm.entryYear = input.value.trim(); };
   });
-  document.querySelectorAll("[data-graduation-plan-grade]").forEach(select => {
-    select.onchange = () => {
-      state.graduationForm.grades[select.dataset.graduationPlanGrade] = select.value;
-      const pill = select.closest(".graduation-grade-editor")?.querySelector("[data-graduation-grade-pill]");
-      if (pill) {
-        pill.textContent = select.value || "-";
-        pill.className = `graduation-grade-pill ${select.value === "F" || select.value === "U" ? "graduation-grade-pill--warning" : select.value ? "graduation-grade-pill--pass" : "graduation-grade-pill--empty"}`;
-      }
-    };
-  });
-  document.querySelectorAll("[data-graduation-grade-pill]").forEach(button => {
-    button.onclick = () => {
-      const select = button.closest(".graduation-grade-editor")?.querySelector("[data-graduation-plan-grade]");
-      if (!select) return;
-      select.hidden = false;
-      button.hidden = true;
+  const openGradeEditor = button => {
+      const editor = button.closest(".graduation-grade-editor");
+      const row = button.closest("[data-plan-row]");
+      const code = row?.dataset.code;
+      if (!editor || !code) return;
+      const current = state.graduationForm.grades[code] ?? (button.textContent.trim() === "-" ? "" : button.textContent.trim());
+      editor.innerHTML = `<select class="graduation-grade-select" data-graduation-plan-grade="${esc(code)}" aria-label="เกรด ${esc(code)}">${graduationGradeOptionsHtml(current)}</select><small>เลือกเกรด</small>`;
+      const select = editor.querySelector("select");
+      const close = () => {
+        const value = select.value;
+        if (value) state.graduationForm.grades[code] = value;
+        const pillClass = value === "F" || value === "U" ? "graduation-grade-pill--warning" : value ? "graduation-grade-pill--pass" : "graduation-grade-pill--empty";
+        editor.innerHTML = `<button type="button" class="graduation-grade-pill ${pillClass}" data-graduation-grade-pill aria-label="เลือกเกรด ${esc(code)}">${esc(value || "-")}</button><small>คลิกเกรดเพื่อแก้ไข</small>`;
+        row?.classList.toggle("graduation-plan-row--passed", Boolean(value) && !["F", "U", "W"].includes(value));
+        editor.querySelector("[data-graduation-grade-pill]").onclick = event => openGradeEditor(event.currentTarget);
+      };
+      select.onchange = close;
+      select.onblur = close;
       select.focus();
-    };
+  };
+  document.querySelectorAll("[data-graduation-grade-pill]").forEach(button => {
+    button.onclick = () => openGradeEditor(button);
   });
+  const openTermEditor = button => {
+      const editor = button.closest(".graduation-term-editor");
+      const row = button.closest("[data-plan-row]");
+      if (!editor || !row) return;
+      const year = Number(row.dataset.actualYear || row.dataset.year);
+      const term = Number(row.dataset.actualTerm || row.dataset.term);
+      const attempt = Number(row.dataset.attempt || 1);
+      const choices = row.dataset.termOptions ?? "";
+      editor.innerHTML = `<div class="graduation-term-controls" data-open><select data-graduation-plan-move aria-label="เทอมที่เรียนจริงของ ${esc(row.dataset.code)}">${choices.replace(`value="${year}-${term}"`, `value="${year}-${term}" selected`)}</select><input data-graduation-plan-attempt type="number" min="1" max="9" value="${attempt}" aria-label="รอบที่เรียน ${esc(row.dataset.code)}"><button type="button" class="graduation-inline-edit" data-graduation-plan-done>เสร็จสิ้น</button></div>`;
+      const done = editor.querySelector("[data-graduation-plan-done]");
+      done.onclick = () => {
+        const selected = editor.querySelector("[data-graduation-plan-move]").value.split("-").map(Number);
+        const nextAttempt = Number(editor.querySelector("[data-graduation-plan-attempt]").value) || 1;
+        row.dataset.actualYear = selected[0]; row.dataset.actualTerm = selected[1]; row.dataset.attempt = nextAttempt;
+        editor.innerHTML = `<span class="graduation-plan-muted">${selected[0] === Number(row.dataset.year) && selected[1] === Number(row.dataset.term) ? "ตามแผน" : `ปี ${selected[0]} · ภาค ${selected[1]}`} (รอบ ${nextAttempt})</span><button type="button" class="graduation-inline-edit" data-graduation-plan-edit>แก้ไข</button>`;
+        editor.querySelector("[data-graduation-plan-edit]").onclick = event => openTermEditor(event.currentTarget);
+      };
+      editor.querySelector("select")?.focus();
+  };
   document.querySelectorAll("[data-graduation-plan-edit]").forEach(button => {
-    button.onclick = () => {
-      const controls = button.closest(".graduation-term-editor")?.querySelector("[data-graduation-plan-controls]");
-      if (!controls) return;
-      controls.dataset.open = "";
-      controls.querySelector("select")?.focus();
-    };
+    button.onclick = () => openTermEditor(button);
   });
   document.querySelectorAll("[data-graduation-plan-submit]").forEach(form => {
     form.onsubmit = async event => {
@@ -5112,11 +5139,11 @@ function bind() {
       state.graduationForm.entryYear = String(entryYear);
       const entries = [];
       form.querySelectorAll("[data-plan-row]").forEach(row => {
-        const value = row.querySelector("[data-graduation-plan-grade]")?.value;
+        const value = row.querySelector("[data-graduation-plan-grade]")?.value ?? state.graduationForm.grades[row.dataset.code];
         if (!value) return;
         const credits = Number(row.dataset.credits);
-        const moved = row.querySelector("[data-graduation-plan-move]")?.value?.split("-").map(Number) ?? [Number(row.dataset.year), Number(row.dataset.term)];
-        const attempt = Number(row.querySelector("[data-graduation-plan-attempt]")?.value ?? 0);
+        const moved = row.querySelector("[data-graduation-plan-move]")?.value?.split("-").map(Number) ?? [Number(row.dataset.actualYear || row.dataset.year), Number(row.dataset.actualTerm || row.dataset.term)];
+        const attempt = Number(row.querySelector("[data-graduation-plan-attempt]")?.value ?? row.dataset.attempt ?? 0);
         entries.push({
           curriculumId: program.curriculumId,
           courseCode: row.dataset.code,
