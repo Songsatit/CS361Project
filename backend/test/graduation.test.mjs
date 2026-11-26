@@ -27,6 +27,7 @@ import {
 import { validateGradeEntry } from '../src/graduation/grade-entry.mjs';
 import { categoryConfigTotals, classifyCurriculumCourse } from '../src/graduation/category-config/index.mjs';
 import { backfillCategories, categoryUpdateForRow } from '../src/graduation/category-backfill.mjs';
+import { evaluateByCategory } from '../src/graduation/category-evaluate.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixture = (name) => readFileSync(path.join(here, '..', 'fixtures', 'v4-demo', name), 'utf8');
@@ -177,6 +178,81 @@ test('backend category configs stay separate and add up to each curriculum total
   assert.equal(classifyCurriculumCourse({ curriculumId: 'BSC-CS-2566', courseGroup: 'วิชาศึกษาทั่วไป' }).code, 'general_education');
   assert.equal(classifyCurriculumCourse({ curriculumId: 'BSC-CNC-2568', courseGroup: 'วิชาศึกษาทั่วไป' }).code, 'general_education');
   assert.equal(classifyCurriculumCourse({ curriculumId: 'BSC-CS-2566', courseGroup: 'วิชาเฉพาะ' }).code, 'uncategorized');
+});
+
+const categoryRow = (course_code, category_code, credits, grade = 'A', academic_year = 2566, semester = 1) => ({ course_code, category_code, credits, grade, academic_year, semester });
+const completeCsRows = ({ general = 30, major = 30 } = {}) => [
+  categoryRow('GEN', 'general_education', general),
+  categoryRow('CORE', 'major_core', 12),
+  categoryRow('SPEC', 'major_specific', 42),
+  categoryRow('MAJOR', 'major', major),
+  categoryRow('OUT', 'outside_major_required', 3),
+  categoryRow('FREE', 'free_elective', 6),
+  categoryRow('CS101', 'major_core', 0, 'C'),
+  categoryRow('CS102', 'major_core', 0, 'C'),
+  categoryRow('CS111', 'major_core', 0, 'C'),
+];
+
+test('evaluateByCategory passes CS at exactly 123 and keeps CNC config separate', () => {
+  const cs = evaluateByCategory(completeCsRows(), { curriculumId: 'BSC-CS-2566' });
+  assert.equal(cs.total.earnedCredits, 123);
+  assert.equal(cs.passedAllCategories, true);
+  assert.equal(cs.categories.find(item => item.code === 'major_core').requiredCredits, 12);
+  const cnc = evaluateByCategory([categoryRow('GEN', 'general_education', 24)], { curriculumId: 'BSC-CNC-2568' });
+  assert.equal(cnc.total.requiredCredits, 126);
+  assert.notEqual(cnc.categories.some(item => item.code === 'major_core'), true);
+});
+
+test('evaluateByCategory passes CNC at exactly 126 credits', () => {
+  const rows = [
+    categoryRow('GEN', 'general_education', 24),
+    categoryRow('MATH', 'mathematics_foundation', 9),
+    categoryRow('REQUIRED', 'major_required', 81),
+    categoryRow('PROJECT', 'project_or_coop', 6),
+    categoryRow('FREE', 'free_elective', 6),
+    ...['CNC101', 'CNC102', 'CNC222', 'CNC231', 'CNC235'].map(code => categoryRow(code, 'major_required', 0, 'C')),
+  ];
+  const result = evaluateByCategory(rows, { curriculumId: 'BSC-CNC-2568' });
+  assert.equal(result.total.earnedCredits, 126);
+  assert.equal(result.passedAllCategories, true);
+});
+
+test('evaluateByCategory can reach the total while a category is still short', () => {
+  const result = evaluateByCategory(completeCsRows({ general: 33, major: 27 }), { curriculumId: 'BSC-CS-2566' });
+  assert.equal(result.total.earnedCredits, 123);
+  assert.equal(result.total.passed, true);
+  assert.equal(result.passedAllCategories, false);
+  assert.equal(result.categories.find(item => item.code === 'major').missingCredits, 3);
+  assert.equal(result.categories.find(item => item.code === 'free_elective').carriedInCredits, 3);
+});
+
+test('evaluateByCategory counts repeated courses once and keeps only earned grades', () => {
+  const result = evaluateByCategory([
+    categoryRow('REPEAT', 'general_education', 3, 'F'),
+    categoryRow('REPEAT', 'general_education', 3, 'A', 2567),
+    categoryRow('FAIL', 'general_education', 3, 'W'),
+    categoryRow('FAIL2', 'general_education', 3, 'U'),
+    categoryRow('PASS', 'general_education', 3, 'S'),
+  ], { curriculumId: 'BSC-CS-2566' });
+  const general = result.categories.find(item => item.code === 'general_education');
+  assert.equal(general.rawEarnedCredits, 6);
+  assert.deepEqual(general.courses.map(item => item.courseCode), ['REPEAT', 'PASS']);
+});
+
+test('mandatory course below C is not counted and appears as missing', () => {
+  const result = evaluateByCategory([categoryRow('CS101', 'major_core', 3, 'D')], { curriculumId: 'BSC-CS-2566' });
+  const core = result.categories.find(item => item.code === 'major_core');
+  assert.equal(core.rawEarnedCredits, 0);
+  assert.deepEqual(core.mandatoryMissingCourses, [
+    { courseCode: 'CS101', minimumGrade: 'C' },
+    { courseCode: 'CS102', minimumGrade: 'C' },
+    { courseCode: 'CS111', minimumGrade: 'C' },
+  ]);
+});
+
+test('uncategorized records become explicit warnings', () => {
+  const result = evaluateByCategory([categoryRow('UNKNOWN', 'uncategorized', 3, 'A')], { curriculumId: 'BSC-CS-2566' });
+  assert.deepEqual(result.uncategorizedWarnings, [{ courseCode: 'UNKNOWN', reason: 'uncategorized', attempts: 1 }]);
 });
 
 test('self-reported free electives keep the free-elective category', () => {

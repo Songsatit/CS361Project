@@ -3392,9 +3392,25 @@
 .graduation-warning-panel h3 { margin-top: 0; }
 .graduation-category-row { display: grid; grid-template-columns: minmax(90px, 140px) 1fr minmax(180px, 280px); gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid rgba(120, 90, 20, .15); }
 .graduation-category-row select { min-height: 42px; }
+.graduation-category-summary { margin: 18px 0; padding: 18px; border: 1px solid rgba(35, 32, 29, .12); border-radius: 14px; background: #fff; }
+.graduation-category-summary h3 { margin-top: 0; }
+.graduation-category-verdict { font-size: 1.05rem; font-weight: 700; }
+.graduation-category-total { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 14px; }
+.graduation-category-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.graduation-category-card { padding: 10px 12px; border: 1px solid #d7dbe2; border-radius: 10px; background: #fbfcfd; }
+.graduation-category-card summary { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; cursor: pointer; }
+.graduation-category-status { font-size: 1.2rem; font-weight: 800; }
+.graduation-category-missing { color: #a13a28; font-weight: 700; }
+.graduation-progress { height: 10px; margin: 12px 0; overflow: hidden; border-radius: 99px; background: #e6e9ee; }
+.graduation-progress span { display: block; height: 100%; border-radius: inherit; background: #2c7a52; }
+.graduation-category-card:not([open]) .graduation-progress span { background: #2c7a52; }
+.graduation-category-card ul { margin: 8px 0; padding-left: 20px; }
 
 @media (max-width: 600px) {
   .graduation-category-row { grid-template-columns: 1fr; }
+  .graduation-category-grid { grid-template-columns: 1fr; }
+  .graduation-category-card summary { grid-template-columns: auto 1fr; }
+  .graduation-category-card summary > span:last-child { grid-column: 2; }
 }
 
 .graduation-error {

@@ -12,6 +12,7 @@ import {
 } from './graduation/evaluate.mjs';
 import { SELF_REPORTED_GRADES, validateGradeEntry } from './graduation/grade-entry.mjs';
 import { categoryConfigFor, classifyCurriculumCourse } from './graduation/category-config/index.mjs';
+import { evaluateByCategory } from './graduation/category-evaluate.mjs';
 
 const allowedRoles = new Set(['student', 'instructor', 'curriculum_admin', 'staff']);
 const jwtIssuer = 'cs361-curriculum-api';
@@ -1940,6 +1941,7 @@ async function buildGraduationResult(studentId) {
       inProgressRecords: [],
       rejectedRecords: [],
       uncategorizedRecords: [],
+      categoryEvaluation: null,
       submission: shapeGradeSubmission(submission),
       submissionHistory,
     };
@@ -1954,6 +1956,7 @@ async function buildGraduationResult(studentId) {
   // countSelfReported is on. The rest are returned separately and labelled.
   const { counted, pending, rejected, inProgress } = partitionGradeRecords(allCurriculumRecords, { countSelfReported });
   const curriculumRecords = counted;
+  const categoryEvaluation = evaluateByCategory(curriculumRecords, { curriculumId });
   const [studentMeta = {}] = await queryRows(
     `SELECT student_id, display_name, student_year
        FROM graduation_student_assignment
@@ -2065,6 +2068,7 @@ async function buildGraduationResult(studentId) {
     inProgressRecords: inProgress.map(shapeGradeRecord),
     rejectedRecords: rejected.map(shapeGradeRecord),
     uncategorizedRecords: uncategorizedRecords.map(shapeGradeRecord),
+    categoryEvaluation,
     submission: shapeGradeSubmission(submission),
     submissionHistory,
     plan: progressPlan,

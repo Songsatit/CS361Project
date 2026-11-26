@@ -1,6 +1,11 @@
 export const CS_CATEGORY_CONFIG = Object.freeze({
   curriculumId: 'BSC-CS-2566',
   totalCredits: 123,
+  excessCreditPolicy: 'carry_to_free_elective',
+  // TODO: confirm the registrar's exact treatment of excess credits.
+  excessCreditSourceCodes: Object.freeze(['general_education', 'major_core', 'major_specific', 'major', 'outside_major_required']),
+  minimumGradeByCourse: Object.freeze({ CS101: 'C', CS102: 'C', CS111: 'C' }),
+  mandatoryCourseCategory: Object.freeze({ CS101: 'major_core', CS102: 'major_core', CS111: 'major_core' }),
   categories: Object.freeze([
     { code: 'general_education', label: 'วิชาศึกษาทั่วไป', minimumCredits: 30 },
     { code: 'major_core', label: 'วิชาเฉพาะ–วิชาแกน', minimumCredits: 12 },

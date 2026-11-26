@@ -1,6 +1,11 @@
 export const CNC_CATEGORY_CONFIG = Object.freeze({
   curriculumId: 'BSC-CNC-2568',
   totalCredits: 126,
+  excessCreditPolicy: 'carry_to_free_elective',
+  // TODO: confirm the registrar's exact treatment of excess credits.
+  excessCreditSourceCodes: Object.freeze(['general_education', 'mathematics_foundation', 'major_required', 'project_or_coop']),
+  minimumGradeByCourse: Object.freeze({ CNC101: 'C', CNC102: 'C', CNC222: 'C', CNC231: 'C', CNC235: 'C' }),
+  mandatoryCourseCategory: Object.freeze({ CNC101: 'major_required', CNC102: 'major_required', CNC222: 'major_required', CNC231: 'major_required', CNC235: 'major_required' }),
   categories: Object.freeze([
     { code: 'general_education', label: 'วิชาศึกษาทั่วไป', minimumCredits: 24 },
     { code: 'mathematics_foundation', label: 'วิชาเฉพาะ–พื้นฐานด้านคณิตศาสตร์', minimumCredits: 9 },
