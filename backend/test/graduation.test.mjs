@@ -30,6 +30,7 @@ import { categoryConfigFor, categoryConfigTotals, classifyCurriculumCourse } fro
 import { gradePolicyFor } from '../src/graduation/grade-policy-config/index.mjs';
 import { backfillCategories, categoryUpdateForRow } from '../src/graduation/category-backfill.mjs';
 import { evaluateByCategory } from '../src/graduation/category-evaluate.mjs';
+import { evaluatePrerequisites } from '../src/graduation/prerequisite-evaluate.mjs';
 import { normalizeCourseCode } from '../src/graduation/course-code.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -301,8 +302,8 @@ test('category configs declare limited excess-credit policy without changing cur
   assert.equal(result.total.passed, true);
   assert.equal(result.passedAllCategories, false);
   assert.equal(result.categories.find(item => item.code === 'major').missingCredits, 3);
-  assert.equal(result.categories.find(item => item.code === 'free_elective').carriedInCredits, 0);
-  assert.equal(result.categories.find(item => item.code === 'free_elective').earnedCredits, 6);
+  assert.equal(result.categories.find(item => item.code === 'free_elective').carriedInCredits, 3);
+  assert.equal(result.categories.find(item => item.code === 'free_elective').earnedCredits, 9);
 });
 
 test('evaluateByCategory counts repeated courses once and keeps only earned grades', () => {
@@ -316,6 +317,34 @@ test('evaluateByCategory counts repeated courses once and keeps only earned grad
   const general = result.categories.find(item => item.code === 'general_education');
   assert.equal(general.rawEarnedCredits, 6);
   assert.deepEqual(general.courses.map(item => item.courseCode), ['REPEAT', 'PASS']);
+});
+
+test('structured category groups enforce one_of, one_group_of, ranges, and missing major warnings', () => {
+  const result = evaluateByCategory([
+    categoryRow('TU250', 'general_education', 1.5),
+    categoryRow('TU201', 'general_education', 3),
+    categoryRow('CNC303', 'project_or_coop', 3),
+    categoryRow('CNC404', 'project_or_coop', 3),
+  ], { curriculumId: 'BSC-CNC-2568' });
+  const ge = result.categories.find(item => item.code === 'general_education');
+  const project = result.categories.find(item => item.code === 'project_or_coop');
+  assert.equal(ge.groups.length, 5);
+  assert.equal(project.groups[0].passed, false);
+  assert.match(project.warnings[0], /กลุ่มเดียวกัน/);
+  const cs = evaluateByCategory([categoryRow('CS221', 'major_specific', 3)], { curriculumId: 'BSC-CS-2566' });
+  assert.match(cs.categories.find(item => item.code === 'major').warnings[0], /ไม่ทราบเอก/);
+});
+
+test('prerequisite evaluation uses any passing attempt and emits timing warnings', () => {
+  const result = evaluatePrerequisites([
+    { course_code: 'CS303', grade: 'C', academic_year: 2566, semester: 1 },
+    { course_code: 'CS304', grade: 'W', academic_year: 2566, semester: 2 },
+  ], [{ prerequisiteCode: 'CS303', minimumGrade: 'C' }], {
+    currentCourseCode: 'CS403', currentAcademicYear: 2567, currentSemester: 1,
+  });
+  assert.equal(result.passed, true);
+  const failed = evaluatePrerequisites([], [{ prerequisiteCode: 'CS303', minimumGrade: 'C' }], { currentCourseCode: 'CS403', currentAcademicYear: 2567, currentSemester: 1 });
+  assert.equal(failed.warnings[0].reason, 'not_studied');
 });
 
 test('mandatory course below C is not counted and appears as missing', () => {
