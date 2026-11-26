@@ -25,6 +25,7 @@ import {
   resolveDataSource,
 } from '../src/graduation/evaluate.mjs';
 import { isAccEligible, validateGradeEntry } from '../src/graduation/grade-entry.mjs';
+import { normalizeAcademicYear } from '../src/graduation/academic-year.mjs';
 import { categoryConfigFor, categoryConfigTotals, classifyCurriculumCourse } from '../src/graduation/category-config/index.mjs';
 import { gradePolicyFor } from '../src/graduation/grade-policy-config/index.mjs';
 import { backfillCategories, categoryUpdateForRow } from '../src/graduation/category-backfill.mjs';
@@ -84,6 +85,35 @@ test('normalizeCourseCode uses one canonical English code format', () => {
   assert.equal(normalizeCourseCode('คคป.211'), 'CNC211');
   assert.equal(normalizeCourseCode('คพ.101'), 'CS101');
   assert.equal(normalizeCourseCode('  cnc 211 '), 'CNC211');
+});
+
+test('normalizeAcademicYear keeps CE internal and converts BE only at the boundary', () => {
+  assert.equal(normalizeAcademicYear(2023), 2023);
+  assert.equal(normalizeAcademicYear(2566, { sourceCalendar: 'BE' }), 2023);
+  assert.equal(normalizeAcademicYear(2023, { sourceCalendar: 'BE' }), null);
+  assert.equal(normalizeAcademicYear(2566), null);
+});
+
+test('curriculum category config groups add up to each category', async () => {
+  const { categoryConfigFor } = await import('../src/graduation/category-config/index.mjs');
+  for (const curriculumId of ['BSC-CS-2566', 'BSC-CNC-2568']) {
+    const config = categoryConfigFor(curriculumId);
+    assert.equal(normalizeAcademicYear(config.academicYear), config.academicYear);
+    for (const category of config.categories) {
+      const groups = category.groups ?? [];
+      if (groups.length) assert.equal(groups.reduce((sum, group) => sum + Number(group.requiredCredits ?? 0), 0), category.minimumCredits, `${curriculumId}:${category.code}`);
+      for (const group of groups.filter(item => item.type === 'all')) {
+        assert.ok(Number(group.requiredCredits) > 0, `${curriculumId}:${category.code}:${group.code}`);
+      }
+      for (const majorGroups of Object.values(category.groupsByMajor ?? {})) {
+        assert.equal(majorGroups.reduce((sum, group) => sum + Number(group.requiredCredits ?? 0), 0), category.minimumCredits, `${curriculumId}:${category.code}:major`);
+      }
+    }
+  }
+  const cs = categoryConfigFor('BSC-CS-2566');
+  const cnc = categoryConfigFor('BSC-CNC-2568');
+  assert.equal(cs.categories.reduce((sum, item) => sum + item.minimumCredits, 0), 123);
+  assert.equal(cnc.categories.reduce((sum, item) => sum + item.minimumCredits, 0), 126);
 });
 
 test('ACC is accepted only for TU after course-code normalization', () => {
@@ -263,9 +293,9 @@ test('evaluateByCategory passes CNC at exactly 126 credits', () => {
   assert.equal(result.passedAllCategories, true);
 });
 
-test('evaluateByCategory does not carry excess credits into another category', () => {
-  assert.equal(categoryConfigFor('BSC-CS-2566').excessCreditPolicy, 'no_carry_over');
-  assert.equal(categoryConfigFor('BSC-CNC-2568').excessCreditPolicy, 'no_carry_over');
+test('category configs declare limited excess-credit policy without changing current evaluator behavior', () => {
+  assert.equal(categoryConfigFor('BSC-CS-2566').excessCreditPolicy, 'carry_to_free_elective_limited');
+  assert.equal(categoryConfigFor('BSC-CNC-2568').excessCreditPolicy, 'carry_to_free_elective_limited');
   const result = evaluateByCategory(completeCsRows({ general: 33, major: 27 }), { curriculumId: 'BSC-CS-2566' });
   assert.equal(result.total.earnedCredits, 123);
   assert.equal(result.total.passed, true);
