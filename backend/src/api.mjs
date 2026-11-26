@@ -2861,6 +2861,19 @@ async function reviewGradeSet(event) {
     if (Number(pending?.n ?? 0) > 0) {
       return response(409, { error: `ยังมีรายการนักศึกษากรอกเองที่รอยืนยัน ${Number(pending.n)} รายการ`, pendingSelfReported: Number(pending.n) });
     }
+    const graduationResult = await buildGraduationResult(studentId);
+    const failedConditions = (graduationResult.conditions ?? [])
+      .filter(condition => condition.status === 'not_passed')
+      .map(condition => condition.text);
+    const categoryFailed = graduationResult.categoryEvaluation?.status === 'ok'
+      && graduationResult.categoryEvaluation.passedAllCategories === false;
+    if (failedConditions.length || categoryFailed || graduationResult.verdict === 'not_met') {
+      return response(409, {
+        error: 'ยังไม่สามารถอนุมัติจบได้ เพราะผลตรวจยังมีเงื่อนไขไม่ผ่าน',
+        failedConditions,
+        categoryFailed,
+      });
+    }
   }
   const nextStatus = action === 'approve' ? 'APPROVED' : 'RETURNED';
   const [result] = await pool.execute(

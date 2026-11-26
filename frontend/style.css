@@ -3406,6 +3406,54 @@
 .graduation-category-card:not([open]) .graduation-progress span { background: #2c7a52; }
 .graduation-category-card ul { margin: 8px 0; padding-left: 20px; }
 
+.graduation-group-summary {
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid #e1e5e2;
+  border-radius: 14px;
+  background: #fff;
+}
+.graduation-panel-heading h3 { margin: 0; }
+.graduation-panel-heading p { margin: 0.2rem 0 0.8rem; color: #667166; font-size: 0.86rem; }
+.graduation-group-category {
+  margin-top: 0.55rem;
+  border: 1px solid #dfe5e1;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.graduation-group-category summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.7rem 0.85rem;
+  cursor: pointer;
+  background: #f7faf8;
+}
+.graduation-group-category summary span { color: #667166; white-space: nowrap; }
+.graduation-group-list { display: grid; gap: 0.45rem; padding: 0.75rem; }
+.graduation-condition-group {
+  padding: 0.65rem 0.75rem;
+  border-left: 4px solid #cbd5cf;
+  border-radius: 8px;
+  background: #fbfcfb;
+}
+.graduation-condition-group--passed { border-left-color: #2c7a52; }
+.graduation-condition-group--missing { border-left-color: #d97706; }
+.graduation-condition-group-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.graduation-condition-group-head > span:last-child { margin-left: auto; color: #667166; font-size: 0.86rem; }
+.graduation-condition-group-icon { font-weight: 800; color: #b45309; }
+.graduation-condition-group--passed .graduation-condition-group-icon { color: #17643c; }
+.graduation-condition-group-warning { margin: 0.35rem 0 0; color: #9a3412; font-size: 0.84rem; }
+.graduation-condition-group-courses { display: grid; gap: 0.25rem; margin: 0.45rem 0 0; padding: 0; list-style: none; }
+.graduation-condition-group-courses li { display: flex; justify-content: space-between; gap: 0.75rem; padding-top: 0.25rem; border-top: 1px solid #edf0ed; font-size: 0.86rem; }
+.graduation-condition-group-courses li span { color: #667166; }
+.graduation-condition-subgroups { display: grid; gap: 0.4rem; margin-top: 0.45rem; padding-left: 0.65rem; }
+
 @media (max-width: 600px) {
   .graduation-category-row { grid-template-columns: 1fr; }
   .graduation-category-grid { grid-template-columns: 1fr; }
