@@ -26,7 +26,7 @@ import {
 } from '../src/graduation/evaluate.mjs';
 import { isAccEligible, validateGradeEntry } from '../src/graduation/grade-entry.mjs';
 import { normalizeAcademicYear } from '../src/graduation/academic-year.mjs';
-import { categoryConfigFor, categoryConfigTotals, classifyCurriculumCourse } from '../src/graduation/category-config/index.mjs';
+import { categoryConfigFor, categoryConfigTotals, categoryForCourseCode, classifyCurriculumCourse } from '../src/graduation/category-config/index.mjs';
 import { gradePolicyFor } from '../src/graduation/grade-policy-config/index.mjs';
 import { backfillCategories, categoryUpdateForRow } from '../src/graduation/category-backfill.mjs';
 import { evaluateByCategory } from '../src/graduation/category-evaluate.mjs';
@@ -115,6 +115,14 @@ test('curriculum category config groups add up to each category', async () => {
   const cnc = categoryConfigFor('BSC-CNC-2568');
   assert.equal(cs.categories.reduce((sum, item) => sum + item.minimumCredits, 0), 123);
   assert.equal(cnc.categories.reduce((sum, item) => sum + item.minimumCredits, 0), 126);
+});
+
+test('category config resolves deployed curriculum suffixes and course categories', () => {
+  assert.equal(categoryConfigFor('BSC-CS-2566-CIS').curriculumId, 'BSC-CS-2566');
+  assert.deepEqual(categoryForCourseCode('BSC-CS-2566-CIS', 'CS100'), {
+    code: 'major_specific',
+    label: 'วิชาเฉพาะ–วิชาเฉพาะด้าน',
+  });
 });
 
 test('ACC is accepted only for TU after course-code normalization', () => {
@@ -345,6 +353,17 @@ test('prerequisite evaluation uses any passing attempt and emits timing warnings
   assert.equal(result.passed, true);
   const failed = evaluatePrerequisites([], [{ prerequisiteCode: 'CS303', minimumGrade: 'C' }], { currentCourseCode: 'CS403', currentAcademicYear: 2567, currentSemester: 1 });
   assert.equal(failed.warnings[0].reason, 'not_studied');
+});
+
+test('prerequisite OR groups do not require the other alternative and do not invent D', async () => {
+  const { evaluatePrerequisites } = await import('../src/graduation/prerequisite-evaluate.mjs');
+  const result = evaluatePrerequisites([
+    { course_code: 'CS102', grade: 'S', academic_year: 2566, semester: 1 },
+  ], [{ anyOf: ['CS102', 'CS103'], minimumGrade: null }], {
+    currentCourseCode: 'CS111', currentAcademicYear: 2567, currentSemester: 1,
+  });
+  assert.equal(result.passed, true);
+  assert.equal(result.warnings.length, 0);
 });
 
 test('mandatory course below C is not counted and appears as missing', () => {

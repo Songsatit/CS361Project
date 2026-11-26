@@ -90,6 +90,8 @@ cmd_backend() {
     "LambdaExecutionRoleArn=$labrole"
     "TuApplicationKey=$tu_key" "JwtSecret=$jwt"
     "FrontendOrigin=$FRONTEND_ORIGIN"
+    "CourseApiUrlCs=${COURSE_API_URL_CS:-}"
+    "CourseApiUrlCnc=${COURSE_API_URL_CNC:-}"
     "UseProxy=${USE_PROXY:-false}"
   )
   if [ "${USE_PROXY:-false}" = true ]; then

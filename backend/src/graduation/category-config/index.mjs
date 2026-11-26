@@ -7,7 +7,9 @@ export const CATEGORY_CONFIG_BY_CURRICULUM = Object.freeze({
 });
 
 export function categoryConfigFor(curriculumId) {
-  return CATEGORY_CONFIG_BY_CURRICULUM[curriculumId] ?? null;
+  return CATEGORY_CONFIG_BY_CURRICULUM[curriculumId]
+    ?? Object.values(CATEGORY_CONFIG_BY_CURRICULUM).find(item => String(curriculumId ?? '').startsWith(item.curriculumId))
+    ?? null;
 }
 
 const CATEGORY_BY_CODE = new Map(
@@ -32,6 +34,26 @@ const LABEL_ALIASES = Object.freeze({
 
 export function categoryForCode(curriculumId, code) {
   return CATEGORY_BY_CODE.get(`${curriculumId}:${code}`) ?? null;
+}
+
+function groupHasCode(group, code) {
+  const normalized = normalize(code).replace(/\s+/g, '').toUpperCase();
+  if ((group.courses ?? []).some(item => normalize(item).replace(/\s+/g, '').toUpperCase() === normalized)) return true;
+  if (Object.values(group.coursesByMajor ?? {}).some(items => items.some(item => normalize(item).replace(/\s+/g, '').toUpperCase() === normalized))) return true;
+  const range = group.courseCodeRange;
+  const match = range && normalized.match(new RegExp(`^${normalize(range.prefix)}(\\d+)$`, 'i'));
+  return Boolean(match && Number(match[1]) >= Number(range.minNumber) && Number(match[1]) <= Number(range.maxNumber));
+}
+
+export function categoryForCourseCode(curriculumId, code) {
+  const config = CATEGORY_CONFIG_BY_CURRICULUM[curriculumId]
+    ?? Object.values(CATEGORY_CONFIG_BY_CURRICULUM).find(item => String(curriculumId).startsWith(item.curriculumId));
+  for (const category of config?.categories ?? []) {
+    const groups = [...(category.groups ?? []), ...Object.values(category.groupsByMajor ?? {}).flat()];
+    const visit = group => groupHasCode(group, code) || (group.subgroups ?? []).some(visit) || (group.groups ?? []).some(visit);
+    if (groups.some(visit)) return { code: category.code, label: category.label };
+  }
+  return null;
 }
 
 export function classifyCurriculumCourse({ curriculumId, courseGroup, classificationCode } = {}) {

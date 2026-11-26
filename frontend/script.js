@@ -1167,21 +1167,26 @@ function renderGraduationPlanForm(result) {
 
   // Courses already entered, by code, so a row that was sent is not asked for again.
   const existing = new Map();
-  const note = (rows, label, locked) => (rows ?? []).forEach(row => existing.set(graduationCodeKey(row.courseCode), { label, locked, grade: row.grade }));
+  const note = (rows, label, locked) => (rows ?? []).forEach(row => existing.set(graduationCodeKey(row.courseCode), {
+    label, grade: row.grade, source: row.source, verificationStatus: row.verificationStatus,
+    locked: locked && !(row.source === "self_reported" && ["unverified", "rejected"].includes(row.verificationStatus)),
+  }));
   // Rejected first, so a locked row for the same course always wins.
   note(result?.rejectedRecords, "ถูกปฏิเสธ กรอกใหม่ได้", false);
-  note(result?.records, "ยืนยันแล้ว", true);
+  note(result?.records, "นำเข้าจากทะเบียน", true);
   note(result?.pendingRecords, "ส่งแล้ว รอยืนยัน", true);
   note(result?.inProgressRecords, "กำลังเรียน (ส่งแล้ว)", true);
 
   const gradeOptions = selected => graduationGradeOptionsHtml(selected);
-  const termTable = term => `<section class="graduation-plan-term"><div class="graduation-plan-term-head"><h4>ปี ${esc(term.year)} · ${esc(term.term === 3 ? "Summer" : `ภาค ${term.term}`)}</h4><label class="graduation-plan-bulk">ตั้งทุกวิชาในภาคนี้เป็น <select data-graduation-plan-bulk aria-label="ตั้งเกรดทั้งภาคเรียน">${graduationGradeOptionsHtml("", { blankLabel: "เลือก…" })}</select></label></div><table><thead><tr><th>วิชา</th><th>ชื่อวิชา</th><th>หน่วยกิต</th><th>เกรด</th></tr></thead><tbody>${term.courses.map(code => {
+  const termChoices = terms.map(item => `<option value="${esc(`${item.year}-${item.term}`)}">ปี ${esc(item.year)} · ${esc(item.term === 3 ? "Summer" : `ภาค ${item.term}`)}</option>`).join("");
+  const termTable = term => `<section class="graduation-plan-term"><div class="graduation-plan-term-head"><h4>ปี ${esc(term.year)} · ${esc(term.term === 3 ? "Summer" : `ภาค ${term.term}`)}</h4><label class="graduation-plan-bulk">ตั้งทุกวิชาในภาคนี้เป็น <select data-graduation-plan-bulk aria-label="ตั้งเกรดทั้งภาคเรียน">${graduationGradeOptionsHtml("", { blankLabel: "เลือก…" })}</select></label></div><table><thead><tr><th>วิชา</th><th>ชื่อวิชา</th><th>หน่วยกิต</th><th>เทอมที่เรียนจริง</th><th>เกรด</th></tr></thead><tbody>${term.courses.map(code => {
     const info = existing.get(graduationCodeKey(code));
     const course = COURSES[courseKey(code)] ?? {};
+    const selectedGrade = info?.grade ?? form.grades?.[code] ?? "";
     const cell = info?.locked
       ? `<span class="graduation-plan-done">${esc(info.label)}</span>`
-      : `<select data-graduation-plan-grade="${esc(code)}" aria-label="เกรด ${esc(code)}">${gradeOptions(form.grades?.[code] ?? "")}</select>${info ? `<small> ${esc(info.label)}</small>` : ""}`;
-    return `<tr data-plan-row data-code="${esc(code)}" data-year="${esc(term.year)}" data-term="${esc(term.term)}" data-credits="${esc(course.credits ?? "")}"><td>${esc(code)}</td><td>${esc(course.name ?? "-")}</td><td>${esc(course.credits ?? "-")}</td><td>${cell}</td></tr>`;
+      : `<select data-graduation-plan-grade="${esc(code)}" aria-label="เกรด ${esc(code)}">${gradeOptions(selectedGrade)}</select>${info ? `<small> ${esc(info.label)}</small>` : ""}`;
+    return `<tr data-plan-row data-code="${esc(code)}" data-year="${esc(term.year)}" data-term="${esc(term.term)}" data-credits="${esc(course.credits ?? "")}"><td>${esc(code)}</td><td>${esc(course.name ?? "-")}</td><td>${esc(course.credits ?? "-")}</td><td><select data-graduation-plan-move aria-label="เทอมที่เรียนจริงของ ${esc(code)}"${info?.locked ? " disabled" : ""}>${termChoices.replace(`value="${term.year}-${term.term}"`, `value="${term.year}-${term.term}" selected`)}</select><input data-graduation-plan-attempt type="number" min="1" max="9" placeholder="รอบ" aria-label="รอบที่เรียน ${esc(code)}"${info?.locked ? " disabled" : ""}></td><td>${cell}</td></tr>`;
   }).join("")}</tbody></table></section>`;
 
   // One collapsible block per study year, first year open by default.
@@ -1372,7 +1377,8 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
   const submissionPanel = `<section class="graduation-submission-panel graduation-submission-panel--${esc(submission.status)}" role="status"><div><strong>${esc(statusInfo[0])} ${esc(statusInfo[1])}</strong><span>${esc(statusInfo[2])}</span>${submission.returnNote ? `<p class="graduation-return-note">หมายเหตุเจ้าหน้าที่: ${esc(submission.returnNote)}</p>` : ""}</div><div class="graduation-submission-actions">${mode === "student" && canEditSubmission ? `<button type="button" class="workflow-action workflow-action--primary" data-graduation-submit>ส่งให้เจ้าหน้าที่ตรวจ</button>` : ""}${mode === "reviewer" && submission.status === "SUBMITTED" ? `<button type="button" class="workflow-action workflow-action--primary" data-graduation-submission-action="approve">อนุมัติจบ</button><button type="button" class="workflow-action workflow-action--muted" data-graduation-submission-action="return">ส่งกลับแก้ไข</button>` : ""}</div>${result.submissionHistory?.length ? `<details><summary>ประวัติสถานะ</summary><ul>${result.submissionHistory.map(item => `<li>${esc(item.createdAt ? new Date(item.createdAt).toLocaleString("th-TH") : "")} · ${esc(item.actorUsername)} · ${esc(item.action)}${item.note ? ` · ${esc(item.note)}` : ""}</li>`).join("")}</ul></details>` : ""}</section>`;
   const categoryResult = result.categoryEvaluation;
   const prerequisitePanel = result.prerequisiteWarnings?.length ? `<section class="graduation-warning-panel"><h3>⚠ เงื่อนไขวิชาก่อนหน้า</h3><ul>${result.prerequisiteWarnings.map(item => `<li>${esc(item.message ?? `${item.courseCode} ต้องผ่าน ${item.prerequisiteCode}`)}</li>`).join("")}</ul></section>` : "";
-  const groupSummaryPanel = categoryResult?.categories?.some(category => category.groups?.length) ? `<section class="graduation-warning-panel"><h3>รายละเอียดกลุ่มเงื่อนไข</h3>${categoryResult.categories.filter(category => category.groups?.length).map(category => `<details><summary>${esc(category.label)}</summary><ul>${category.groups.map(group => `<li>${group.passed ? "✓" : "!"} ${esc(group.code ?? group.type)}: ได้ ${esc(group.earnedCredits)} / ต้อง ${esc(group.requiredCredits)} หน่วยกิต${group.warnings?.length ? ` — ${esc(group.warnings.join(", "))}` : ""}</li>`).join("")}</ul></details>`).join("")}</section>` : "";
+  const renderGroup = group => `<li>${group.passed ? "✓" : "!"} ${esc(group.code ?? group.type)}: ได้ ${esc(group.earnedCredits)} / ต้อง ${esc(group.requiredCredits)} หน่วยกิต${group.warnings?.length ? ` — ${esc(group.warnings.join(", "))}` : ""}${group.courses?.length ? `<ul>${group.courses.map(course => `<li>${esc(course.courseCode)} · ${esc(course.credits)} หน่วยกิต · ${esc(course.grade)}</li>`).join("")}</ul>` : ""}${group.groups?.length ? `<ul>${group.groups.map(renderGroup).join("")}</ul>` : ""}</li>`;
+  const groupSummaryPanel = categoryResult?.categories?.some(category => category.groups?.length) ? `<section class="graduation-warning-panel"><h3>รายละเอียดกลุ่มเงื่อนไข</h3>${categoryResult.categories.filter(category => category.groups?.length).map(category => `<details><summary>${esc(category.label)}</summary><ul>${category.groups.map(renderGroup).join("")}</ul></details>`).join("")}</section>` : "";
   const categorySummaryPanel = categoryResult?.status === "ok" ? `<section class="graduation-category-summary"><h3>สรุปหน่วยกิตตามหมวด</h3><p class="graduation-category-verdict" role="status">${categoryResult.passedAllCategories ? "✓ ครบทุกหมวดและยอดรวมแล้ว" : `! ยังไม่ครบเกณฑ์จบ ขาด ${categoryResult.categories.filter(item => !item.passed).length} หมวด`}</p><div class="graduation-category-total"><strong>รวม ${esc(categoryResult.total.earnedCredits)} / ${esc(categoryResult.total.requiredCredits)} หน่วยกิต</strong>${categoryResult.total.missingCredits ? `<span>ขาดอีก ${esc(categoryResult.total.missingCredits)} หน่วยกิต</span>` : ""}</div><div class="graduation-category-grid">${categoryResult.categories.map(category => { const percent = category.requiredCredits ? Math.min(100, Math.round(category.earnedCredits / category.requiredCredits * 100)) : 100; return `<details class="graduation-category-card"${category.passed ? "" : " open"}><summary><span class="graduation-category-status">${category.passed ? "✓" : "!"}</span><strong>${esc(category.label)}</strong><span>ได้ ${esc(category.earnedCredits)} / ต้อง ${esc(category.requiredCredits)} หน่วยกิต</span></summary><div class="graduation-progress" role="progressbar" aria-valuenow="${percent}" aria-valuemin="0" aria-valuemax="100"><span style="width:${percent}%"></span></div>${category.missingCredits ? `<p class="graduation-category-missing">ขาดอีก ${esc(category.missingCredits)} หน่วยกิต</p>` : ""}${category.mandatoryMissingCourses?.length ? `<p><strong>วิชาบังคับที่ยังไม่ผ่าน</strong></p><ul>${category.mandatoryMissingCourses.map(item => `<li>${esc(item.courseCode)} ต้องได้อย่างน้อย ${esc(item.minimumGrade)}</li>`).join("")}</ul>` : ""}<ul>${category.courses.map(course => `<li>${esc(course.courseCode)} · ${esc(course.credits)} หน่วยกิต · ${esc(course.grade)}</li>`).join("") || "<li>ยังไม่มีวิชาที่นับได้</li>"}</ul>${category.carriedInCredits ? `<p>รับหน่วยกิตส่วนเกินจากหมวดอื่น ${esc(category.carriedInCredits)} หน่วยกิต</p>` : ""}</details>`; }).join("")}</div></section>` : "";
   return `
     <section class="graduation-result-card">
@@ -5053,11 +5059,14 @@ function bind() {
         const value = row.querySelector("select")?.value;
         if (!value) return;
         const credits = Number(row.dataset.credits);
+        const moved = row.querySelector("[data-graduation-plan-move]")?.value?.split("-").map(Number) ?? [Number(row.dataset.year), Number(row.dataset.term)];
+        const attempt = Number(row.querySelector("[data-graduation-plan-attempt]")?.value ?? 0);
         entries.push({
           curriculumId: program.curriculumId,
           courseCode: row.dataset.code,
-          academicYear: entryYear + Number(row.dataset.year) - 1,
-          semester: Number(row.dataset.term),
+          academicYear: entryYear + Number(moved[0]) - 1,
+          semester: Number(moved[1]),
+          ...(attempt > 0 ? { attemptNo: attempt } : {}),
           credits: row.dataset.credits !== "" && Number.isFinite(credits) ? credits : undefined,
           ...(value === "IP" ? { inProgress: true } : { grade: value }),
         });

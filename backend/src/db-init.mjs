@@ -118,8 +118,16 @@ export async function handler(event = {}) {
 
     const quotedPassword = mysql.escape(appPassword);
     await conn.query(`CREATE USER IF NOT EXISTS '${appUser}'@'%' IDENTIFIED BY ${quotedPassword}`);
-    await conn.query(`ALTER USER '${appUser}'@'%' IDENTIFIED BY ${quotedPassword}`);
-    await conn.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON \`${DB_NAME}\`.* TO '${appUser}'@'%'`);
+    // MySQL prefers an exact host account over '%'. Older runs could therefore leave
+    // cs361_app@<lambda-ip> with a stale password while the '%' account was updated.
+    // Reset every existing host entry so all Lambda ENIs authenticate consistently.
+    const [appAccounts] = await conn.query('SELECT Host FROM mysql.user WHERE User = ?', [appUser]);
+    for (const account of appAccounts) {
+      const escapedUser = mysql.escapeId(appUser);
+      const escapedHost = mysql.escapeId(account.Host);
+      await conn.query(`ALTER USER ${escapedUser}@${escapedHost} IDENTIFIED BY ${quotedPassword}`);
+      await conn.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON \`${DB_NAME}\`.* TO ${escapedUser}@${escapedHost}`);
+    }
     log.push(`app user ${appUser} has SELECT, INSERT, UPDATE, DELETE on ${DB_NAME}.*`);
 
     for (const grant of grantRoles) {
