@@ -19,6 +19,8 @@ import {
 import {
   canViewGraduation,
   evaluateGraduation,
+  calcGPAX,
+  calcCoreAverageCondition,
   partitionGradeRecords,
   resolveDataSource,
 } from '../src/graduation/evaluate.mjs';
@@ -42,7 +44,7 @@ const DEMO_RULES = [
   { condition_order: 2, rule_type: 'min_total_credits', params: { min: 12 } },
   { condition_order: 3, rule_type: 'min_gpa', params: { min: 2 } },
   { condition_order: 5, rule_type: 'min_grade_each', params: { courses: ['DEMO101', 'DEMO102'], min_grade: 'C' } },
-  { condition_order: 6, rule_type: 'min_avg_grade', params: { courses: ['DEMO100', 'DEMO101', 'DEMO102', 'DEMO111'], min: 2 } },
+  { condition_order: 6, rule_type: 'min_avg_grade', params: { courses: ['DEMO100', 'DEMO101', 'DEMO102', 'DEMO111'], min: 2, courseMinimumGrades: { DEMO100: 'D', DEMO101: 'D', DEMO102: 'D', DEMO111: 'D' } } },
 ];
 
 // Builds DB-shaped grade rows from a CSV, the way the import writes them.
@@ -83,6 +85,89 @@ test('W and F are accepted and in-progress has no grade', () => {
   assert.equal(validateGradeEntry({ courseCode: 'CS101', grade: 'W', credits: 3 }).ok, true);
   assert.equal(validateGradeEntry({ courseCode: 'CS101', grade: 'F', credits: 3 }).ok, true);
   assert.equal(validateGradeEntry({ courseCode: 'CS101', inProgress: true, credits: 3 }).ok, true);
+});
+
+test('calcGPAX counts every attempt, including F, and excludes S/U/W from GPAX', () => {
+  const records = [
+    { course_code: 'R1', credits: 3, grade: 'A' },
+    { course_code: 'R1', credits: 3, grade: 'B' },
+    { course_code: 'R1', credits: 3, grade: 'F' },
+    { course_code: 'S1', credits: 3, grade: 'S' },
+    { course_code: 'U1', credits: 3, grade: 'U' },
+    { course_code: 'W1', credits: 3, grade: 'W' },
+  ];
+  const result = calcGPAX(records);
+  assert.equal(result.gradedCredits, 9);
+  assert.equal(result.weightedPoints, 21);
+  assert.equal(result.gpa, 21 / 9);
+});
+
+test('calcGPAX gives a 3-credit course taken three times a 9-credit denominator', () => {
+  const result = calcGPAX([
+    { course_code: 'R1', credits: 3, grade: 'F' },
+    { course_code: 'R1', credits: 3, grade: 'B' },
+    { course_code: 'R1', credits: 3, grade: 'A' },
+  ]);
+  assert.equal(result.gradedCredits, 9);
+  assert.equal(result.gpa, 7 / 3);
+});
+
+test('core average uses a passing later attempt when D is below a C requirement', () => {
+  const result = calcCoreAverageCondition([
+    { course_code: 'CS101', credits: 3, grade: 'D', academic_year: 2025, semester: 1 },
+    { course_code: 'CS101', credits: 3, grade: 'B', academic_year: 2026, semester: 1 },
+  ], {
+    curriculumId: 'BSC-CS-2566',
+    courses: ['CS101'],
+    requiredAverage: 2,
+    courseMinimumGrades: { CS101: 'C' },
+  });
+  assert.equal(result.status, 'passed');
+  assert.equal(result.details.selected[0].grade, 'B');
+});
+
+test('core average policies choose first, latest, or best passing attempt and flag duplicates', () => {
+  const records = [
+    { course_code: 'CS100', grade: 'D', academic_year: 2025, semester: 1 },
+    { course_code: 'CS100', grade: 'B', academic_year: 2026, semester: 1 },
+  ];
+  const options = { curriculumId: 'BSC-CS-2566', courses: ['CS100'], requiredAverage: 2, courseMinimumGrades: { CS100: 'D' } };
+  const first = calcCoreAverageCondition(records, { ...options, coreAveragePassPolicy: 'first_pass' });
+  const latest = calcCoreAverageCondition(records, { ...options, coreAveragePassPolicy: 'latest_pass' });
+  const best = calcCoreAverageCondition(records, { ...options, coreAveragePassPolicy: 'best_pass' });
+  assert.equal(first.details.selected[0].grade, 'D');
+  assert.equal(latest.details.selected[0].grade, 'B');
+  assert.equal(best.details.selected[0].grade, 'B');
+  assert.deepEqual(first.details.multiplePassingAttempts, ['CS100']);
+  assert.equal(first.details.reviewRequired, true);
+});
+
+test('core average ignores a latest F when an earlier attempt passed', () => {
+  const result = calcCoreAverageCondition([
+    { course_code: 'CS101', grade: 'C', academic_year: 2025, semester: 1 },
+    { course_code: 'CS101', grade: 'F', academic_year: 2026, semester: 1 },
+  ], {
+    curriculumId: 'BSC-CS-2566',
+    courses: ['CS101'],
+    requiredAverage: 2,
+    courseMinimumGrades: { CS101: 'C' },
+  });
+  assert.equal(result.status, 'passed');
+  assert.equal(result.details.selected[0].grade, 'C');
+});
+
+test('core average reaches the exact 2.00 boundary', () => {
+  const result = calcCoreAverageCondition([
+    { course_code: 'CS100', grade: 'C', academic_year: 2025, semester: 1 },
+    { course_code: 'CS232', grade: 'C', academic_year: 2025, semester: 1 },
+  ], {
+    curriculumId: 'BSC-CS-2566',
+    courses: ['CS100', 'CS232'],
+    requiredAverage: 2,
+    courseMinimumGrades: { CS100: 'C', CS232: 'D' },
+  });
+  assert.equal(result.status, 'passed');
+  assert.equal(result.details.average, 2);
 });
 
 test('backend category configs stay separate and add up to each curriculum total', () => {
@@ -306,7 +391,8 @@ test('TC1: DEMO0002 is shown the conditions it has not passed (GPA, C in DEMO101
   assert.equal(statusOf(result, 3).status, 'not_passed');
   assert.equal(statusOf(result, 3).details.gpa, 1.13);
   assert.deepEqual(statusOf(result, 5).details.belowMinimum, ['DEMO101', 'DEMO102']);
-  assert.equal(statusOf(result, 6).status, 'not_passed');
+  assert.equal(statusOf(result, 6).status, 'incomplete');
+  assert.equal(statusOf(result, 6).reason, 'missing_courses');
 });
 
 test('TC2: DEMO0003 with batch-001 only is missing DEMO102, so conditions 5 and 6 are incomplete', () => {

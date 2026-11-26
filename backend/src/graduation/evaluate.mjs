@@ -6,6 +6,7 @@
 // caps the verdict at 'met_pending_review'.
 // When the data is stale, failed, or partially rejected, no condition is reported as
 // passed or not passed, and the verdict stays inconclusive.
+import { gradePolicyFor } from './grade-policy-config/index.mjs';
 
 export const GRADE_POINTS = Object.freeze({ A: 4, 'B+': 3.5, B: 3, 'C+': 2.5, C: 2, 'D+': 1.5, D: 1, F: 0 });
 const PASS_ONLY_GRADES = new Set(['S', 'P']); // no GPA points; counts as earned credit
@@ -30,6 +31,26 @@ export function earnsCredit(grade) {
   const points = gradePoints(grade);
   if (points !== null) return points >= 1;
   return PASS_ONLY_GRADES.has(grade);
+}
+
+// GPAX deliberately visits every counted attempt. Repeated attempts therefore contribute
+// their credits to the denominator and F contributes zero points to that denominator.
+export function calcGPAX(records) {
+  let gradedCredits = 0;
+  let weightedPoints = 0;
+  for (const record of records) {
+    const credits = Number(record.credits);
+    const points = gradePoints(record.grade);
+    if (points !== null) {
+      gradedCredits += credits;
+      weightedPoints += points * credits;
+    }
+  }
+  return {
+    gradedCredits,
+    weightedPoints,
+    gpa: gradedCredits > 0 ? weightedPoints / gradedCredits : null,
+  };
 }
 
 const normalizeCourse = (code) => String(code ?? '').replace(/\s+/g, '');
@@ -88,19 +109,8 @@ function latestAttempts(records) {
 
 export function summarize(records) {
   const latest = latestAttempts(records);
-  let earnedCredits = 0;
-  let gradedCredits = 0;
-  let weightedPoints = 0;
-  for (const record of latest.values()) {
-    const credits = Number(record.credits);
-    if (earnsCredit(record.grade)) earnedCredits += credits;
-    const points = gradePoints(record.grade);
-    if (points !== null) {
-      gradedCredits += credits;
-      weightedPoints += points * credits;
-    }
-  }
-  return { latest, earnedCredits, gpa: gradedCredits > 0 ? weightedPoints / gradedCredits : null };
+  const earnedCredits = [...latest.values()].reduce((sum, record) => sum + (earnsCredit(record.grade) ? Number(record.credits) : 0), 0);
+  return { latest, earnedCredits, ...calcGPAX(records) };
 }
 
 const incomplete = (reason, details = {}) => ({ status: 'incomplete', reason, details });
@@ -110,7 +120,54 @@ const passFail = (passed, reason, details) => ({
   details,
 });
 
-export function evaluateRule(rule, summary) {
+export function calcCoreAverageCondition(records, {
+  curriculumId,
+  courses,
+  requiredAverage,
+  courseMinimumGrades,
+  coreAveragePassPolicy,
+} = {}) {
+  const normalizedCourses = Array.isArray(courses) ? courses.map(normalizeCourse) : [];
+  const required = Number(requiredAverage);
+  const policyConfig = gradePolicyFor(curriculumId);
+  const minimumGrades = courseMinimumGrades ?? policyConfig?.coreAverageCourseMinimumGrades;
+  const policy = coreAveragePassPolicy ?? policyConfig?.coreAveragePassPolicy ?? 'first_pass';
+  if (!normalizedCourses.length || !Number.isFinite(required) || !minimumGrades) return incomplete('unsupported_config');
+  const missingMinimumConfig = normalizedCourses.filter(code => gradePoints(minimumGrades[code]) === null);
+  if (missingMinimumConfig.length) return incomplete('unsupported_config', { missingMinimumConfig });
+  if (!['first_pass', 'latest_pass', 'best_pass'].includes(policy)) return incomplete('unsupported_config');
+
+  const selected = [];
+  const missing = [];
+  const multiplePassingAttempts = [];
+  for (const code of normalizedCourses) {
+    const minimumGrade = minimumGrades[code];
+    const minimumPoints = gradePoints(minimumGrade);
+    const passing = records
+      .filter(record => normalizeCourse(record.course_code) === code && gradePoints(record.grade) !== null && minimumPoints !== null && gradePoints(record.grade) >= minimumPoints)
+      .sort((a, b) => attemptOrder(a) - attemptOrder(b));
+    if (!passing.length) {
+      missing.push(code);
+      continue;
+    }
+    if (passing.length > 1) multiplePassingAttempts.push(code);
+    let chosen;
+    if (policy === 'latest_pass') chosen = passing[passing.length - 1];
+    else if (policy === 'best_pass') chosen = [...passing].sort((a, b) => gradePoints(b.grade) - gradePoints(a.grade) || attemptOrder(a) - attemptOrder(b))[0];
+    else chosen = passing[0];
+    selected.push({ code, grade: chosen.grade, points: gradePoints(chosen.grade), minimumGrade });
+  }
+  if (missing.length) return incomplete('missing_courses', { missing, requiredGradeByCourse: minimumGrades, selected, reviewRequired: multiplePassingAttempts.length > 0, multiplePassingAttempts, policy });
+  const average = selected.reduce((sum, item) => sum + item.points, 0) / selected.length;
+  return passFail(average + EPSILON >= required, 'below_minimum', {
+    average: roundTo(average, 2), required, courses: normalizedCourses, selected,
+    reviewRequired: multiplePassingAttempts.length > 0,
+    multiplePassingAttempts,
+    policy,
+  });
+}
+
+export function evaluateRule(rule, summary, { curriculumId } = {}) {
   const params = rule.params ?? {};
   const courses = Array.isArray(params.courses) ? params.courses.map(normalizeCourse) : [];
 
@@ -159,31 +216,12 @@ export function evaluateRule(rule, summary) {
       return { status: 'passed', reason: null, details: { requiredGrade: params.min_grade, courses } };
     }
     case 'min_avg_grade': {
-      const required = Number(params.min);
-      if (!courses.length || !Number.isFinite(required)) return incomplete('unsupported_rule');
-      const missing = [];
-      const nonGpa = [];
-      let total = 0;
-      for (const code of courses) {
-        const attempt = summary.latest.get(code);
-        if (!attempt || NO_RESULT_GRADES.has(attempt.grade)) {
-          missing.push(code);
-          continue;
-        }
-        const points = gradePoints(attempt.grade);
-        if (points === null) {
-          nonGpa.push(code);
-          continue;
-        }
-        total += points;
-      }
-      if (missing.length) return incomplete('missing_courses', { missing });
-      if (nonGpa.length) return incomplete('non_gpa_grade', { courses: nonGpa });
-      const average = total / courses.length;
-      return passFail(average + EPSILON >= required, 'below_minimum', {
-        average: roundTo(average, 2),
-        required,
+      return calcCoreAverageCondition(summary.records, {
+        curriculumId,
         courses,
+        requiredAverage: params.min,
+        courseMinimumGrades: params.courseMinimumGrades,
+        coreAveragePassPolicy: params.coreAveragePassPolicy,
       });
     }
     // A condition only a person can judge (learning outcomes, faculty-specific requirements).
@@ -215,10 +253,10 @@ export function evaluateGraduation({ conditions, rules, records, dataSource }) {
     };
   }
 
-  const summary = summarize(records);
+  const summary = { ...summarize(records), records };
   const results = conditions.map((condition) => {
     const rule = rulesByOrder.get(condition.order);
-    const outcome = rule ? evaluateRule(rule, summary) : incomplete('no_rule');
+    const outcome = rule ? evaluateRule(rule, summary, { curriculumId: records[0]?.curriculum_id }) : incomplete('no_rule');
     if (!dataOk) {
       // Hide computed values from stale or partial data so they cannot be read as a result.
       return { order: condition.order, text: condition.text, status: 'incomplete', reason: `data_${dataSource.status}`, details: {} };
