@@ -42,6 +42,8 @@ const MIGRATIONS = [
   '013_study_plan_metadata.sql',
   '015_graduation_grade_source.sql',
   '016_student_contact.sql',
+  '019_graduation_grade_attempts.sql',
+  '020_graduation_grade_categories.sql',
 ];
 
 let conn;
@@ -355,4 +357,24 @@ test('a draft referenced by a curriculum version cannot be deleted', { skip: !en
   assert.match(response.body.error, /referenced by a curriculum version/i);
   await conn.execute('DELETE FROM curriculum_versions WHERE based_on_request_id = ?', [requestId]);
   await conn.execute('DELETE FROM change_requests WHERE id = ?', [requestId]);
+});
+
+test('category migration up/down preserves the complete grade data set and schema', { skip: !enabled }, async () => {
+  const [beforeRows] = await conn.query('SELECT * FROM graduation_grade_record ORDER BY grade_record_id');
+  const [beforeColumns] = await conn.query('SHOW COLUMNS FROM graduation_grade_record');
+  assert.ok(beforeColumns.some(column => column.Field === 'category_code'));
+  assert.ok(beforeColumns.some(column => column.Field === 'category_label'));
+
+  await conn.query(readBackend('migrations', 'rollback', '020_graduation_grade_categories.down.sql'));
+  const [afterDownRows] = await conn.query('SELECT * FROM graduation_grade_record ORDER BY grade_record_id');
+  const [afterDownColumns] = await conn.query('SHOW COLUMNS FROM graduation_grade_record');
+  const withoutCategory = rows => rows.map(({ category_code, category_label, ...row }) => row);
+  assert.deepEqual(withoutCategory(afterDownRows), withoutCategory(beforeRows));
+  assert.equal(afterDownColumns.some(column => column.Field === 'category_code'), false);
+  assert.equal(afterDownColumns.some(column => column.Field === 'category_label'), false);
+
+  // Restore the schema for the scratch database and prove the up file is runnable again.
+  await conn.query(readBackend('migrations', '020_graduation_grade_categories.sql'));
+  const [afterUpAgainRows] = await conn.query('SELECT * FROM graduation_grade_record ORDER BY grade_record_id');
+  assert.deepEqual(withoutCategory(afterUpAgainRows), withoutCategory(beforeRows));
 });
