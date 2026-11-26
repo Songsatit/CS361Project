@@ -1,4 +1,5 @@
 import mysql from 'mysql2/promise';
+import { categoryConfigFor, classifyCurriculumCourse } from './graduation/category-config/index.mjs';
 
 const CURRICULA = Object.freeze({
   CS: { id: 'BSC-CS-2566', env: 'COURSE_API_URL_CS' },
@@ -27,7 +28,58 @@ function apiUrl(base, params) {
   return url;
 }
 
+const groupMatches = (group, code) => {
+  const normalized = cleanCode(code);
+  if ((group.courses ?? []).some(item => cleanCode(item) === normalized)) return true;
+  if (Object.values(group.coursesByMajor ?? {}).some(items => items.some(item => cleanCode(item) === normalized))) return true;
+  const range = group.courseCodeRange;
+  const match = range && normalized.match(new RegExp(`^${cleanCode(range.prefix)}(\\d+)$`));
+  return Boolean(match && Number(match[1]) >= Number(range.minNumber) && Number(match[1]) <= Number(range.maxNumber));
+};
+
+function configCategory(curriculumId, code) {
+  const config = categoryConfigFor(curriculumId);
+  for (const category of config?.categories ?? []) {
+    const visit = group => groupMatches(group, code) || (group.subgroups ?? []).some(visit) || (group.groups ?? []).some(visit);
+    if ((category.groups ?? []).some(visit) || Object.values(category.groupsByMajor ?? {}).flat().some(visit)) {
+      return { code: category.code, label: category.label };
+    }
+  }
+  return null;
+}
+
+async function backfill(conn, event) {
+  const curriculumIds = event.curriculum === 'CS' ? ['BSC-CS-2566'] : event.curriculum === 'CNC' ? ['BSC-CNC-2568'] : ['BSC-CS-2566', 'BSC-CNC-2568'];
+  const marks = curriculumIds.map(() => '?').join(',');
+  const [rows] = await conn.query(`SELECT g.grade_record_id, g.curriculum_id, g.course_code, g.entry_type,
+      cc.course_group, cl.course_type_code FROM graduation_grade_record g
+      LEFT JOIN course c ON REPLACE(c.course_code, ' ', '') = REPLACE(g.course_code, ' ', '')
+      LEFT JOIN curriculum_course cc ON cc.course_id = c.course_id AND cc.curriculum_id = g.curriculum_id
+      LEFT JOIN course_classification cl ON cl.curriculum_course_id = cc.curriculum_course_id
+      WHERE g.category_code IS NULL AND g.curriculum_id IN (${marks}) ORDER BY g.grade_record_id`, curriculumIds);
+  const updates = rows.map(row => {
+    const category = row.entry_type === 'free_elective' ? { code: 'free_elective', label: 'วิชาเลือกเสรี' }
+      : configCategory(row.curriculum_id, row.course_code)
+        ?? classifyCurriculumCourse({ curriculumId: row.curriculum_id, courseGroup: row.course_group, classificationCode: row.course_type_code });
+    return { row, category };
+  });
+  const uncategorized = updates.filter(item => item.category.code === 'uncategorized');
+  const result = {
+    action: 'backfill', dryRun: event.dryRun !== false, scanned: updates.length,
+    categoryCounts: Object.fromEntries(updates.reduce((map, item) => map.set(item.category.code, (map.get(item.category.code) ?? 0) + 1), new Map())),
+    uncategorizedCount: uncategorized.length,
+    uncategorizedCourseCodes: [...new Set(uncategorized.map(item => item.row.course_code))].sort(),
+  };
+  if (result.dryRun) return { ok: true, ...result, message: 'dry-run: no database writes performed' };
+  for (const item of updates) await conn.execute(`UPDATE graduation_grade_record SET category_code = ?, category_label = ? WHERE grade_record_id = ? AND category_code IS NULL`, [item.category.code, item.category.label, item.row.grade_record_id]);
+  return { ok: true, ...result, updated: updates.length };
+}
+
 export async function handler(event = {}) {
+  if (event.action === 'backfill') {
+    const conn = await mysql.createConnection({ host: process.env.DB_HOST, port: Number(process.env.DB_PORT ?? 3306), database: process.env.DB_NAME ?? 'curriculum', user: process.env.DB_USER, password: process.env.DB_PASSWORD, ssl: { rejectUnauthorized: false } });
+    try { return await backfill(conn, event); } finally { await conn.end(); }
+  }
   const curriculum = String(event.curriculum ?? '').toUpperCase();
   const selected = CURRICULA[curriculum];
   if (!selected) throw new Error('curriculum must be CS or CNC');
