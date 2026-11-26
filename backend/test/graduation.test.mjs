@@ -23,6 +23,8 @@ import {
   resolveDataSource,
 } from '../src/graduation/evaluate.mjs';
 import { validateGradeEntry } from '../src/graduation/grade-entry.mjs';
+import { categoryConfigTotals, classifyCurriculumCourse } from '../src/graduation/category-config/index.mjs';
+import { backfillCategories, categoryUpdateForRow } from '../src/graduation/category-backfill.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixture = (name) => readFileSync(path.join(here, '..', 'fixtures', 'v4-demo', name), 'utf8');
@@ -81,6 +83,56 @@ test('W and F are accepted and in-progress has no grade', () => {
   assert.equal(validateGradeEntry({ courseCode: 'CS101', grade: 'W', credits: 3 }).ok, true);
   assert.equal(validateGradeEntry({ courseCode: 'CS101', grade: 'F', credits: 3 }).ok, true);
   assert.equal(validateGradeEntry({ courseCode: 'CS101', inProgress: true, credits: 3 }).ok, true);
+});
+
+test('backend category configs stay separate and add up to each curriculum total', () => {
+  const totals = categoryConfigTotals();
+  assert.deepEqual(totals['BSC-CS-2566'], { totalCredits: 123, categoryCredits: 123 });
+  assert.deepEqual(totals['BSC-CNC-2568'], { totalCredits: 126, categoryCredits: 126 });
+  assert.equal(classifyCurriculumCourse({ curriculumId: 'BSC-CS-2566', courseGroup: 'วิชาศึกษาทั่วไป' }).code, 'general_education');
+  assert.equal(classifyCurriculumCourse({ curriculumId: 'BSC-CNC-2568', courseGroup: 'วิชาศึกษาทั่วไป' }).code, 'general_education');
+  assert.equal(classifyCurriculumCourse({ curriculumId: 'BSC-CS-2566', courseGroup: 'วิชาเฉพาะ' }).code, 'uncategorized');
+});
+
+test('self-reported free electives keep the free-elective category', () => {
+  assert.deepEqual(categoryUpdateForRow({ entry_type: 'free_elective', curriculum_id: 'BSC-CS-2566', course_group: null }), {
+    code: 'free_elective',
+    label: 'วิชาเลือกเสรี',
+  });
+});
+
+test('category migration is additive and does not overwrite grade values', () => {
+  const sql = readFileSync(path.join(here, '..', 'migrations', '020_graduation_grade_categories.sql'), 'utf8');
+  assert.match(sql, /ADD COLUMN category_code/);
+  assert.match(sql, /ADD COLUMN category_label/);
+  assert.doesNotMatch(sql, /UPDATE\s+graduation_grade_record/i);
+  assert.doesNotMatch(sql, /DELETE\s+FROM\s+graduation_grade_record/i);
+});
+
+test('category backfill updates only category fields and reports uncategorized rows', async () => {
+  const updates = [];
+  const conn = {
+    async query() {
+      return [[
+        { grade_record_id: 1, curriculum_id: 'BSC-CS-2566', course_code: 'TU101', entry_type: 'catalog', course_group: 'วิชาศึกษาทั่วไป', course_type_code: null },
+        { grade_record_id: 2, curriculum_id: 'BSC-CS-2566', course_code: 'UNKNOWN1', entry_type: 'catalog', course_group: 'วิชาเฉพาะ', course_type_code: null },
+        { grade_record_id: 3, curriculum_id: 'BSC-CS-2566', course_code: 'FREE1', entry_type: 'free_elective', course_group: null, course_type_code: null },
+      ]];
+    },
+    async execute(sql, params) {
+      updates.push({ sql, params });
+    },
+  };
+  const result = await backfillCategories(conn, { apply: true });
+  assert.equal(result.scanned, 3);
+  assert.equal(result.updated, 3);
+  assert.equal(result.uncategorizedCount, 1);
+  assert.deepEqual(result.uncategorizedCourseCodes, ['UNKNOWN1']);
+  assert.equal(updates.length, 3);
+  assert.deepEqual(updates[0].params, ['general_education', 'วิชาศึกษาทั่วไป', 1]);
+  assert.deepEqual(updates[2].params, ['free_elective', 'วิชาเลือกเสรี', 3]);
+  assert.match(updates[0].sql, /SET category_code = \?, category_label = \?/);
+  assert.match(updates[0].sql, /WHERE grade_record_id = \? AND category_code IS NULL/);
 });
 
 // ---------- Adapter: CSV parsing and contract validation ----------

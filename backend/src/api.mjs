@@ -11,6 +11,7 @@ import {
   resolveSelfReportedSource,
 } from './graduation/evaluate.mjs';
 import { SELF_REPORTED_GRADES, validateGradeEntry } from './graduation/grade-entry.mjs';
+import { classifyCurriculumCourse } from './graduation/category-config/index.mjs';
 
 const allowedRoles = new Set(['student', 'instructor', 'curriculum_admin', 'staff']);
 const jwtIssuer = 'cs361-curriculum-api';
@@ -1817,7 +1818,7 @@ const GRADUATION_SOURCE_KEY = 'registrar-demo';
 const graduationStudentIdPattern = /^[A-Za-z0-9]{1,20}$/;
 
 // Columns added by migration 015. Selected only when that migration is applied.
-const GRADE_SOURCE_COLUMNS = 'g.source, g.verification_status, g.is_in_progress, g.verification_note, g.verified_at, g.course_name, g.entry_type, g.attempt_no,';
+const GRADE_SOURCE_COLUMNS = 'g.source, g.verification_status, g.is_in_progress, g.verification_note, g.verified_at, g.course_name, g.entry_type, g.category_code, g.category_label, g.attempt_no,';
 
 // batch_id is NULL for self-reported rows (migration 015), so batches are joined with LEFT JOIN.
 // An inner join would silently drop every row a student entered.
@@ -1865,6 +1866,8 @@ function shapeGradeRecord(record) {
     verificationStatus: record.verification_status ?? 'verified',
     isInProgress: Number(record.is_in_progress ?? 0) === 1,
     entryType: record.entry_type ?? 'catalog',
+    categoryCode: record.category_code ?? null,
+    categoryLabel: record.category_label ?? null,
     attemptNo: Number(record.attempt_no ?? 1),
     verificationNote: record.verification_note ?? null,
   };
@@ -1934,6 +1937,7 @@ async function buildGraduationResult(studentId) {
       pendingRecords: [],
       inProgressRecords: [],
       rejectedRecords: [],
+      uncategorizedRecords: [],
     };
   }
 
@@ -1941,6 +1945,7 @@ async function buildGraduationResult(studentId) {
   const curriculumId = pickCurriculum(records.filter((record) => record.verification_status !== 'rejected'))
     ?? pickCurriculum(records);
   const allCurriculumRecords = records.filter((record) => record.curriculum_id === curriculumId);
+  const uncategorizedRecords = allCurriculumRecords.filter(record => !record.category_code || record.category_code === 'uncategorized');
   // Verified, finished rows feed the verdict, and so do undecided student-entered rows while
   // countSelfReported is on. The rest are returned separately and labelled.
   const { counted, pending, rejected, inProgress } = partitionGradeRecords(allCurriculumRecords, { countSelfReported });
@@ -2055,6 +2060,7 @@ async function buildGraduationResult(studentId) {
     pendingRecords: pending.map(shapeGradeRecord),
     inProgressRecords: inProgress.map(shapeGradeRecord),
     rejectedRecords: rejected.map(shapeGradeRecord),
+    uncategorizedRecords: uncategorizedRecords.map(shapeGradeRecord),
     plan: progressPlan,
   };
 }
@@ -2472,12 +2478,22 @@ async function saveSelfReportedGrade(actor, body) {
 
   // The catalog is the source of truth for credits when it knows the course.
   const [catalogCourse] = await queryRows(
-    `SELECT credits_total FROM course
-      WHERE REPLACE(course_code, ' ', '') = ? AND credits_total IS NOT NULL
-      ORDER BY active DESC, course_id LIMIT 1`,
-    [courseCode],
+    `SELECT c.credits_total, cc.course_group, cl.course_type_code
+       FROM course c
+       LEFT JOIN curriculum_course cc ON cc.course_id = c.course_id AND cc.curriculum_id = ?
+       LEFT JOIN course_classification cl ON cl.curriculum_course_id = cc.curriculum_course_id
+      WHERE REPLACE(c.course_code, ' ', '') = ? AND c.credits_total IS NOT NULL
+      ORDER BY c.active DESC, c.course_id LIMIT 1`,
+    [curriculumId, courseCode],
   );
   const credits = entryType === 'catalog' && catalogCourse ? Number(catalogCourse.credits_total) : Number(body.credits);
+  const category = entryType === 'free_elective'
+    ? { code: 'free_elective', label: 'วิชาเลือกเสรี' }
+    : classifyCurriculumCourse({
+      curriculumId,
+      courseGroup: catalogCourse?.course_group,
+      classificationCode: catalogCourse?.course_type_code,
+    });
   if (entryType === 'free_elective' && (!Number.isInteger(credits) || credits < 1)) {
     return response(400, { error: 'credits must be a positive integer for a free elective' });
   }
@@ -2513,19 +2529,19 @@ async function saveSelfReportedGrade(actor, body) {
       if (!editable) return response(409, { error: 'A grade for this course and term already exists' });
       await pool.execute(
         `UPDATE graduation_grade_record
-            SET course_name = ?, entry_type = ?, credits = ?, grade = ?, is_in_progress = ?, row_hash = ?, verification_status = 'unverified',
+            SET course_name = ?, entry_type = ?, category_code = ?, category_label = ?, credits = ?, grade = ?, is_in_progress = ?, row_hash = ?, verification_status = 'unverified',
                 verified_by = NULL, verified_at = NULL, verification_note = NULL
           WHERE grade_record_id = ? AND student_id = ?`,
-        [courseName || null, entryType, credits, grade, inProgress ? 1 : 0, rowHash, existing.grade_record_id, studentId],
+        [courseName || null, entryType, category.code, category.label, credits, grade, inProgress ? 1 : 0, rowHash, existing.grade_record_id, studentId],
       );
       recordId = Number(existing.grade_record_id);
     } else {
       const [inserted] = await pool.execute(
         `INSERT INTO graduation_grade_record
-          (student_id, curriculum_id, academic_year, semester, course_code, course_name, entry_type, attempt_no, credits, grade,
+          (student_id, curriculum_id, academic_year, semester, course_code, course_name, entry_type, category_code, category_label, attempt_no, credits, grade,
            source, verification_status, is_in_progress, row_hash, batch_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'self_reported', 'unverified', ?, ?, NULL)`,
-        [studentId, curriculumId, academicYear, semester, courseCode, courseName || null, entryType, attemptNo, credits, grade, inProgress ? 1 : 0, rowHash],
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'self_reported', 'unverified', ?, ?, NULL)`,
+        [studentId, curriculumId, academicYear, semester, courseCode, courseName || null, entryType, category.code, category.label, attemptNo, credits, grade, inProgress ? 1 : 0, rowHash],
       );
       recordId = Number(inserted.insertId);
     }
@@ -2553,6 +2569,8 @@ async function saveSelfReportedGrade(actor, body) {
     isInProgress: inProgress,
     courseName: courseName || null,
     entryType,
+    categoryCode: category.code,
+    categoryLabel: category.label,
     attemptNo,
     source: 'self_reported',
     verificationStatus: 'unverified',
