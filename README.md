@@ -1,5 +1,7 @@
 # CS361Project G650-08
 
+Locust V6 workload and cleanup guidance: see [loadtest/README.md](loadtest/README.md).
+
 # Curriculum Information & Graduation Verification System (V1)
 
 > ⚠️ **สำคัญ:** Implementation ของ V1 อยู่ที่ branch `frontend` (ยังไม่ merge เข้า
