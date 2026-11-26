@@ -1,8 +1,12 @@
-export const SELF_REPORTED_GRADES = new Set(['A', 'B+', 'B', 'C+', 'C', 'D+', 'D', 'F', 'S', 'U', 'W']);
+import { isAccEligible, normalizeCourseCode } from './grade-eligibility.mjs';
 
-export function validateGradeEntry(body = {}) {
+export const SELF_REPORTED_GRADES = new Set(['A', 'B+', 'B', 'C+', 'C', 'D+', 'D', 'F', 'S', 'U', 'W', 'ACC']);
+
+export { isAccEligible } from './grade-eligibility.mjs';
+
+export function validateGradeEntry(body = {}, { accConfig } = {}) {
   const entryType = body.entryType === 'free_elective' ? 'free_elective' : 'catalog';
-  const courseCode = String(body.courseCode ?? '').replace(/\s+/g, '').toUpperCase();
+  const courseCode = normalizeCourseCode(body.courseCode);
   const courseName = String(body.courseName ?? '').trim();
   const inProgress = body.inProgress === true;
   const grade = inProgress ? '-' : String(body.grade ?? '').trim().toUpperCase();
@@ -12,6 +16,7 @@ export function validateGradeEntry(body = {}) {
   if (!courseCode || !/^[A-Z0-9]{2,30}$/.test(courseCode)) errors.push('courseCode is invalid');
   if (entryType === 'free_elective' && !courseName) errors.push('courseName is required for a free elective');
   if (!inProgress && !SELF_REPORTED_GRADES.has(grade)) errors.push('grade is not accepted');
+  if (!inProgress && grade === 'ACC' && !isAccEligible(courseCode, accConfig ? { config: accConfig } : undefined)) errors.push('ACC ใช้ได้เฉพาะวิชา มธ. (TU)');
   if (entryType === 'free_elective' && (!Number.isInteger(credits) || credits < 1)) {
     errors.push('credits must be a positive integer for a free elective');
   }

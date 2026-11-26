@@ -1030,10 +1030,11 @@ const GRADUATION_GRADE_OPTIONS = ["A", "B+", "B", "C+", "C", "D+", "D", "F", "S"
 // Courses graded pass/fail give credits but no letter grade. They count toward total credits
 // and stay out of the GPA, so they get their own group and a plain-language label.
 const GRADUATION_LETTER_GRADES = ["A", "B+", "B", "C+", "C", "D+", "D", "F"];
-const GRADUATION_CREDIT_ONLY_GRADES = ["S"];
+const GRADUATION_CREDIT_ONLY_GRADES = ["S", "ACC"];
 const GRADUATION_OTHER_GRADES = ["U", "W"];
 const GRADUATION_GRADE_NAMES = {
   S: "S · ผ่าน (ได้หน่วยกิต ไม่มีเกรด)",
+  ACC: "ACC · ได้หน่วยกิต ไม่มีเกรด",
   U: "U · ไม่ผ่าน (ไม่ได้หน่วยกิต)",
   W: "W · ถอนรายวิชา",
 };
@@ -1314,7 +1315,7 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
     const years = [...new Set(rows.map(row => Number(row.academicYear)))].sort((a, b) => a - b);
     const latest = years[years.length - 1];
     const showActions = rows.some(rowActions);
-    const rowHtml = row => `<tr><td>${esc(row.courseCode)}${row.attemptNo > 1 ? ` <span class="graduation-pill graduation-pill--info">รอบที่ ${esc(row.attemptNo)}</span>` : ""}</td><td>${esc(row.courseNameTh ?? row.courseNameEn ?? "ไม่พบชื่อวิชา")}${row.entryType === "free_elective" ? ` <span class="graduation-pill graduation-pill--warn">วิชาเสรี</span>` : ""}</td><td>${esc(row.semester === 3 ? "Summer" : `ภาค ${row.semester}`)}</td><td>${esc(row.credits)}</td><td>${mode === "student" && state.graduationEditRow === row.id
+    const rowHtml = row => `<tr data-course-code="${esc(row.courseCode)}"><td>${esc(row.courseCode)}${row.attemptNo > 1 ? ` <span class="graduation-pill graduation-pill--info">รอบที่ ${esc(row.attemptNo)}</span>` : ""}</td><td>${esc(row.courseNameTh ?? row.courseNameEn ?? "ไม่พบชื่อวิชา")}${row.entryType === "free_elective" ? ` <span class="graduation-pill graduation-pill--warn">วิชาเสรี</span>` : ""}</td><td>${esc(row.semester === 3 ? "Summer" : `ภาค ${row.semester}`)}</td><td>${esc(row.credits)}</td><td>${mode === "student" && state.graduationEditRow === row.id
       ? `<select data-graduation-edit-select aria-label="เกรดใหม่ของ ${esc(row.courseCode)}">${graduationGradeOptionsHtml(row.isInProgress ? "IP" : row.grade, { blankLabel: null })}</select>`
       : (row.isInProgress
         ? `<span class="graduation-pill graduation-pill--info">กำลังเรียน</span>`
@@ -5057,6 +5058,8 @@ function bind() {
           ...(value === "IP" ? { inProgress: true } : { grade: value }),
         });
       });
+      const invalidAcc = entries.find(entry => entry.grade === "ACC" && !window.isAccEligible?.(entry.courseCode));
+      if (invalidAcc) return alert("ACC ใช้ได้เฉพาะวิชา มธ. (TU)");
       if (!entries.length) return alert("เลือกเกรดอย่างน้อยหนึ่งวิชา");
       const button = form.querySelector("button[type=submit]");
       button.disabled = true;
@@ -5218,6 +5221,8 @@ function bind() {
       const inProgress = formData.get("inProgress") === "on";
       const grade = String(formData.get("grade") ?? "");
       if (!inProgress && !grade) return alert("เลือกเกรด หรือติ๊ก \"กำลังเรียน\"");
+      const courseCode = String(formData.get("courseCode") ?? "");
+      if (!inProgress && grade === "ACC" && !window.isAccEligible?.(courseCode)) return alert("ACC ใช้ได้เฉพาะวิชา มธ. (TU)");
       const entryType = String(formData.get("entryType") ?? "catalog");
       const courseName = String(formData.get("courseName") ?? "").trim();
       const credits = Number(formData.get("credits"));
@@ -5232,7 +5237,7 @@ function bind() {
           headers: draftApiHeaders(),
           body: JSON.stringify({
             curriculumId: String(formData.get("curriculumId") ?? ""),
-            courseCode: String(formData.get("courseCode") ?? "").trim(),
+            courseCode,
             courseName,
             entryType,
             ...(formData.get("attemptNo") ? { attemptNo: Number(formData.get("attemptNo")) } : {}),
@@ -5272,6 +5277,11 @@ function bind() {
       const gradeId = button.dataset.graduationGradeEditSave;
       const value = button.closest("tr")?.querySelector("[data-graduation-edit-select]")?.value;
       if (!gradeId || !value) return;
+      const courseCode = button.closest("tr")?.dataset.courseCode ?? "";
+      if (value === "ACC" && !window.isAccEligible?.(courseCode)) {
+        alert("ACC ใช้ได้เฉพาะวิชา มธ. (TU)");
+        return;
+      }
       button.disabled = true;
       try {
         const response = await fetch(`${API_BASE}/api/graduation/me/grades/${encodeURIComponent(gradeId)}`, {

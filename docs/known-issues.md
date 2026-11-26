@@ -15,3 +15,10 @@ The grading functions now use `calcGPAX()` for every counted attempt. A 3-credit
 - U and W do not earn graduation credits and are excluded from GPAX.
 
 The existing grading implementation is intentionally unchanged in the category migration task.
+
+## Curriculum structure reference update
+
+- The CS core-average group is CS100, CS101, CS102, CS111, CS232, CS240, CS251, and CS261; every course uses C as the passing threshold.
+- The CNC core-average group is represented in the system as CNC101, CNC102, CNC211, CNC222, CNC231, CNC235, and CNC332; every course uses C as the passing threshold. The CNC prefix mapping follows the course codes already present in the repository; live database confirmation was unavailable to the agent.
+- CS graduation minimum-C courses are CS101, CS102, and CS111. CNC graduation minimum-C courses are CNC101, CNC102, CNC222, CNC231, and CNC235.
+- Category excess-credit policy is `no_carry_over` for CS and CNC. Excess credits do not satisfy another category; this remains subject to registrar confirmation.

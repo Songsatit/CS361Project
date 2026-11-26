@@ -4,6 +4,7 @@ import { gradePoints } from './evaluate.mjs';
 const normalizeCourse = value => String(value ?? '').replace(/\s+/g, '').toUpperCase();
 const attemptOrder = record => Number(record.academic_year ?? 0) * 10 + Number(record.semester ?? 0);
 const passGrade = (grade, minimumGrade = 'D') => {
+  if (grade === 'ACC') return true;
   if (grade === 'S') return minimumGrade === 'D';
   const points = gradePoints(grade);
   const minimum = gradePoints(minimumGrade);
@@ -31,7 +32,15 @@ export function evaluateByCategory(records, { curriculumId } = {}) {
   for (const [courseCode, attempts] of byCourse) {
     const knownCategories = [...new Set(attempts.map(row => row.category_code).filter(code => categoryCodes.has(code)))];
     if (!knownCategories.length) {
-      uncategorizedWarnings.push({ courseCode, reason: 'uncategorized', attempts: attempts.length });
+      const accAttempt = attempts.find(row => row.grade === 'ACC');
+      if (accAttempt) {
+        const credits = Number(accAttempt.credits) || 0;
+        rawEarned.extra_credits += credits;
+        coursesByCategory.extra_credits.push({ courseCode, credits, grade: 'ACC', minimumGrade: 'D', attemptCount: attempts.length });
+        uncategorizedWarnings.push({ courseCode, reason: 'uncategorized_acc_extra', attempts: attempts.length });
+      } else {
+        uncategorizedWarnings.push({ courseCode, reason: 'uncategorized', attempts: attempts.length });
+      }
       continue;
     }
     if (knownCategories.length > 1) {
@@ -58,7 +67,7 @@ export function evaluateByCategory(records, { curriculumId } = {}) {
     : 0;
   const categories = definitions.map(definition => {
     const raw = rawEarned[definition.code];
-    const ownEarned = Math.min(raw, definition.minimumCredits);
+    const ownEarned = definition.code === 'extra_credits' ? raw : Math.min(raw, definition.minimumCredits);
     const carriedIn = definition.code === 'free_elective' ? carriedToFreeElective : 0;
     const earned = ownEarned + carriedIn;
     const missing = Math.max(0, definition.minimumCredits - earned);

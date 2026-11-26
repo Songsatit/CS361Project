@@ -9,7 +9,7 @@
 import { gradePolicyFor } from './grade-policy-config/index.mjs';
 
 export const GRADE_POINTS = Object.freeze({ A: 4, 'B+': 3.5, B: 3, 'C+': 2.5, C: 2, 'D+': 1.5, D: 1, F: 0 });
-const PASS_ONLY_GRADES = new Set(['S', 'P']); // no GPA points; counts as earned credit
+const PASS_ONLY_GRADES = new Set(['S', 'P', 'ACC']); // no GPA points; counts as earned credit
 const FAIL_ONLY_GRADES = new Set(['U']); // no GPA points; earns no credit
 const NO_RESULT_GRADES = new Set(['W', 'I']); // result not available yet, treated as missing
 export const ACCEPTED_GRADES = new Set([

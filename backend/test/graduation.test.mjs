@@ -24,10 +24,12 @@ import {
   partitionGradeRecords,
   resolveDataSource,
 } from '../src/graduation/evaluate.mjs';
-import { validateGradeEntry } from '../src/graduation/grade-entry.mjs';
-import { categoryConfigTotals, classifyCurriculumCourse } from '../src/graduation/category-config/index.mjs';
+import { isAccEligible, validateGradeEntry } from '../src/graduation/grade-entry.mjs';
+import { categoryConfigFor, categoryConfigTotals, classifyCurriculumCourse } from '../src/graduation/category-config/index.mjs';
+import { gradePolicyFor } from '../src/graduation/grade-policy-config/index.mjs';
 import { backfillCategories, categoryUpdateForRow } from '../src/graduation/category-backfill.mjs';
 import { evaluateByCategory } from '../src/graduation/category-evaluate.mjs';
+import { normalizeCourseCode } from '../src/graduation/course-code.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixture = (name) => readFileSync(path.join(here, '..', 'fixtures', 'v4-demo', name), 'utf8');
@@ -76,6 +78,27 @@ test('grade entry accepts the supported student grades', () => {
   }
 });
 
+test('normalizeCourseCode uses one canonical English code format', () => {
+  assert.equal(normalizeCourseCode('TU 250'), 'TU250');
+  assert.equal(normalizeCourseCode('มธ.250'), 'TU250');
+  assert.equal(normalizeCourseCode('คคป.211'), 'CNC211');
+  assert.equal(normalizeCourseCode('คพ.101'), 'CS101');
+  assert.equal(normalizeCourseCode('  cnc 211 '), 'CNC211');
+});
+
+test('ACC is accepted only for TU after course-code normalization', () => {
+  assert.equal(validateGradeEntry({ courseCode: 'TU250', grade: 'ACC', credits: 1.5 }).ok, true);
+  assert.equal(validateGradeEntry({ courseCode: 'มธ.250', grade: 'ACC', credits: 1.5 }).ok, true);
+  for (const courseCode of ['EL105', 'LAS101', 'CS102']) {
+    const result = validateGradeEntry({ courseCode, grade: 'ACC', credits: 3 });
+    assert.equal(result.ok, false, courseCode);
+    assert.equal(result.errors[0], 'ACC ใช้ได้เฉพาะวิชา มธ. (TU)');
+  }
+  assert.equal(validateGradeEntry({ courseCode: 'TU999', grade: 'ACC', credits: 3 }).ok, true);
+  assert.equal(isAccEligible('EL105', { config: { allowedCoursePrefixes: ['EL'] } }), true);
+  assert.equal(validateGradeEntry({ courseCode: 'EL105', grade: 'ACC', credits: 3 }, { accConfig: { allowedCoursePrefixes: ['EL'] } }).ok, true);
+});
+
 test('free elective entry requires a name and positive integer credits', () => {
   assert.equal(validateGradeEntry({ entryType: 'free_elective', courseCode: 'EL001', grade: 'A', credits: 3 }).ok, false);
   assert.equal(validateGradeEntry({ entryType: 'free_elective', courseCode: 'EL001', courseName: 'วิชาเสรี', grade: 'A', credits: 3 }).ok, true);
@@ -101,6 +124,14 @@ test('calcGPAX counts every attempt, including F, and excludes S/U/W from GPAX',
   assert.equal(result.gradedCredits, 9);
   assert.equal(result.weightedPoints, 21);
   assert.equal(result.gpa, 21 / 9);
+});
+
+test('ACC earns category credits but never enters GPAX, including when uncategorized', () => {
+  const result = calcGPAX([{ course_code: 'TU250', credits: 1.5, grade: 'ACC' }, { course_code: 'CS101', credits: 3, grade: 'C' }]);
+  assert.equal(result.gradedCredits, 3);
+  const category = evaluateByCategory([{ course_code: 'TU250', credits: 1.5, grade: 'ACC', category_code: 'uncategorized' }], { curriculumId: 'BSC-CS-2566' });
+  assert.equal(category.categories.find(item => item.code === 'extra_credits').earnedCredits, 1.5);
+  assert.equal(category.uncategorizedWarnings[0].reason, 'uncategorized_acc_extra');
 });
 
 test('calcGPAX gives a 3-credit course taken three times a 9-credit denominator', () => {
@@ -155,6 +186,21 @@ test('core average ignores a latest F when an earlier attempt passed', () => {
   });
   assert.equal(result.status, 'passed');
   assert.equal(result.details.selected[0].grade, 'C');
+});
+
+test('core-average D grades do not count as passing for CS or CNC config', () => {
+  const cs = gradePolicyFor('BSC-CS-2566');
+  const cnc = gradePolicyFor('BSC-CNC-2568');
+  const csResult = calcCoreAverageCondition([
+    { course_code: 'CS100', grade: 'D', academic_year: 2025, semester: 1 },
+  ], { curriculumId: 'BSC-CS-2566', courses: ['CS100'], requiredAverage: 2 });
+  const cncResult = calcCoreAverageCondition([
+    { course_code: 'CNC211', grade: 'D', academic_year: 2025, semester: 1 },
+  ], { curriculumId: 'BSC-CNC-2568', courses: ['CNC211'], requiredAverage: 2 });
+  assert.equal(Object.values(cs.coreAverageCourseMinimumGrades).every(grade => grade === 'C'), true);
+  assert.equal(Object.values(cnc.coreAverageCourseMinimumGrades).every(grade => grade === 'C'), true);
+  assert.deepEqual(csResult.details.missing, ['CS100']);
+  assert.deepEqual(cncResult.details.missing, ['CNC211']);
 });
 
 test('core average reaches the exact 2.00 boundary', () => {
@@ -217,13 +263,16 @@ test('evaluateByCategory passes CNC at exactly 126 credits', () => {
   assert.equal(result.passedAllCategories, true);
 });
 
-test('evaluateByCategory can reach the total while a category is still short', () => {
+test('evaluateByCategory does not carry excess credits into another category', () => {
+  assert.equal(categoryConfigFor('BSC-CS-2566').excessCreditPolicy, 'no_carry_over');
+  assert.equal(categoryConfigFor('BSC-CNC-2568').excessCreditPolicy, 'no_carry_over');
   const result = evaluateByCategory(completeCsRows({ general: 33, major: 27 }), { curriculumId: 'BSC-CS-2566' });
   assert.equal(result.total.earnedCredits, 123);
   assert.equal(result.total.passed, true);
   assert.equal(result.passedAllCategories, false);
   assert.equal(result.categories.find(item => item.code === 'major').missingCredits, 3);
-  assert.equal(result.categories.find(item => item.code === 'free_elective').carriedInCredits, 3);
+  assert.equal(result.categories.find(item => item.code === 'free_elective').carriedInCredits, 0);
+  assert.equal(result.categories.find(item => item.code === 'free_elective').earnedCredits, 6);
 });
 
 test('evaluateByCategory counts repeated courses once and keeps only earned grades', () => {

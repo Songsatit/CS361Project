@@ -2687,13 +2687,22 @@ async function updateSelfReportedGrade(event) {
 
   try {
     const [row] = await queryRows(
-      `SELECT curriculum_id, academic_year, semester, course_code, credits, verification_status
+      `SELECT curriculum_id, academic_year, semester, course_code, course_name, entry_type, credits, verification_status
          FROM graduation_grade_record
         WHERE grade_record_id = ? AND student_id = ? AND source = 'self_reported'`,
       [recordId, actor.username],
     );
     if (!row) return response(404, { error: 'Grade row not found' });
     if (!['unverified', 'rejected'].includes(row.verification_status)) return response(409, { error: 'A verified grade can no longer be changed' });
+    const validation = validateGradeEntry({
+      courseCode: row.course_code,
+      courseName: row.course_name,
+      entryType: row.entry_type,
+      credits: row.credits,
+      grade,
+      inProgress,
+    });
+    if (!validation.ok) return response(400, { error: validation.errors[0] });
     const rowHash = crypto.createHash('sha256')
       .update(JSON.stringify([actor.username, row.curriculum_id, Number(row.academic_year), Number(row.semester), row.course_code, Number(row.credits), grade, inProgress]))
       .digest('hex');
