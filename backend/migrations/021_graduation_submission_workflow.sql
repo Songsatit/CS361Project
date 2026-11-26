@@ -35,4 +35,4 @@ CREATE TABLE IF NOT EXISTS graduation_grade_submission_history (
 
 -- Existing students start editable. No grade row is updated or deleted.
 INSERT IGNORE INTO graduation_grade_submission (student_id, status)
-SELECT DISTINCT student_id FROM graduation_grade_record;
+SELECT DISTINCT student_id, 'DRAFT' FROM graduation_grade_record;
