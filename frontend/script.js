@@ -1167,21 +1167,26 @@ function renderGraduationPlanForm(result) {
 
   // Courses already entered, by code, so a row that was sent is not asked for again.
   const existing = new Map();
-  const note = (rows, label, locked) => (rows ?? []).forEach(row => existing.set(graduationCodeKey(row.courseCode), { label, locked, grade: row.grade }));
+  const note = (rows, label, locked) => (rows ?? []).forEach(row => existing.set(graduationCodeKey(row.courseCode), {
+    label, grade: row.grade, source: row.source, verificationStatus: row.verificationStatus,
+    locked: locked && !(row.source === "self_reported" && ["unverified", "rejected"].includes(row.verificationStatus)),
+  }));
   // Rejected first, so a locked row for the same course always wins.
   note(result?.rejectedRecords, "ถูกปฏิเสธ กรอกใหม่ได้", false);
-  note(result?.records, "ยืนยันแล้ว", true);
+  note(result?.records, "นำเข้าจากทะเบียน", true);
   note(result?.pendingRecords, "ส่งแล้ว รอยืนยัน", true);
   note(result?.inProgressRecords, "กำลังเรียน (ส่งแล้ว)", true);
 
   const gradeOptions = selected => graduationGradeOptionsHtml(selected);
-  const termTable = term => `<section class="graduation-plan-term"><div class="graduation-plan-term-head"><h4>ปี ${esc(term.year)} · ${esc(term.term === 3 ? "Summer" : `ภาค ${term.term}`)}</h4><label class="graduation-plan-bulk">ตั้งทุกวิชาในภาคนี้เป็น <select data-graduation-plan-bulk aria-label="ตั้งเกรดทั้งภาคเรียน">${graduationGradeOptionsHtml("", { blankLabel: "เลือก…" })}</select></label></div><table><thead><tr><th>วิชา</th><th>ชื่อวิชา</th><th>หน่วยกิต</th><th>เกรด</th></tr></thead><tbody>${term.courses.map(code => {
+  const termChoices = terms.map(item => `<option value="${esc(`${item.year}-${item.term}`)}">ปี ${esc(item.year)} · ${esc(item.term === 3 ? "Summer" : `ภาค ${item.term}`)}</option>`).join("");
+  const termTable = term => `<section class="graduation-plan-term"><div class="graduation-plan-term-head"><h4>ปี ${esc(term.year)} · ${esc(term.term === 3 ? "Summer" : `ภาค ${term.term}`)}</h4><label class="graduation-plan-bulk">ตั้งทุกวิชาในภาคนี้เป็น <select data-graduation-plan-bulk aria-label="ตั้งเกรดทั้งภาคเรียน">${graduationGradeOptionsHtml("", { blankLabel: "เลือก…" })}</select></label></div><table><thead><tr><th>วิชา</th><th>ชื่อวิชา</th><th>หน่วยกิต</th><th>เทอมที่เรียนจริง</th><th>เกรด</th></tr></thead><tbody>${term.courses.map(code => {
     const info = existing.get(graduationCodeKey(code));
     const course = COURSES[courseKey(code)] ?? {};
+    const selectedGrade = info?.grade ?? form.grades?.[code] ?? "";
     const cell = info?.locked
       ? `<span class="graduation-plan-done">${esc(info.label)}</span>`
-      : `<select data-graduation-plan-grade="${esc(code)}" aria-label="เกรด ${esc(code)}">${gradeOptions(form.grades?.[code] ?? "")}</select>${info ? `<small> ${esc(info.label)}</small>` : ""}`;
-    return `<tr data-plan-row data-code="${esc(code)}" data-year="${esc(term.year)}" data-term="${esc(term.term)}" data-credits="${esc(course.credits ?? "")}"><td>${esc(code)}</td><td>${esc(course.name ?? "-")}</td><td>${esc(course.credits ?? "-")}</td><td>${cell}</td></tr>`;
+      : `<select data-graduation-plan-grade="${esc(code)}" aria-label="เกรด ${esc(code)}">${gradeOptions(selectedGrade)}</select>${info ? `<small> ${esc(info.label)}</small>` : ""}`;
+    return `<tr data-plan-row data-code="${esc(code)}" data-year="${esc(term.year)}" data-term="${esc(term.term)}" data-credits="${esc(course.credits ?? "")}"><td>${esc(code)}</td><td>${esc(course.name ?? "-")}</td><td>${esc(course.credits ?? "-")}</td><td><select data-graduation-plan-move aria-label="เทอมที่เรียนจริงของ ${esc(code)}"${info?.locked ? " disabled" : ""}>${termChoices.replace(`value="${term.year}-${term.term}"`, `value="${term.year}-${term.term}" selected`)}</select><input data-graduation-plan-attempt type="number" min="1" max="9" placeholder="รอบ" aria-label="รอบที่เรียน ${esc(code)}"${info?.locked ? " disabled" : ""}></td><td>${cell}</td></tr>`;
   }).join("")}</tbody></table></section>`;
 
   // One collapsible block per study year, first year open by default.
@@ -5054,11 +5059,14 @@ function bind() {
         const value = row.querySelector("select")?.value;
         if (!value) return;
         const credits = Number(row.dataset.credits);
+        const moved = row.querySelector("[data-graduation-plan-move]")?.value?.split("-").map(Number) ?? [Number(row.dataset.year), Number(row.dataset.term)];
+        const attempt = Number(row.querySelector("[data-graduation-plan-attempt]")?.value ?? 0);
         entries.push({
           curriculumId: program.curriculumId,
           courseCode: row.dataset.code,
-          academicYear: entryYear + Number(row.dataset.year) - 1,
-          semester: Number(row.dataset.term),
+          academicYear: entryYear + Number(moved[0]) - 1,
+          semester: Number(moved[1]),
+          ...(attempt > 0 ? { attemptNo: attempt } : {}),
           credits: row.dataset.credits !== "" && Number.isFinite(credits) ? credits : undefined,
           ...(value === "IP" ? { inProgress: true } : { grade: value }),
         });

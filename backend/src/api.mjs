@@ -11,7 +11,7 @@ import {
   resolveSelfReportedSource,
 } from './graduation/evaluate.mjs';
 import { SELF_REPORTED_GRADES, validateGradeEntry } from './graduation/grade-entry.mjs';
-import { categoryConfigFor, classifyCurriculumCourse } from './graduation/category-config/index.mjs';
+import { categoryConfigFor, categoryForCourseCode, classifyCurriculumCourse } from './graduation/category-config/index.mjs';
 import { evaluateByCategory } from './graduation/category-evaluate.mjs';
 import { evaluatePrerequisites } from './graduation/prerequisite-evaluate.mjs';
 
@@ -1963,7 +1963,18 @@ async function buildGraduationResult(studentId) {
   // The curriculum comes from the most recent attempt among rows that are not rejected.
   const curriculumId = pickCurriculum(records.filter((record) => record.verification_status !== 'rejected'))
     ?? pickCurriculum(records);
-  const allCurriculumRecords = records.filter((record) => record.curriculum_id === curriculumId);
+  const allCurriculumRecords = records
+    .filter((record) => record.curriculum_id === curriculumId)
+    .map((record) => {
+      if (record.category_code && record.category_code !== 'uncategorized') return record;
+      if (record.entry_type === 'free_elective') {
+        return { ...record, category_code: 'free_elective', category_label: 'วิชาเลือกเสรี' };
+      }
+      const derived = categoryForCourseCode(curriculumId, record.course_code);
+      return derived
+        ? { ...record, category_code: derived.code, category_label: derived.label }
+        : record;
+    });
   const uncategorizedRecords = allCurriculumRecords.filter(record => !record.category_code || record.category_code === 'uncategorized');
   // Verified, finished rows feed the verdict, and so do undecided student-entered rows while
   // countSelfReported is on. The rest are returned separately and labelled.

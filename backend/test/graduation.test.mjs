@@ -26,7 +26,7 @@ import {
 } from '../src/graduation/evaluate.mjs';
 import { isAccEligible, validateGradeEntry } from '../src/graduation/grade-entry.mjs';
 import { normalizeAcademicYear } from '../src/graduation/academic-year.mjs';
-import { categoryConfigFor, categoryConfigTotals, classifyCurriculumCourse } from '../src/graduation/category-config/index.mjs';
+import { categoryConfigFor, categoryConfigTotals, categoryForCourseCode, classifyCurriculumCourse } from '../src/graduation/category-config/index.mjs';
 import { gradePolicyFor } from '../src/graduation/grade-policy-config/index.mjs';
 import { backfillCategories, categoryUpdateForRow } from '../src/graduation/category-backfill.mjs';
 import { evaluateByCategory } from '../src/graduation/category-evaluate.mjs';
@@ -115,6 +115,14 @@ test('curriculum category config groups add up to each category', async () => {
   const cnc = categoryConfigFor('BSC-CNC-2568');
   assert.equal(cs.categories.reduce((sum, item) => sum + item.minimumCredits, 0), 123);
   assert.equal(cnc.categories.reduce((sum, item) => sum + item.minimumCredits, 0), 126);
+});
+
+test('category config resolves deployed curriculum suffixes and course categories', () => {
+  assert.equal(categoryConfigFor('BSC-CS-2566-CIS').curriculumId, 'BSC-CS-2566');
+  assert.deepEqual(categoryForCourseCode('BSC-CS-2566-CIS', 'CS100'), {
+    code: 'major_specific',
+    label: 'วิชาเฉพาะ–วิชาเฉพาะด้าน',
+  });
 });
 
 test('ACC is accepted only for TU after course-code normalization', () => {
