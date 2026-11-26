@@ -1192,7 +1192,11 @@ function renderGraduationPlanForm(result) {
   });
 
   const gradeOptions = selected => graduationGradeOptionsHtml(selected);
-  const termChoices = terms.map(item => `<option value="${esc(`${item.year}-${item.term}`)}">ปี ${esc(item.year)} · ${esc(item.term === 3 ? "Summer" : `ภาค ${item.term}`)}</option>`).join("");
+  const academicYearForPlanYear = year => Number(form.entryYear) + Number(year) - 1;
+  const termChoices = terms.map(item => {
+    const academicYear = academicYearForPlanYear(item.year);
+    return `<option value="${esc(`${academicYear}-${item.term}`)}">ปี ${esc(academicYear)} · ${esc(item.term === 3 ? "Summer" : `ภาค ${item.term}`)}</option>`;
+  }).join("");
   const termTable = term => {
     const plannedRows = term.courses.map(code => {
       const info = existing.get(graduationCodeKey(code));
@@ -1202,14 +1206,15 @@ function renderGraduationPlanForm(result) {
       const cell = info?.locked
         ? `<span class="graduation-plan-done" title="${esc(info.label)}">🔒 ${esc(info.label)}</span>`
         : `<div class="graduation-grade-editor"><button type="button" class="graduation-grade-pill ${pillClass}" data-graduation-grade-pill aria-label="เลือกเกรด ${esc(code)}">${esc(selectedGrade || "-")}</button><small>${esc(info?.label ?? "คลิกเกรดเพื่อแก้ไข")}</small></div>`;
-      const actual = info?.academicYear && info?.semester ? `${Number(info.academicYear) - Number(form.entryYear) + 1}-${info.semester}` : `${term.year}-${term.term}`;
-      const moved = actual !== `${term.year}-${term.term}` || Number(info?.attemptNo ?? 1) > 1;
+      const plannedAcademicYear = academicYearForPlanYear(term.year);
+      const actual = info?.academicYear && info?.semester ? `${Number(info.academicYear)}-${info.semester}` : `${plannedAcademicYear}-${term.term}`;
+      const moved = actual !== `${plannedAcademicYear}-${term.term}` || Number(info?.attemptNo ?? 1) > 1;
       const termText = moved ? `ปี ${actual.split("-")[0]} · ภาค ${actual.split("-")[1]}` : "ตามแผน";
       const termEditor = info?.locked
         ? `<span class="graduation-plan-done">${esc(termText)} (รอบ ${esc(info?.attemptNo ?? 1)})</span>`
         : `<div class="graduation-term-editor"><span class="graduation-plan-muted" data-graduation-plan-summary>${esc(termText)} (รอบ ${esc(info?.attemptNo ?? 1)})</span><button type="button" class="graduation-inline-edit" data-graduation-plan-edit>แก้ไข</button></div>`;
       const [actualYear, actualTerm] = actual.split("-").map(Number);
-      return { label: categoryByCode.get(graduationCodeKey(code)) ?? "ยังไม่จัดหมวด", html: `<tr class="graduation-plan-row${selectedGrade && !["F", "U", "W"].includes(selectedGrade) ? " graduation-plan-row--passed" : ""}" data-plan-row data-code="${esc(code)}" data-year="${esc(term.year)}" data-term="${esc(term.term)}" data-actual-year="${esc(actualYear)}" data-actual-term="${esc(actualTerm)}" data-attempt="${esc(info?.attemptNo ?? 1)}" data-term-options="${esc(termChoices)}" data-credits="${esc(course.credits ?? "")}"><td><strong>${esc(code)}</strong></td><td>${esc(course.name ?? "-")}</td><td>${esc(course.credits ?? "-")}</td><td>${termEditor}</td><td>${cell}</td></tr>` };
+      return { label: categoryByCode.get(graduationCodeKey(code)) ?? "ยังไม่จัดหมวด", html: `<tr class="graduation-plan-row${selectedGrade && !["F", "U", "W"].includes(selectedGrade) ? " graduation-plan-row--passed" : ""}" data-plan-row data-code="${esc(code)}" data-year="${esc(plannedAcademicYear)}" data-term="${esc(term.term)}" data-actual-year="${esc(actualYear)}" data-actual-term="${esc(actualTerm)}" data-attempt="${esc(info?.attemptNo ?? 1)}" data-term-options="${esc(termChoices)}" data-credits="${esc(course.credits ?? "")}"><td><strong>${esc(code)}</strong></td><td>${esc(course.name ?? "-")}</td><td>${esc(course.credits ?? "-")}</td><td>${termEditor}</td><td>${cell}</td></tr>` };
     });
     const grouped = new Map();
     plannedRows.forEach(row => { if (!grouped.has(row.label)) grouped.set(row.label, []); grouped.get(row.label).push(row.html); });
@@ -5138,22 +5143,29 @@ function bind() {
       }
       state.graduationForm.entryYear = String(entryYear);
       const entries = [];
+      let invalidAcademicYear = null;
       form.querySelectorAll("[data-plan-row]").forEach(row => {
         const value = row.querySelector("[data-graduation-plan-grade]")?.value ?? state.graduationForm.grades[row.dataset.code];
         if (!value) return;
         const credits = Number(row.dataset.credits);
         const moved = row.querySelector("[data-graduation-plan-move]")?.value?.split("-").map(Number) ?? [Number(row.dataset.actualYear || row.dataset.year), Number(row.dataset.actualTerm || row.dataset.term)];
         const attempt = Number(row.querySelector("[data-graduation-plan-attempt]")?.value ?? row.dataset.attempt ?? 0);
+        const academicYear = moved[0] >= 2500 ? moved[0] : entryYear + Number(moved[0]) - 1;
+        if (!Number.isInteger(academicYear) || academicYear < 2500 || academicYear > 2700) {
+          invalidAcademicYear = row.dataset.code;
+          return;
+        }
         entries.push({
           curriculumId: program.curriculumId,
           courseCode: row.dataset.code,
-          academicYear: entryYear + Number(moved[0]) - 1,
+          academicYear,
           semester: Number(moved[1]),
           ...(attempt > 0 ? { attemptNo: attempt } : {}),
           credits: row.dataset.credits !== "" && Number.isFinite(credits) ? credits : undefined,
           ...(value === "IP" ? { inProgress: true } : { grade: value }),
         });
       });
+      if (invalidAcademicYear) return alert(`${invalidAcademicYear}: ปีการศึกษาไม่ถูกต้อง ต้องเป็น พ.ศ. 4 หลัก เช่น 2568`);
       const invalidAcc = entries.find(entry => entry.grade === "ACC" && !window.isAccEligible?.(entry.courseCode));
       if (invalidAcc) return alert("ACC ใช้ได้เฉพาะวิชา มธ. (TU)");
       if (!entries.length) return alert("เลือกเกรดอย่างน้อยหนึ่งวิชา");
