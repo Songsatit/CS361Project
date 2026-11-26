@@ -2490,6 +2490,7 @@ async function saveSelfReportedGrade(actor, body) {
     .digest('hex');
 
   let recordId;
+  let attemptNo;
   try {
     const existingRows = await queryRows(
       `SELECT grade_record_id, academic_year, semester, source, verification_status, attempt_no FROM graduation_grade_record
@@ -2503,7 +2504,7 @@ async function saveSelfReportedGrade(actor, body) {
     const existing = Number.isInteger(requestedAttempt) && requestedAttempt > 0
       ? sameTermRows.find(row => Number(row.attempt_no) === requestedAttempt)
       : sameTermRows.find(row => row.source === 'self_reported' && ['unverified', 'rejected'].includes(row.verification_status));
-    const attemptNo = existing ? Number(existing.attempt_no) : (requestedAttempt > 0 ? requestedAttempt : (Number(existingRows[0]?.attempt_no ?? 0) + 1));
+    attemptNo = existing ? Number(existing.attempt_no) : (requestedAttempt > 0 ? requestedAttempt : (Number(existingRows[0]?.attempt_no ?? 0) + 1));
     if (existing) {
       // Imported and verified rows are fixed. A student may only redo their own row that is
       // still unverified or was rejected, and the row then goes back to waiting for review.
