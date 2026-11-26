@@ -11,10 +11,17 @@ import {
   resolveSelfReportedSource,
 } from './graduation/evaluate.mjs';
 import { SELF_REPORTED_GRADES, validateGradeEntry } from './graduation/grade-entry.mjs';
+import { categoryConfigFor, classifyCurriculumCourse } from './graduation/category-config/index.mjs';
+import { evaluateByCategory } from './graduation/category-evaluate.mjs';
+import { evaluatePrerequisites } from './graduation/prerequisite-evaluate.mjs';
 
 const allowedRoles = new Set(['student', 'instructor', 'curriculum_admin', 'staff']);
 const jwtIssuer = 'cs361-curriculum-api';
 const jwtAudience = 'cs361-frontend';
+
+const PREREQUISITE_MINIMUM_BY_COURSE = Object.freeze({
+  CS403: 'C', CS404: 'C', CS335: 'C', CNC303: 'C', CNC304: 'C', CNC403: 'C', CNC404: 'C',
+});
 
 // Name of the HttpOnly cookie that carries the access token.
 const AUTH_COOKIE_NAME = 'token';
@@ -1817,7 +1824,7 @@ const GRADUATION_SOURCE_KEY = 'registrar-demo';
 const graduationStudentIdPattern = /^[A-Za-z0-9]{1,20}$/;
 
 // Columns added by migration 015. Selected only when that migration is applied.
-const GRADE_SOURCE_COLUMNS = 'g.source, g.verification_status, g.is_in_progress, g.verification_note, g.verified_at, g.course_name, g.entry_type, g.attempt_no,';
+const GRADE_SOURCE_COLUMNS = 'g.source, g.verification_status, g.is_in_progress, g.verification_note, g.verified_at, g.course_name, g.entry_type, g.category_code, g.category_label, g.attempt_no,';
 
 // batch_id is NULL for self-reported rows (migration 015), so batches are joined with LEFT JOIN.
 // An inner join would silently drop every row a student entered.
@@ -1865,6 +1872,8 @@ function shapeGradeRecord(record) {
     verificationStatus: record.verification_status ?? 'verified',
     isInProgress: Number(record.is_in_progress ?? 0) === 1,
     entryType: record.entry_type ?? 'catalog',
+    categoryCode: record.category_code ?? null,
+    categoryLabel: record.category_label ?? null,
     attemptNo: Number(record.attempt_no ?? 1),
     verificationNote: record.verification_note ?? null,
   };
@@ -1879,6 +1888,8 @@ function countSelfReportedGrades() {
 
 async function buildGraduationResult(studentId) {
   const records = await loadGradeRecords(studentId);
+  const submission = await getOrCreateGradeSubmission(studentId);
+  const submissionHistory = await gradeSubmissionHistory(studentId);
   const [latestBatch = null] = await queryRows(
     `SELECT batch_id, status, source_batch_id, exported_at, finished_at, row_rejected
        FROM graduation_import_batch
@@ -1934,6 +1945,11 @@ async function buildGraduationResult(studentId) {
       pendingRecords: [],
       inProgressRecords: [],
       rejectedRecords: [],
+      uncategorizedRecords: [],
+      categoryEvaluation: null,
+      prerequisiteWarnings: [],
+      submission: shapeGradeSubmission(submission),
+      submissionHistory,
     };
   }
 
@@ -1941,10 +1957,41 @@ async function buildGraduationResult(studentId) {
   const curriculumId = pickCurriculum(records.filter((record) => record.verification_status !== 'rejected'))
     ?? pickCurriculum(records);
   const allCurriculumRecords = records.filter((record) => record.curriculum_id === curriculumId);
+  const uncategorizedRecords = allCurriculumRecords.filter(record => !record.category_code || record.category_code === 'uncategorized');
   // Verified, finished rows feed the verdict, and so do undecided student-entered rows while
   // countSelfReported is on. The rest are returned separately and labelled.
   const { counted, pending, rejected, inProgress } = partitionGradeRecords(allCurriculumRecords, { countSelfReported });
   const curriculumRecords = counted;
+  const categoryEvaluation = evaluateByCategory(curriculumRecords, { curriculumId });
+  let prerequisiteWarnings = [];
+  if (curriculumRecords.length) {
+    const courseCodes = [...new Set(curriculumRecords.map(row => String(row.course_code ?? '').replace(/\s+/g, '').toUpperCase()).filter(Boolean))];
+    const marks = courseCodes.map(() => '?').join(',');
+    const prerequisiteRows = await queryRows(
+      `SELECT target.course_code AS course_code, required.course_code AS prerequisite_code
+         FROM prerequisite p
+         JOIN course target ON target.course_id = p.course_id
+         JOIN course required ON required.course_id = p.prerequisite_course_id
+        WHERE REPLACE(UPPER(target.course_code), ' ', '') IN (${marks})`,
+      courseCodes,
+    );
+    const byTarget = new Map();
+    for (const row of prerequisiteRows) {
+      const target = String(row.course_code ?? '').replace(/\s+/g, '').toUpperCase();
+      if (!byTarget.has(target)) byTarget.set(target, []);
+      byTarget.get(target).push({ prerequisiteCode: row.prerequisite_code, minimumGrade: PREREQUISITE_MINIMUM_BY_COURSE[target] ?? 'D' });
+    }
+    for (const [target, rulesForCourse] of byTarget) {
+      const attempt = curriculumRecords.find(row => String(row.course_code ?? '').replace(/\s+/g, '').toUpperCase() === target);
+      const result = evaluatePrerequisites(curriculumRecords, rulesForCourse, {
+        currentCourseCode: target,
+        currentAcademicYear: attempt?.academic_year,
+        currentSemester: attempt?.semester,
+        timingPolicy: 'before_term',
+      });
+      prerequisiteWarnings.push(...result.warnings);
+    }
+  }
   const [studentMeta = {}] = await queryRows(
     `SELECT student_id, display_name, student_year
        FROM graduation_student_assignment
@@ -2055,6 +2102,11 @@ async function buildGraduationResult(studentId) {
     pendingRecords: pending.map(shapeGradeRecord),
     inProgressRecords: inProgress.map(shapeGradeRecord),
     rejectedRecords: rejected.map(shapeGradeRecord),
+    uncategorizedRecords: uncategorizedRecords.map(shapeGradeRecord),
+    categoryEvaluation,
+    prerequisiteWarnings,
+    submission: shapeGradeSubmission(submission),
+    submissionHistory,
     plan: progressPlan,
   };
 }
@@ -2104,7 +2156,8 @@ async function listAssignedGraduationStudents(event) {
     `SELECT a.student_id, a.display_name, a.student_year,
             EXISTS (SELECT 1 FROM graduation_grade_record g WHERE g.student_id = a.student_id) AS has_data
        FROM graduation_student_assignment a
-      WHERE a.assignee_username = ?
+      JOIN graduation_grade_submission s ON s.student_id = a.student_id
+      WHERE a.assignee_username = ? AND s.status = 'SUBMITTED'
       ORDER BY a.student_id`,
     [actor.username],
   );
@@ -2425,7 +2478,86 @@ async function listAllGraduationAssignments(event) {
 }
 
 const SELF_REPORT_MIGRATION_ERROR = 'Self-reported grades need migration 015 on the database';
+const SUBMISSION_MIGRATION_ERROR = 'Grade submission workflow needs migration 021 on the database';
+const EDITABLE_SUBMISSION_STATES = new Set(['DRAFT', 'RETURNED']);
 const normalizeGradeCourseCode = (value) => String(value ?? '').replace(/\s+/g, '').toUpperCase();
+
+async function getOrCreateGradeSubmission(studentId) {
+  try {
+    let [rows] = await queryRows(
+      `SELECT student_id, status, return_note, submitted_at, submitted_by, reviewed_at, reviewed_by,
+              approved_at, approved_by, updated_at
+         FROM graduation_grade_submission WHERE student_id = ? LIMIT 1`,
+      [studentId],
+    );
+    if (!rows) {
+      await pool.execute(
+        `INSERT IGNORE INTO graduation_grade_submission (student_id, status) VALUES (?, 'DRAFT')`,
+        [studentId],
+      );
+      [rows] = await queryRows(
+        `SELECT student_id, status, return_note, submitted_at, submitted_by, reviewed_at, reviewed_by,
+                approved_at, approved_by, updated_at
+           FROM graduation_grade_submission WHERE student_id = ? LIMIT 1`,
+        [studentId],
+      );
+    }
+    return rows ?? { student_id: studentId, status: 'DRAFT', return_note: null };
+  } catch (error) {
+    if (error?.code === 'ER_NO_SUCH_TABLE') throw new Error(SUBMISSION_MIGRATION_ERROR);
+    throw error;
+  }
+}
+
+function shapeGradeSubmission(row) {
+  return {
+    studentId: row.student_id,
+    status: row.status,
+    returnNote: row.return_note ?? null,
+    submittedAt: row.submitted_at ?? null,
+    submittedBy: row.submitted_by ?? null,
+    reviewedAt: row.reviewed_at ?? null,
+    reviewedBy: row.reviewed_by ?? null,
+    approvedAt: row.approved_at ?? null,
+    approvedBy: row.approved_by ?? null,
+    updatedAt: row.updated_at ?? null,
+  };
+}
+
+async function gradeSubmissionHistory(studentId) {
+  const rows = await queryRows(
+    `SELECT from_status, to_status, action, actor_username, actor_role, note, created_at
+       FROM graduation_grade_submission_history
+      WHERE student_id = ? ORDER BY history_id`,
+    [studentId],
+  );
+  return rows.map(row => ({
+    fromStatus: row.from_status,
+    toStatus: row.to_status,
+    action: row.action,
+    actorUsername: row.actor_username,
+    actorRole: row.actor_role,
+    note: row.note ?? null,
+    createdAt: row.created_at,
+  }));
+}
+
+async function ensureStudentCanEditGrades(studentId) {
+  const submission = await getOrCreateGradeSubmission(studentId);
+  if (!EDITABLE_SUBMISSION_STATES.has(submission.status)) {
+    return response(409, { error: `Grade records are locked while submission status is ${submission.status}` });
+  }
+  return null;
+}
+
+async function writeSubmissionHistory(studentId, fromStatus, toStatus, action, actor, note = null) {
+  await pool.execute(
+    `INSERT INTO graduation_grade_submission_history
+      (student_id, from_status, to_status, action, actor_username, actor_role, note)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [studentId, fromStatus, toStatus, action, actor.username, actor.role, note],
+  );
+}
 
 // A student adds a grade for themselves. The row is stored as self_reported + unverified, so
 // it is shown with a label and never counted until instructor/staff verify it.
@@ -2454,6 +2586,8 @@ async function addSelfReportedGrade(event) {
 async function saveSelfReportedGrade(actor, body) {
   const studentId = actor.username;
   if (!graduationStudentIdPattern.test(studentId)) return response(400, { error: 'studentId is invalid' });
+  const editLock = await ensureStudentCanEditGrades(studentId);
+  if (editLock) return editLock;
 
   const curriculumId = String(body.curriculumId ?? '').trim();
   const academicYear = Number(body.academicYear);
@@ -2472,12 +2606,22 @@ async function saveSelfReportedGrade(actor, body) {
 
   // The catalog is the source of truth for credits when it knows the course.
   const [catalogCourse] = await queryRows(
-    `SELECT credits_total FROM course
-      WHERE REPLACE(course_code, ' ', '') = ? AND credits_total IS NOT NULL
-      ORDER BY active DESC, course_id LIMIT 1`,
-    [courseCode],
+    `SELECT c.credits_total, cc.course_group, cl.course_type_code
+       FROM course c
+       LEFT JOIN curriculum_course cc ON cc.course_id = c.course_id AND cc.curriculum_id = ?
+       LEFT JOIN course_classification cl ON cl.curriculum_course_id = cc.curriculum_course_id
+      WHERE REPLACE(c.course_code, ' ', '') = ? AND c.credits_total IS NOT NULL
+      ORDER BY c.active DESC, c.course_id LIMIT 1`,
+    [curriculumId, courseCode],
   );
   const credits = entryType === 'catalog' && catalogCourse ? Number(catalogCourse.credits_total) : Number(body.credits);
+  const category = entryType === 'free_elective'
+    ? { code: 'free_elective', label: 'วิชาเลือกเสรี' }
+    : classifyCurriculumCourse({
+      curriculumId,
+      courseGroup: catalogCourse?.course_group,
+      classificationCode: catalogCourse?.course_type_code,
+    });
   if (entryType === 'free_elective' && (!Number.isInteger(credits) || credits < 1)) {
     return response(400, { error: 'credits must be a positive integer for a free elective' });
   }
@@ -2513,19 +2657,19 @@ async function saveSelfReportedGrade(actor, body) {
       if (!editable) return response(409, { error: 'A grade for this course and term already exists' });
       await pool.execute(
         `UPDATE graduation_grade_record
-            SET course_name = ?, entry_type = ?, credits = ?, grade = ?, is_in_progress = ?, row_hash = ?, verification_status = 'unverified',
+            SET course_name = ?, entry_type = ?, category_code = ?, category_label = ?, credits = ?, grade = ?, is_in_progress = ?, row_hash = ?, verification_status = 'unverified',
                 verified_by = NULL, verified_at = NULL, verification_note = NULL
           WHERE grade_record_id = ? AND student_id = ?`,
-        [courseName || null, entryType, credits, grade, inProgress ? 1 : 0, rowHash, existing.grade_record_id, studentId],
+        [courseName || null, entryType, category.code, category.label, credits, grade, inProgress ? 1 : 0, rowHash, existing.grade_record_id, studentId],
       );
       recordId = Number(existing.grade_record_id);
     } else {
       const [inserted] = await pool.execute(
         `INSERT INTO graduation_grade_record
-          (student_id, curriculum_id, academic_year, semester, course_code, course_name, entry_type, attempt_no, credits, grade,
+          (student_id, curriculum_id, academic_year, semester, course_code, course_name, entry_type, category_code, category_label, attempt_no, credits, grade,
            source, verification_status, is_in_progress, row_hash, batch_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'self_reported', 'unverified', ?, ?, NULL)`,
-        [studentId, curriculumId, academicYear, semester, courseCode, courseName || null, entryType, attemptNo, credits, grade, inProgress ? 1 : 0, rowHash],
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'self_reported', 'unverified', ?, ?, NULL)`,
+        [studentId, curriculumId, academicYear, semester, courseCode, courseName || null, entryType, category.code, category.label, attemptNo, credits, grade, inProgress ? 1 : 0, rowHash],
       );
       recordId = Number(inserted.insertId);
     }
@@ -2553,6 +2697,8 @@ async function saveSelfReportedGrade(actor, body) {
     isInProgress: inProgress,
     courseName: courseName || null,
     entryType,
+    categoryCode: category.code,
+    categoryLabel: category.label,
     attemptNo,
     source: 'self_reported',
     verificationStatus: 'unverified',
@@ -2565,6 +2711,8 @@ async function saveSelfReportedGrade(actor, body) {
 async function updateSelfReportedGrade(event) {
   const actor = actorFromRequest(event);
   if (actor.role !== 'student') return response(403, { error: 'Only students can edit their own grades' });
+  const editLock = await ensureStudentCanEditGrades(actor.username);
+  if (editLock) return editLock;
   const recordId = Number(pathParameter(event, 'gradeRecordId'));
   if (!Number.isInteger(recordId) || recordId < 1) return response(400, { error: 'gradeRecordId is invalid' });
   const body = requestBody(event);
@@ -2575,13 +2723,22 @@ async function updateSelfReportedGrade(event) {
 
   try {
     const [row] = await queryRows(
-      `SELECT curriculum_id, academic_year, semester, course_code, credits, verification_status
+      `SELECT curriculum_id, academic_year, semester, course_code, course_name, entry_type, credits, verification_status
          FROM graduation_grade_record
         WHERE grade_record_id = ? AND student_id = ? AND source = 'self_reported'`,
       [recordId, actor.username],
     );
     if (!row) return response(404, { error: 'Grade row not found' });
     if (!['unverified', 'rejected'].includes(row.verification_status)) return response(409, { error: 'A verified grade can no longer be changed' });
+    const validation = validateGradeEntry({
+      courseCode: row.course_code,
+      courseName: row.course_name,
+      entryType: row.entry_type,
+      credits: row.credits,
+      grade,
+      inProgress,
+    });
+    if (!validation.ok) return response(400, { error: validation.errors[0] });
     const rowHash = crypto.createHash('sha256')
       .update(JSON.stringify([actor.username, row.curriculum_id, Number(row.academic_year), Number(row.semester), row.course_code, Number(row.credits), grade, inProgress]))
       .digest('hex');
@@ -2613,6 +2770,8 @@ async function updateSelfReportedGrade(event) {
 async function deleteSelfReportedGrade(event) {
   const actor = actorFromRequest(event);
   if (actor.role !== 'student') return response(403, { error: 'Only students can delete their own grades' });
+  const editLock = await ensureStudentCanEditGrades(actor.username);
+  if (editLock) return editLock;
   const recordId = Number(pathParameter(event, 'gradeRecordId'));
   if (!Number.isInteger(recordId) || recordId < 1) return response(400, { error: 'gradeRecordId is invalid' });
   let result;
@@ -2637,6 +2796,88 @@ async function deleteSelfReportedGrade(event) {
     newValue: { gradeRecordId: recordId },
   });
   return response(200, { data: { id: recordId } });
+}
+
+async function submitGradeSet(event) {
+  const actor = actorFromRequest(event);
+  if (actor.role !== 'student') return response(403, { error: 'Only students can submit their own grades' });
+  const current = await getOrCreateGradeSubmission(actor.username);
+  if (!EDITABLE_SUBMISSION_STATES.has(current.status)) return response(409, { error: `Cannot submit while status is ${current.status}` });
+  const [result] = await pool.execute(
+    `UPDATE graduation_grade_submission
+        SET status = 'SUBMITTED', return_note = NULL, submitted_at = CURRENT_TIMESTAMP,
+            submitted_by = ?, reviewed_at = NULL, reviewed_by = NULL
+      WHERE student_id = ? AND status IN ('DRAFT', 'RETURNED')`,
+    [actor.username, actor.username],
+  );
+  if (!result.affectedRows) return response(409, { error: 'The submission status changed. Reload and try again' });
+  await writeSubmissionHistory(actor.username, current.status, 'SUBMITTED', 'submitted', actor);
+  await writeAuditLog({ username: actor.username, role: actor.role, action: 'graduation_submission_submitted', entityType: 'student_graduation', entityId: actor.username });
+  return response(200, { data: shapeGradeSubmission({ ...current, status: 'SUBMITTED', return_note: null, submitted_by: actor.username }) });
+}
+
+async function reviewGradeSet(event) {
+  const actor = actorFromRequest(event);
+  const studentId = String(pathParameter(event, 'studentId') ?? '').trim();
+  if (!['instructor', 'staff'].includes(actor.role)) return response(403, { error: 'Forbidden' });
+  if (!graduationStudentIdPattern.test(studentId)) return response(400, { error: 'studentId is invalid' });
+  const assigned = await assignedGraduationStudentIds(actor.username);
+  if (!canViewGraduation(actor, studentId, assigned).allowed) return response(403, { error: 'Forbidden' });
+  const body = requestBody(event);
+  if (!body) return response(400, { error: 'Request body must be valid JSON' });
+  const action = String(body.action ?? '');
+  if (!['approve', 'return'].includes(action)) return response(400, { error: 'action must be approve or return' });
+  const note = String(body.note ?? '').trim().slice(0, 1000);
+  if (action === 'return' && !note) return response(400, { error: 'A return note is required' });
+  const current = await getOrCreateGradeSubmission(studentId);
+  if (current.status !== 'SUBMITTED') return response(409, { error: `Cannot review while status is ${current.status}` });
+  if (action === 'approve') {
+    const [pending] = await queryRows(
+      `SELECT COUNT(*) AS n FROM graduation_grade_record
+        WHERE student_id = ? AND source = 'self_reported' AND verification_status = 'unverified'`,
+      [studentId],
+    );
+    if (Number(pending?.n ?? 0) > 0) {
+      return response(409, { error: `ยังมีรายการนักศึกษากรอกเองที่รอยืนยัน ${Number(pending.n)} รายการ`, pendingSelfReported: Number(pending.n) });
+    }
+  }
+  const nextStatus = action === 'approve' ? 'APPROVED' : 'RETURNED';
+  const [result] = await pool.execute(
+    `UPDATE graduation_grade_submission
+        SET status = ?, return_note = ?, reviewed_at = CURRENT_TIMESTAMP, reviewed_by = ?,
+            approved_at = ?, approved_by = ?
+      WHERE student_id = ? AND status = 'SUBMITTED'`,
+    [nextStatus, action === 'return' ? note : null, actor.username,
+      action === 'approve' ? new Date() : null, action === 'approve' ? actor.username : null, studentId],
+  );
+  if (!result.affectedRows) return response(409, { error: 'The submission status changed. Reload and try again' });
+  await writeSubmissionHistory(studentId, 'SUBMITTED', nextStatus, action === 'approve' ? 'approved' : 'returned', actor, action === 'return' ? note : null);
+  await writeAuditLog({ username: actor.username, role: actor.role, action: `graduation_submission_${action === 'approve' ? 'approved' : 'returned'}`, entityType: 'student_graduation', entityId: studentId, newValue: { note: action === 'return' ? note : null } });
+  return response(200, { data: shapeGradeSubmission({ ...current, status: nextStatus, return_note: action === 'return' ? note : null, reviewed_by: actor.username, approved_by: action === 'approve' ? actor.username : null }) });
+}
+
+async function categorizeGradeRecord(event) {
+  const actor = actorFromRequest(event);
+  const studentId = String(pathParameter(event, 'studentId') ?? '').trim();
+  const recordId = Number(pathParameter(event, 'gradeRecordId'));
+  if (!['instructor', 'staff'].includes(actor.role)) return response(403, { error: 'Forbidden' });
+  if (!graduationStudentIdPattern.test(studentId) || !Number.isInteger(recordId) || recordId < 1) return response(400, { error: 'studentId or gradeRecordId is invalid' });
+  const assigned = await assignedGraduationStudentIds(actor.username);
+  if (!canViewGraduation(actor, studentId, assigned).allowed) return response(403, { error: 'Forbidden' });
+  const submission = await getOrCreateGradeSubmission(studentId);
+  if (submission.status === 'APPROVED') return response(409, { error: 'Approved submissions are locked' });
+  const body = requestBody(event);
+  const config = body && categoryConfigFor(String(body.curriculumId ?? '').trim());
+  const category = config?.categories.find(item => item.code === String(body.categoryCode ?? '').trim());
+  if (!category) return response(400, { error: 'categoryCode is not valid for this curriculum' });
+  const [result] = await pool.execute(
+    `UPDATE graduation_grade_record SET category_code = ?, category_label = ?
+      WHERE grade_record_id = ? AND student_id = ? AND curriculum_id = ?`,
+    [category.code, category.label, recordId, studentId, config.curriculumId],
+  );
+  if (!result.affectedRows) return response(404, { error: 'Grade row not found' });
+  await writeAuditLog({ username: actor.username, role: actor.role, action: 'graduation_grade_categorized', entityType: 'student_graduation', entityId: studentId, newValue: { gradeRecordId: recordId, categoryCode: category.code } });
+  return response(200, { data: { id: recordId, categoryCode: category.code, categoryLabel: category.label } });
 }
 
 // Instructor or staff verify or reject a student-entered row. Same scope as viewing: only
@@ -2770,6 +3011,9 @@ export const handler = async (event) => {
     if (route === 'POST /api/graduation/me/grades') return await addSelfReportedGrade(event);
     if (route === 'DELETE /api/graduation/me/grades/{gradeRecordId}') return await deleteSelfReportedGrade(event);
     if (route === 'PATCH /api/graduation/me/grades/{gradeRecordId}') return await updateSelfReportedGrade(event);
+    if (route === 'POST /api/graduation/me/submission') return await submitGradeSet(event);
+    if (route === 'POST /api/graduation/students/{studentId}/submission') return await reviewGradeSet(event);
+    if (route === 'PATCH /api/graduation/students/{studentId}/grades/{gradeRecordId}/category') return await categorizeGradeRecord(event);
     if (route === 'POST /api/graduation/students/{studentId}/grades/{gradeRecordId}/verification') return await decideSelfReportedGrade(event);
     if (method !== 'GET') return response(405, { error: 'Method not allowed' });
     if (route === 'GET /api/courses') return await listCourses(event);

@@ -19,10 +19,19 @@ import {
 import {
   canViewGraduation,
   evaluateGraduation,
+  calcGPAX,
+  calcCoreAverageCondition,
   partitionGradeRecords,
   resolveDataSource,
 } from '../src/graduation/evaluate.mjs';
-import { validateGradeEntry } from '../src/graduation/grade-entry.mjs';
+import { isAccEligible, validateGradeEntry } from '../src/graduation/grade-entry.mjs';
+import { normalizeAcademicYear } from '../src/graduation/academic-year.mjs';
+import { categoryConfigFor, categoryConfigTotals, classifyCurriculumCourse } from '../src/graduation/category-config/index.mjs';
+import { gradePolicyFor } from '../src/graduation/grade-policy-config/index.mjs';
+import { backfillCategories, categoryUpdateForRow } from '../src/graduation/category-backfill.mjs';
+import { evaluateByCategory } from '../src/graduation/category-evaluate.mjs';
+import { evaluatePrerequisites } from '../src/graduation/prerequisite-evaluate.mjs';
+import { normalizeCourseCode } from '../src/graduation/course-code.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixture = (name) => readFileSync(path.join(here, '..', 'fixtures', 'v4-demo', name), 'utf8');
@@ -40,7 +49,7 @@ const DEMO_RULES = [
   { condition_order: 2, rule_type: 'min_total_credits', params: { min: 12 } },
   { condition_order: 3, rule_type: 'min_gpa', params: { min: 2 } },
   { condition_order: 5, rule_type: 'min_grade_each', params: { courses: ['DEMO101', 'DEMO102'], min_grade: 'C' } },
-  { condition_order: 6, rule_type: 'min_avg_grade', params: { courses: ['DEMO100', 'DEMO101', 'DEMO102', 'DEMO111'], min: 2 } },
+  { condition_order: 6, rule_type: 'min_avg_grade', params: { courses: ['DEMO100', 'DEMO101', 'DEMO102', 'DEMO111'], min: 2, courseMinimumGrades: { DEMO100: 'D', DEMO101: 'D', DEMO102: 'D', DEMO111: 'D' } } },
 ];
 
 // Builds DB-shaped grade rows from a CSV, the way the import writes them.
@@ -71,6 +80,56 @@ test('grade entry accepts the supported student grades', () => {
   }
 });
 
+test('normalizeCourseCode uses one canonical English code format', () => {
+  assert.equal(normalizeCourseCode('TU 250'), 'TU250');
+  assert.equal(normalizeCourseCode('มธ.250'), 'TU250');
+  assert.equal(normalizeCourseCode('คคป.211'), 'CNC211');
+  assert.equal(normalizeCourseCode('คพ.101'), 'CS101');
+  assert.equal(normalizeCourseCode('  cnc 211 '), 'CNC211');
+});
+
+test('normalizeAcademicYear keeps CE internal and converts BE only at the boundary', () => {
+  assert.equal(normalizeAcademicYear(2023), 2023);
+  assert.equal(normalizeAcademicYear(2566, { sourceCalendar: 'BE' }), 2023);
+  assert.equal(normalizeAcademicYear(2023, { sourceCalendar: 'BE' }), null);
+  assert.equal(normalizeAcademicYear(2566), null);
+});
+
+test('curriculum category config groups add up to each category', async () => {
+  const { categoryConfigFor } = await import('../src/graduation/category-config/index.mjs');
+  for (const curriculumId of ['BSC-CS-2566', 'BSC-CNC-2568']) {
+    const config = categoryConfigFor(curriculumId);
+    assert.equal(normalizeAcademicYear(config.academicYear), config.academicYear);
+    for (const category of config.categories) {
+      const groups = category.groups ?? [];
+      if (groups.length) assert.equal(groups.reduce((sum, group) => sum + Number(group.requiredCredits ?? 0), 0), category.minimumCredits, `${curriculumId}:${category.code}`);
+      for (const group of groups.filter(item => item.type === 'all')) {
+        assert.ok(Number(group.requiredCredits) > 0, `${curriculumId}:${category.code}:${group.code}`);
+      }
+      for (const majorGroups of Object.values(category.groupsByMajor ?? {})) {
+        assert.equal(majorGroups.reduce((sum, group) => sum + Number(group.requiredCredits ?? 0), 0), category.minimumCredits, `${curriculumId}:${category.code}:major`);
+      }
+    }
+  }
+  const cs = categoryConfigFor('BSC-CS-2566');
+  const cnc = categoryConfigFor('BSC-CNC-2568');
+  assert.equal(cs.categories.reduce((sum, item) => sum + item.minimumCredits, 0), 123);
+  assert.equal(cnc.categories.reduce((sum, item) => sum + item.minimumCredits, 0), 126);
+});
+
+test('ACC is accepted only for TU after course-code normalization', () => {
+  assert.equal(validateGradeEntry({ courseCode: 'TU250', grade: 'ACC', credits: 1.5 }).ok, true);
+  assert.equal(validateGradeEntry({ courseCode: 'มธ.250', grade: 'ACC', credits: 1.5 }).ok, true);
+  for (const courseCode of ['EL105', 'LAS101', 'CS102']) {
+    const result = validateGradeEntry({ courseCode, grade: 'ACC', credits: 3 });
+    assert.equal(result.ok, false, courseCode);
+    assert.equal(result.errors[0], 'ACC ใช้ได้เฉพาะวิชา มธ. (TU)');
+  }
+  assert.equal(validateGradeEntry({ courseCode: 'TU999', grade: 'ACC', credits: 3 }).ok, true);
+  assert.equal(isAccEligible('EL105', { config: { allowedCoursePrefixes: ['EL'] } }), true);
+  assert.equal(validateGradeEntry({ courseCode: 'EL105', grade: 'ACC', credits: 3 }, { accConfig: { allowedCoursePrefixes: ['EL'] } }).ok, true);
+});
+
 test('free elective entry requires a name and positive integer credits', () => {
   assert.equal(validateGradeEntry({ entryType: 'free_elective', courseCode: 'EL001', grade: 'A', credits: 3 }).ok, false);
   assert.equal(validateGradeEntry({ entryType: 'free_elective', courseCode: 'EL001', courseName: 'วิชาเสรี', grade: 'A', credits: 3 }).ok, true);
@@ -81,6 +140,307 @@ test('W and F are accepted and in-progress has no grade', () => {
   assert.equal(validateGradeEntry({ courseCode: 'CS101', grade: 'W', credits: 3 }).ok, true);
   assert.equal(validateGradeEntry({ courseCode: 'CS101', grade: 'F', credits: 3 }).ok, true);
   assert.equal(validateGradeEntry({ courseCode: 'CS101', inProgress: true, credits: 3 }).ok, true);
+});
+
+test('calcGPAX counts every attempt, including F, and excludes S/U/W from GPAX', () => {
+  const records = [
+    { course_code: 'R1', credits: 3, grade: 'A' },
+    { course_code: 'R1', credits: 3, grade: 'B' },
+    { course_code: 'R1', credits: 3, grade: 'F' },
+    { course_code: 'S1', credits: 3, grade: 'S' },
+    { course_code: 'U1', credits: 3, grade: 'U' },
+    { course_code: 'W1', credits: 3, grade: 'W' },
+  ];
+  const result = calcGPAX(records);
+  assert.equal(result.gradedCredits, 9);
+  assert.equal(result.weightedPoints, 21);
+  assert.equal(result.gpa, 21 / 9);
+});
+
+test('ACC earns category credits but never enters GPAX, including when uncategorized', () => {
+  const result = calcGPAX([{ course_code: 'TU250', credits: 1.5, grade: 'ACC' }, { course_code: 'CS101', credits: 3, grade: 'C' }]);
+  assert.equal(result.gradedCredits, 3);
+  const category = evaluateByCategory([{ course_code: 'TU250', credits: 1.5, grade: 'ACC', category_code: 'uncategorized' }], { curriculumId: 'BSC-CS-2566' });
+  assert.equal(category.categories.find(item => item.code === 'extra_credits').earnedCredits, 1.5);
+  assert.equal(category.uncategorizedWarnings[0].reason, 'uncategorized_acc_extra');
+});
+
+test('calcGPAX gives a 3-credit course taken three times a 9-credit denominator', () => {
+  const result = calcGPAX([
+    { course_code: 'R1', credits: 3, grade: 'F' },
+    { course_code: 'R1', credits: 3, grade: 'B' },
+    { course_code: 'R1', credits: 3, grade: 'A' },
+  ]);
+  assert.equal(result.gradedCredits, 9);
+  assert.equal(result.gpa, 7 / 3);
+});
+
+test('core average uses a passing later attempt when D is below a C requirement', () => {
+  const result = calcCoreAverageCondition([
+    { course_code: 'CS101', credits: 3, grade: 'D', academic_year: 2025, semester: 1 },
+    { course_code: 'CS101', credits: 3, grade: 'B', academic_year: 2026, semester: 1 },
+  ], {
+    curriculumId: 'BSC-CS-2566',
+    courses: ['CS101'],
+    requiredAverage: 2,
+    courseMinimumGrades: { CS101: 'C' },
+  });
+  assert.equal(result.status, 'passed');
+  assert.equal(result.details.selected[0].grade, 'B');
+});
+
+test('core average policies choose first, latest, or best passing attempt and flag duplicates', () => {
+  const records = [
+    { course_code: 'CS100', grade: 'D', academic_year: 2025, semester: 1 },
+    { course_code: 'CS100', grade: 'B', academic_year: 2026, semester: 1 },
+  ];
+  const options = { curriculumId: 'BSC-CS-2566', courses: ['CS100'], requiredAverage: 2, courseMinimumGrades: { CS100: 'D' } };
+  const first = calcCoreAverageCondition(records, { ...options, coreAveragePassPolicy: 'first_pass' });
+  const latest = calcCoreAverageCondition(records, { ...options, coreAveragePassPolicy: 'latest_pass' });
+  const best = calcCoreAverageCondition(records, { ...options, coreAveragePassPolicy: 'best_pass' });
+  assert.equal(first.details.selected[0].grade, 'D');
+  assert.equal(latest.details.selected[0].grade, 'B');
+  assert.equal(best.details.selected[0].grade, 'B');
+  assert.deepEqual(first.details.multiplePassingAttempts, ['CS100']);
+  assert.equal(first.details.reviewRequired, true);
+});
+
+test('core average ignores a latest F when an earlier attempt passed', () => {
+  const result = calcCoreAverageCondition([
+    { course_code: 'CS101', grade: 'C', academic_year: 2025, semester: 1 },
+    { course_code: 'CS101', grade: 'F', academic_year: 2026, semester: 1 },
+  ], {
+    curriculumId: 'BSC-CS-2566',
+    courses: ['CS101'],
+    requiredAverage: 2,
+    courseMinimumGrades: { CS101: 'C' },
+  });
+  assert.equal(result.status, 'passed');
+  assert.equal(result.details.selected[0].grade, 'C');
+});
+
+test('core-average D grades do not count as passing for CS or CNC config', () => {
+  const cs = gradePolicyFor('BSC-CS-2566');
+  const cnc = gradePolicyFor('BSC-CNC-2568');
+  const csResult = calcCoreAverageCondition([
+    { course_code: 'CS100', grade: 'D', academic_year: 2025, semester: 1 },
+  ], { curriculumId: 'BSC-CS-2566', courses: ['CS100'], requiredAverage: 2 });
+  const cncResult = calcCoreAverageCondition([
+    { course_code: 'CNC211', grade: 'D', academic_year: 2025, semester: 1 },
+  ], { curriculumId: 'BSC-CNC-2568', courses: ['CNC211'], requiredAverage: 2 });
+  assert.equal(Object.values(cs.coreAverageCourseMinimumGrades).every(grade => grade === 'C'), true);
+  assert.equal(Object.values(cnc.coreAverageCourseMinimumGrades).every(grade => grade === 'C'), true);
+  assert.deepEqual(csResult.details.missing, ['CS100']);
+  assert.deepEqual(cncResult.details.missing, ['CNC211']);
+});
+
+test('core average reaches the exact 2.00 boundary', () => {
+  const result = calcCoreAverageCondition([
+    { course_code: 'CS100', grade: 'C', academic_year: 2025, semester: 1 },
+    { course_code: 'CS232', grade: 'C', academic_year: 2025, semester: 1 },
+  ], {
+    curriculumId: 'BSC-CS-2566',
+    courses: ['CS100', 'CS232'],
+    requiredAverage: 2,
+    courseMinimumGrades: { CS100: 'C', CS232: 'D' },
+  });
+  assert.equal(result.status, 'passed');
+  assert.equal(result.details.average, 2);
+});
+
+test('backend category configs stay separate and add up to each curriculum total', () => {
+  const totals = categoryConfigTotals();
+  assert.deepEqual(totals['BSC-CS-2566'], { totalCredits: 123, categoryCredits: 123 });
+  assert.deepEqual(totals['BSC-CNC-2568'], { totalCredits: 126, categoryCredits: 126 });
+  assert.equal(classifyCurriculumCourse({ curriculumId: 'BSC-CS-2566', courseGroup: 'วิชาศึกษาทั่วไป' }).code, 'general_education');
+  assert.equal(classifyCurriculumCourse({ curriculumId: 'BSC-CNC-2568', courseGroup: 'วิชาศึกษาทั่วไป' }).code, 'general_education');
+  assert.equal(classifyCurriculumCourse({ curriculumId: 'BSC-CS-2566', courseGroup: 'วิชาเฉพาะ' }).code, 'uncategorized');
+});
+
+const categoryRow = (course_code, category_code, credits, grade = 'A', academic_year = 2566, semester = 1) => ({ course_code, category_code, credits, grade, academic_year, semester });
+const completeCsRows = ({ general = 30, major = 30 } = {}) => [
+  categoryRow('GEN', 'general_education', general),
+  categoryRow('CORE', 'major_core', 12),
+  categoryRow('SPEC', 'major_specific', 42),
+  categoryRow('MAJOR', 'major', major),
+  categoryRow('OUT', 'outside_major_required', 3),
+  categoryRow('FREE', 'free_elective', 6),
+  categoryRow('CS101', 'major_core', 0, 'C'),
+  categoryRow('CS102', 'major_core', 0, 'C'),
+  categoryRow('CS111', 'major_core', 0, 'C'),
+];
+
+test('evaluateByCategory passes CS at exactly 123 and keeps CNC config separate', () => {
+  const cs = evaluateByCategory(completeCsRows(), { curriculumId: 'BSC-CS-2566' });
+  assert.equal(cs.total.earnedCredits, 123);
+  assert.equal(cs.passedAllCategories, true);
+  assert.equal(cs.categories.find(item => item.code === 'major_core').requiredCredits, 12);
+  const cnc = evaluateByCategory([categoryRow('GEN', 'general_education', 24)], { curriculumId: 'BSC-CNC-2568' });
+  assert.equal(cnc.total.requiredCredits, 126);
+  assert.notEqual(cnc.categories.some(item => item.code === 'major_core'), true);
+});
+
+test('evaluateByCategory passes CNC at exactly 126 credits', () => {
+  const rows = [
+    categoryRow('GEN', 'general_education', 24),
+    categoryRow('MATH', 'mathematics_foundation', 9),
+    categoryRow('REQUIRED', 'major_required', 81),
+    categoryRow('PROJECT', 'project_or_coop', 6),
+    categoryRow('FREE', 'free_elective', 6),
+    ...['CNC101', 'CNC102', 'CNC222', 'CNC231', 'CNC235'].map(code => categoryRow(code, 'major_required', 0, 'C')),
+  ];
+  const result = evaluateByCategory(rows, { curriculumId: 'BSC-CNC-2568' });
+  assert.equal(result.total.earnedCredits, 126);
+  assert.equal(result.passedAllCategories, true);
+});
+
+test('category configs declare limited excess-credit policy without changing current evaluator behavior', () => {
+  assert.equal(categoryConfigFor('BSC-CS-2566').excessCreditPolicy, 'carry_to_free_elective_limited');
+  assert.equal(categoryConfigFor('BSC-CNC-2568').excessCreditPolicy, 'carry_to_free_elective_limited');
+  const result = evaluateByCategory(completeCsRows({ general: 33, major: 27 }), { curriculumId: 'BSC-CS-2566' });
+  assert.equal(result.total.earnedCredits, 123);
+  assert.equal(result.total.passed, true);
+  assert.equal(result.passedAllCategories, false);
+  assert.equal(result.categories.find(item => item.code === 'major').missingCredits, 3);
+  assert.equal(result.categories.find(item => item.code === 'free_elective').carriedInCredits, 3);
+  assert.equal(result.categories.find(item => item.code === 'free_elective').earnedCredits, 9);
+});
+
+test('evaluateByCategory counts repeated courses once and keeps only earned grades', () => {
+  const result = evaluateByCategory([
+    categoryRow('REPEAT', 'general_education', 3, 'F'),
+    categoryRow('REPEAT', 'general_education', 3, 'A', 2567),
+    categoryRow('FAIL', 'general_education', 3, 'W'),
+    categoryRow('FAIL2', 'general_education', 3, 'U'),
+    categoryRow('PASS', 'general_education', 3, 'S'),
+  ], { curriculumId: 'BSC-CS-2566' });
+  const general = result.categories.find(item => item.code === 'general_education');
+  assert.equal(general.rawEarnedCredits, 6);
+  assert.deepEqual(general.courses.map(item => item.courseCode), ['REPEAT', 'PASS']);
+});
+
+test('structured category groups enforce one_of, one_group_of, ranges, and missing major warnings', () => {
+  const result = evaluateByCategory([
+    categoryRow('TU250', 'general_education', 1.5),
+    categoryRow('TU201', 'general_education', 3),
+    categoryRow('CNC303', 'project_or_coop', 3),
+    categoryRow('CNC404', 'project_or_coop', 3),
+  ], { curriculumId: 'BSC-CNC-2568' });
+  const ge = result.categories.find(item => item.code === 'general_education');
+  const project = result.categories.find(item => item.code === 'project_or_coop');
+  assert.equal(ge.groups.length, 5);
+  assert.equal(project.groups[0].passed, false);
+  assert.match(project.warnings[0], /กลุ่มเดียวกัน/);
+  const cs = evaluateByCategory([categoryRow('CS221', 'major_specific', 3)], { curriculumId: 'BSC-CS-2566' });
+  assert.match(cs.categories.find(item => item.code === 'major').warnings[0], /ไม่ทราบเอก/);
+});
+
+test('prerequisite evaluation uses any passing attempt and emits timing warnings', () => {
+  const result = evaluatePrerequisites([
+    { course_code: 'CS303', grade: 'C', academic_year: 2566, semester: 1 },
+    { course_code: 'CS304', grade: 'W', academic_year: 2566, semester: 2 },
+  ], [{ prerequisiteCode: 'CS303', minimumGrade: 'C' }], {
+    currentCourseCode: 'CS403', currentAcademicYear: 2567, currentSemester: 1,
+  });
+  assert.equal(result.passed, true);
+  const failed = evaluatePrerequisites([], [{ prerequisiteCode: 'CS303', minimumGrade: 'C' }], { currentCourseCode: 'CS403', currentAcademicYear: 2567, currentSemester: 1 });
+  assert.equal(failed.warnings[0].reason, 'not_studied');
+});
+
+test('mandatory course below C is not counted and appears as missing', () => {
+  const result = evaluateByCategory([categoryRow('CS101', 'major_core', 3, 'D')], { curriculumId: 'BSC-CS-2566' });
+  const core = result.categories.find(item => item.code === 'major_core');
+  assert.equal(core.rawEarnedCredits, 0);
+  assert.deepEqual(core.mandatoryMissingCourses, [
+    { courseCode: 'CS101', minimumGrade: 'C' },
+    { courseCode: 'CS102', minimumGrade: 'C' },
+    { courseCode: 'CS111', minimumGrade: 'C' },
+  ]);
+});
+
+test('uncategorized records become explicit warnings', () => {
+  const result = evaluateByCategory([categoryRow('UNKNOWN', 'uncategorized', 3, 'A')], { curriculumId: 'BSC-CS-2566' });
+  assert.deepEqual(result.uncategorizedWarnings, [{ courseCode: 'UNKNOWN', reason: 'uncategorized', attempts: 1 }]);
+});
+
+test('self-reported free electives keep the free-elective category', () => {
+  assert.deepEqual(categoryUpdateForRow({ entry_type: 'free_elective', curriculum_id: 'BSC-CS-2566', course_group: null }), {
+    code: 'free_elective',
+    label: 'วิชาเลือกเสรี',
+  });
+});
+
+test('category migration is additive and does not overwrite grade values', () => {
+  const sql = readFileSync(path.join(here, '..', 'migrations', '020_graduation_grade_categories.sql'), 'utf8');
+  assert.match(sql, /ADD COLUMN category_code/);
+  assert.match(sql, /ADD COLUMN category_label/);
+  assert.doesNotMatch(sql, /UPDATE\s+graduation_grade_record/i);
+  assert.doesNotMatch(sql, /DELETE\s+FROM\s+graduation_grade_record/i);
+});
+
+test('category backfill updates only category fields and reports uncategorized rows', async () => {
+  const updates = [];
+  const conn = {
+    async query() {
+      return [[
+        { grade_record_id: 1, curriculum_id: 'BSC-CS-2566', course_code: 'TU101', entry_type: 'catalog', course_group: 'วิชาศึกษาทั่วไป', course_type_code: null },
+        { grade_record_id: 2, curriculum_id: 'BSC-CS-2566', course_code: 'UNKNOWN1', entry_type: 'catalog', course_group: 'วิชาเฉพาะ', course_type_code: null },
+        { grade_record_id: 3, curriculum_id: 'BSC-CS-2566', course_code: 'FREE1', entry_type: 'free_elective', course_group: null, course_type_code: null },
+      ]];
+    },
+    async execute(sql, params) {
+      updates.push({ sql, params });
+    },
+  };
+  const result = await backfillCategories(conn, { apply: true });
+  assert.equal(result.scanned, 3);
+  assert.equal(result.updated, 3);
+  assert.equal(result.uncategorizedCount, 1);
+  assert.deepEqual(result.uncategorizedCourseCodes, ['UNKNOWN1']);
+  assert.equal(updates.length, 3);
+  assert.deepEqual(updates[0].params, ['general_education', 'วิชาศึกษาทั่วไป', 1]);
+  assert.deepEqual(updates[2].params, ['free_elective', 'วิชาเลือกเสรี', 3]);
+  assert.match(updates[0].sql, /SET category_code = \?, category_label = \?/);
+  assert.match(updates[0].sql, /WHERE grade_record_id = \? AND category_code IS NULL/);
+});
+
+test('backfill preserves attempts, grades, source type, and curriculum-specific categories', async () => {
+  const state = [
+    { grade_record_id: 11, curriculum_id: 'BSC-CS-2566', course_code: 'REPEAT1', attempt_no: 1, grade: 'A', entry_type: 'catalog', course_group: 'วิชาเฉพาะ–วิชาแกน', course_type_code: null, category_code: null },
+    { grade_record_id: 12, curriculum_id: 'BSC-CS-2566', course_code: 'REPEAT1', attempt_no: 2, grade: 'F', entry_type: 'catalog', course_group: 'วิชาเฉพาะ–วิชาแกน', course_type_code: null, category_code: null },
+    { grade_record_id: 13, curriculum_id: 'BSC-CS-2566', course_code: 'SELF1', attempt_no: 1, grade: 'S', entry_type: 'catalog', course_group: 'วิชาศึกษาทั่วไป', course_type_code: null, category_code: null },
+    { grade_record_id: 14, curriculum_id: 'BSC-CS-2566', course_code: 'FREE1', attempt_no: 1, grade: 'U', entry_type: 'free_elective', course_group: null, course_type_code: null, category_code: null },
+    { grade_record_id: 15, curriculum_id: 'BSC-CNC-2568', course_code: 'SAME1', attempt_no: 1, grade: 'W', entry_type: 'catalog', course_group: 'วิชาเฉพาะ–วิชาบังคับ', course_type_code: null, category_code: null },
+  ];
+  const before = state.map(row => ({ id: row.grade_record_id, grade: row.grade, attempt: row.attempt_no }));
+  const conn = {
+    async query() {
+      return [state.filter(row => row.category_code == null).map(({ grade_record_id, curriculum_id, course_code, entry_type, course_group, course_type_code }) => ({ grade_record_id, curriculum_id, course_code, entry_type, course_group, course_type_code }))];
+    },
+    async execute(sql, [code, label, id]) {
+      const row = state.find(item => item.grade_record_id === id);
+      row.category_code = code;
+      row.category_label = label;
+    },
+  };
+  const first = await backfillCategories(conn, { apply: true });
+  const second = await backfillCategories(conn, { apply: true });
+  assert.equal(first.scanned, 5);
+  assert.deepEqual(first.categoryCounts, { major_core: 2, general_education: 1, free_elective: 1, major_required: 1 });
+  assert.deepEqual(second, { scanned: 0, updated: 0, categoryCounts: {}, uncategorizedCount: 0, uncategorizedCourseCodes: [] });
+  assert.deepEqual(state.map(row => ({ id: row.grade_record_id, grade: row.grade, attempt: row.attempt_no })), before);
+  assert.equal(state[0].category_code, state[1].category_code);
+  assert.equal(state[2].category_code, 'general_education');
+  assert.equal(state[3].category_code, 'free_elective');
+  assert.equal(state[4].category_code, 'major_required');
+});
+
+test('rollback migration is additive reversal only and does not rewrite grade data', () => {
+  const sql = readFileSync(path.join(here, '..', 'migrations', 'rollback', '020_graduation_grade_categories.down.sql'), 'utf8');
+  assert.match(sql, /DROP COLUMN category_label/);
+  assert.match(sql, /DROP COLUMN category_code/);
+  assert.doesNotMatch(sql, /UPDATE\s+graduation_grade_record/i);
+  assert.doesNotMatch(sql, /DELETE\s+FROM\s+graduation_grade_record/i);
 });
 
 // ---------- Adapter: CSV parsing and contract validation ----------
@@ -215,7 +575,8 @@ test('TC1: DEMO0002 is shown the conditions it has not passed (GPA, C in DEMO101
   assert.equal(statusOf(result, 3).status, 'not_passed');
   assert.equal(statusOf(result, 3).details.gpa, 1.13);
   assert.deepEqual(statusOf(result, 5).details.belowMinimum, ['DEMO101', 'DEMO102']);
-  assert.equal(statusOf(result, 6).status, 'not_passed');
+  assert.equal(statusOf(result, 6).status, 'incomplete');
+  assert.equal(statusOf(result, 6).reason, 'missing_courses');
 });
 
 test('TC2: DEMO0003 with batch-001 only is missing DEMO102, so conditions 5 and 6 are incomplete', () => {
