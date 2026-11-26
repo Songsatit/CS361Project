@@ -22,6 +22,7 @@ import {
   partitionGradeRecords,
   resolveDataSource,
 } from '../src/graduation/evaluate.mjs';
+import { validateGradeEntry } from '../src/graduation/grade-entry.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixture = (name) => readFileSync(path.join(here, '..', 'fixtures', 'v4-demo', name), 'utf8');
@@ -63,6 +64,24 @@ const batch = (overrides = {}) => ({ status: 'success', batch_id: 1, source_batc
 const FRESH_OK = resolveDataSource({ latestBatch: batch(), asOf: new Date('2026-10-27T01:00:00Z'), now: new Date('2026-10-28T02:00:00Z') });
 const ok = (status, extra = {}) => ({ ...FRESH_OK, status, ...extra });
 const statusOf = (result, order) => result.conditions.find((item) => item.order === order);
+
+test('grade entry accepts the supported student grades', () => {
+  for (const grade of ['A', 'B+', 'B', 'C+', 'C', 'D+', 'D', 'F', 'S', 'U', 'W']) {
+    assert.equal(validateGradeEntry({ courseCode: 'CS101', grade, credits: 3 }).ok, true, grade);
+  }
+});
+
+test('free elective entry requires a name and positive integer credits', () => {
+  assert.equal(validateGradeEntry({ entryType: 'free_elective', courseCode: 'EL001', grade: 'A', credits: 3 }).ok, false);
+  assert.equal(validateGradeEntry({ entryType: 'free_elective', courseCode: 'EL001', courseName: 'วิชาเสรี', grade: 'A', credits: 3 }).ok, true);
+  assert.equal(validateGradeEntry({ entryType: 'free_elective', courseCode: 'EL001', courseName: 'วิชาเสรี', grade: 'A', credits: 3.5 }).ok, false);
+});
+
+test('W and F are accepted and in-progress has no grade', () => {
+  assert.equal(validateGradeEntry({ courseCode: 'CS101', grade: 'W', credits: 3 }).ok, true);
+  assert.equal(validateGradeEntry({ courseCode: 'CS101', grade: 'F', credits: 3 }).ok, true);
+  assert.equal(validateGradeEntry({ courseCode: 'CS101', inProgress: true, credits: 3 }).ok, true);
+});
 
 // ---------- Adapter: CSV parsing and contract validation ----------
 
