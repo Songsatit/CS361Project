@@ -1169,6 +1169,7 @@ function renderGraduationPlanForm(result) {
   const existing = new Map();
   const note = (rows, label, locked) => (rows ?? []).forEach(row => existing.set(graduationCodeKey(row.courseCode), {
     label, grade: row.grade, source: row.source, verificationStatus: row.verificationStatus,
+    academicYear: row.academicYear, semester: row.semester, attemptNo: row.attemptNo, categoryLabel: row.categoryLabel,
     locked: locked && !(row.source === "self_reported" && ["unverified", "rejected"].includes(row.verificationStatus)),
   }));
   // Rejected first, so a locked row for the same course always wins.
@@ -1177,17 +1178,43 @@ function renderGraduationPlanForm(result) {
   note(result?.pendingRecords, "ส่งแล้ว รอยืนยัน", true);
   note(result?.inProgressRecords, "กำลังเรียน (ส่งแล้ว)", true);
 
+  const categoryByCode = new Map();
+  const rememberCategoryCourses = (category, groups = []) => {
+    (category?.courses ?? []).forEach(course => categoryByCode.set(graduationCodeKey(course.courseCode), category.label));
+    groups.forEach(group => {
+      (group.courses ?? []).forEach(course => categoryByCode.set(graduationCodeKey(course.courseCode), category.label));
+      rememberCategoryCourses(category, group.groups ?? []);
+    });
+  };
+  (result?.categoryEvaluation?.categories ?? []).forEach(category => rememberCategoryCourses(category, category.groups ?? []));
+  [...(result?.records ?? []), ...(result?.pendingRecords ?? []), ...(result?.inProgressRecords ?? []), ...(result?.rejectedRecords ?? [])].forEach(row => {
+    if (row.categoryLabel) categoryByCode.set(graduationCodeKey(row.courseCode), row.categoryLabel);
+  });
+
   const gradeOptions = selected => graduationGradeOptionsHtml(selected);
   const termChoices = terms.map(item => `<option value="${esc(`${item.year}-${item.term}`)}">ปี ${esc(item.year)} · ${esc(item.term === 3 ? "Summer" : `ภาค ${item.term}`)}</option>`).join("");
-  const termTable = term => `<section class="graduation-plan-term"><div class="graduation-plan-term-head"><h4>ปี ${esc(term.year)} · ${esc(term.term === 3 ? "Summer" : `ภาค ${term.term}`)}</h4><label class="graduation-plan-bulk">ตั้งทุกวิชาในภาคนี้เป็น <select data-graduation-plan-bulk aria-label="ตั้งเกรดทั้งภาคเรียน">${graduationGradeOptionsHtml("", { blankLabel: "เลือก…" })}</select></label></div><table><thead><tr><th>วิชา</th><th>ชื่อวิชา</th><th>หน่วยกิต</th><th>เทอมที่เรียนจริง</th><th>เกรด</th></tr></thead><tbody>${term.courses.map(code => {
-    const info = existing.get(graduationCodeKey(code));
-    const course = COURSES[courseKey(code)] ?? {};
-    const selectedGrade = info?.grade ?? form.grades?.[code] ?? "";
-    const cell = info?.locked
-      ? `<span class="graduation-plan-done">${esc(info.label)}</span>`
-      : `<select data-graduation-plan-grade="${esc(code)}" aria-label="เกรด ${esc(code)}">${gradeOptions(selectedGrade)}</select>${info ? `<small> ${esc(info.label)}</small>` : ""}`;
-    return `<tr data-plan-row data-code="${esc(code)}" data-year="${esc(term.year)}" data-term="${esc(term.term)}" data-credits="${esc(course.credits ?? "")}"><td>${esc(code)}</td><td>${esc(course.name ?? "-")}</td><td>${esc(course.credits ?? "-")}</td><td><select data-graduation-plan-move aria-label="เทอมที่เรียนจริงของ ${esc(code)}"${info?.locked ? " disabled" : ""}>${termChoices.replace(`value="${term.year}-${term.term}"`, `value="${term.year}-${term.term}" selected`)}</select><input data-graduation-plan-attempt type="number" min="1" max="9" placeholder="รอบ" aria-label="รอบที่เรียน ${esc(code)}"${info?.locked ? " disabled" : ""}></td><td>${cell}</td></tr>`;
-  }).join("")}</tbody></table></section>`;
+  const termTable = term => {
+    const plannedRows = term.courses.map(code => {
+      const info = existing.get(graduationCodeKey(code));
+      const course = COURSES[courseKey(code)] ?? {};
+      const selectedGrade = info?.grade ?? form.grades?.[code] ?? "";
+      const pillClass = selectedGrade === "F" || selectedGrade === "U" ? "graduation-grade-pill--warning" : selectedGrade ? "graduation-grade-pill--pass" : "graduation-grade-pill--empty";
+      const cell = info?.locked
+        ? `<span class="graduation-plan-done" title="${esc(info.label)}">🔒 ${esc(info.label)}</span>`
+        : `<div class="graduation-grade-editor"><button type="button" class="graduation-grade-pill ${pillClass}" data-graduation-grade-pill aria-label="เลือกเกรด ${esc(code)}">${esc(selectedGrade || "-")}</button><select hidden class="graduation-grade-select" data-graduation-plan-grade="${esc(code)}" aria-label="เกรด ${esc(code)}">${gradeOptions(selectedGrade)}</select><small>${esc(info?.label ?? "คลิกเกรดเพื่อแก้ไข")}</small></div>`;
+      const actual = info?.academicYear && info?.semester ? `${Number(info.academicYear) - Number(form.entryYear) + 1}-${info.semester}` : `${term.year}-${term.term}`;
+      const moved = actual !== `${term.year}-${term.term}` || Number(info?.attemptNo ?? 1) > 1;
+      const termText = moved ? `ปี ${actual.split("-")[0]} · ภาค ${actual.split("-")[1]}` : "ตามแผน";
+      const termEditor = info?.locked
+        ? `<span class="graduation-plan-done">${esc(termText)} (รอบ ${esc(info?.attemptNo ?? 1)})</span>`
+        : `<div class="graduation-term-editor"><span class="graduation-plan-muted" data-graduation-plan-summary>${esc(termText)} (รอบ ${esc(info?.attemptNo ?? 1)})</span><button type="button" class="graduation-inline-edit" data-graduation-plan-edit>แก้ไข</button><div class="graduation-term-controls" data-graduation-plan-controls${moved ? " data-open" : ""}><select data-graduation-plan-move aria-label="เทอมที่เรียนจริงของ ${esc(code)}">${termChoices.replace(`value="${actual}"`, `value="${actual}" selected`)}</select><input data-graduation-plan-attempt type="number" min="1" max="9" value="${esc(info?.attemptNo ?? 1)}" placeholder="รอบ" aria-label="รอบที่เรียน ${esc(code)}"></div></div>`;
+      return { label: categoryByCode.get(graduationCodeKey(code)) ?? "ยังไม่จัดหมวด", html: `<tr class="graduation-plan-row${selectedGrade && !["F", "U", "W"].includes(selectedGrade) ? " graduation-plan-row--passed" : ""}" data-plan-row data-code="${esc(code)}" data-year="${esc(term.year)}" data-term="${esc(term.term)}" data-credits="${esc(course.credits ?? "")}"><td><strong>${esc(code)}</strong></td><td>${esc(course.name ?? "-")}</td><td>${esc(course.credits ?? "-")}</td><td>${termEditor}</td><td>${cell}</td></tr>` };
+    });
+    const grouped = new Map();
+    plannedRows.forEach(row => { if (!grouped.has(row.label)) grouped.set(row.label, []); grouped.get(row.label).push(row.html); });
+    const rows = [...grouped].map(([label, html]) => `<tr class="graduation-plan-category-row"><th colspan="5">${esc(label)}</th></tr>${html.join("")}`).join("");
+    return `<section class="graduation-plan-term"><div class="graduation-plan-term-head"><h4>ปี ${esc(term.year)} · ${esc(term.term === 3 ? "Summer" : `ภาค ${term.term}`)}</h4><label class="graduation-plan-bulk">ตั้งทุกวิชาในภาคนี้เป็น <select data-graduation-plan-bulk aria-label="ตั้งเกรดทั้งภาคเรียน">${graduationGradeOptionsHtml("", { blankLabel: "เลือก…" })}</select></label></div><div class="graduation-plan-table-wrap"><table><colgroup><col class="plan-col-code"><col class="plan-col-name"><col class="plan-col-credits"><col class="plan-col-term"><col class="plan-col-grade"></colgroup><thead><tr><th>วิชา</th><th>ชื่อวิชา</th><th>หน่วยกิต</th><th>เทอมที่เรียนจริง</th><th>เกรด</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+  };
 
   // One collapsible block per study year, first year open by default.
   const firstFormYear = terms.length ? Math.min(...terms.map(term => term.year)) : 0;
@@ -5035,6 +5062,11 @@ function bind() {
       select.closest(".graduation-plan-term")?.querySelectorAll("[data-graduation-plan-grade]").forEach(courseSelect => {
         courseSelect.value = value;
         state.graduationForm.grades[courseSelect.dataset.graduationPlanGrade] = value;
+        const pill = courseSelect.closest(".graduation-grade-editor")?.querySelector("[data-graduation-grade-pill]");
+        if (pill) {
+          pill.textContent = value;
+          pill.className = `graduation-grade-pill ${value === "F" || value === "U" ? "graduation-grade-pill--warning" : "graduation-grade-pill--pass"}`;
+        }
       });
       select.value = "";
     };
@@ -5043,7 +5075,31 @@ function bind() {
     input.onchange = () => { state.graduationForm.entryYear = input.value.trim(); };
   });
   document.querySelectorAll("[data-graduation-plan-grade]").forEach(select => {
-    select.onchange = () => { state.graduationForm.grades[select.dataset.graduationPlanGrade] = select.value; };
+    select.onchange = () => {
+      state.graduationForm.grades[select.dataset.graduationPlanGrade] = select.value;
+      const pill = select.closest(".graduation-grade-editor")?.querySelector("[data-graduation-grade-pill]");
+      if (pill) {
+        pill.textContent = select.value || "-";
+        pill.className = `graduation-grade-pill ${select.value === "F" || select.value === "U" ? "graduation-grade-pill--warning" : select.value ? "graduation-grade-pill--pass" : "graduation-grade-pill--empty"}`;
+      }
+    };
+  });
+  document.querySelectorAll("[data-graduation-grade-pill]").forEach(button => {
+    button.onclick = () => {
+      const select = button.closest(".graduation-grade-editor")?.querySelector("[data-graduation-plan-grade]");
+      if (!select) return;
+      select.hidden = false;
+      button.hidden = true;
+      select.focus();
+    };
+  });
+  document.querySelectorAll("[data-graduation-plan-edit]").forEach(button => {
+    button.onclick = () => {
+      const controls = button.closest(".graduation-term-editor")?.querySelector("[data-graduation-plan-controls]");
+      if (!controls) return;
+      controls.dataset.open = "";
+      controls.querySelector("select")?.focus();
+    };
   });
   document.querySelectorAll("[data-graduation-plan-submit]").forEach(form => {
     form.onsubmit = async event => {
@@ -5056,7 +5112,7 @@ function bind() {
       state.graduationForm.entryYear = String(entryYear);
       const entries = [];
       form.querySelectorAll("[data-plan-row]").forEach(row => {
-        const value = row.querySelector("select")?.value;
+        const value = row.querySelector("[data-graduation-plan-grade]")?.value;
         if (!value) return;
         const credits = Number(row.dataset.credits);
         const moved = row.querySelector("[data-graduation-plan-move]")?.value?.split("-").map(Number) ?? [Number(row.dataset.year), Number(row.dataset.term)];

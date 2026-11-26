@@ -3662,16 +3662,42 @@
 
 .graduation-plan-term table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 0.92rem;
 }
 
+.graduation-plan-table-wrap {
+  overflow-x: auto;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+}
+
+.graduation-plan-term .plan-col-code { width: 90px; }
+.graduation-plan-term .plan-col-name { width: auto; }
+.graduation-plan-term .plan-col-credits { width: 70px; }
+.graduation-plan-term .plan-col-term { width: 200px; }
+.graduation-plan-term .plan-col-grade { width: 180px; }
+
 .graduation-plan-term th,
 .graduation-plan-term td {
-  padding: 0.4rem 0.6rem;
+  padding: 0.65rem 0.75rem;
+  vertical-align: middle;
   border-bottom: 1px solid rgba(0, 0, 0, 0.07);
   text-align: left;
 }
+
+.graduation-plan-category-row th {
+  padding-top: 0.8rem;
+  padding-bottom: 0.45rem;
+  color: #435a4b;
+  background: #f1f7f2;
+  font-size: 0.84rem;
+  letter-spacing: 0.01em;
+}
+
+.graduation-plan-row--passed td { background: rgba(220, 252, 231, 0.38); }
+.graduation-plan-row--passed td:first-child { box-shadow: inset 3px 0 #2c7a52; }
 
 .graduation-plan-term select {
   min-height: 34px;
@@ -3679,6 +3705,47 @@
   padding: 0.25rem 0.5rem;
   font: inherit;
 }
+
+.graduation-grade-editor,
+.graduation-term-editor {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.graduation-grade-editor { flex-wrap: wrap; }
+.graduation-grade-editor small { color: #667166; font-size: 0.76rem; }
+.graduation-grade-pill {
+  min-width: 42px;
+  min-height: 34px;
+  padding: 0.25rem 0.65rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+.graduation-grade-pill--pass { color: #17643c; background: #dcfce7; border-color: #a7e3bb; }
+.graduation-grade-pill--warning { color: #9a3412; background: #ffedd5; border-color: #fdba74; }
+.graduation-grade-pill--empty { color: #667166; background: #f1f3f1; border-color: #d9ded9; }
+.graduation-grade-select[hidden] { display: none; }
+.graduation-inline-edit {
+  padding: 0;
+  border: 0;
+  color: #276749;
+  background: transparent;
+  font: inherit;
+  font-size: 0.78rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.graduation-plan-muted { color: #69736b; font-size: 0.82rem; white-space: nowrap; }
+.graduation-term-editor { flex-wrap: nowrap; }
+.graduation-term-controls { display: none; align-items: center; gap: 0.35rem; min-width: 0; }
+.graduation-term-controls[data-open] { display: inline-flex; }
+.graduation-term-controls select { min-width: 0; width: 132px; }
+.graduation-term-controls input { width: 52px; min-height: 34px; padding: 0.25rem; font: inherit; }
 
 .graduation-plan-done {
   color: #5f6b5f;
