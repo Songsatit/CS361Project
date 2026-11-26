@@ -38,7 +38,9 @@ const groupMatches = (group, code) => {
 };
 
 function configCategory(curriculumId, code) {
-  const config = categoryConfigFor(curriculumId);
+  const baseId = String(curriculumId).startsWith('BSC-CS-2566') ? 'BSC-CS-2566'
+    : String(curriculumId).startsWith('BSC-CNC-2568') ? 'BSC-CNC-2568' : curriculumId;
+  const config = categoryConfigFor(baseId);
   for (const category of config?.categories ?? []) {
     const visit = group => groupMatches(group, code) || (group.subgroups ?? []).some(visit) || (group.groups ?? []).some(visit);
     if ((category.groups ?? []).some(visit) || Object.values(category.groupsByMajor ?? {}).flat().some(visit)) {
@@ -50,13 +52,13 @@ function configCategory(curriculumId, code) {
 
 async function backfill(conn, event) {
   const curriculumIds = event.curriculum === 'CS' ? ['BSC-CS-2566'] : event.curriculum === 'CNC' ? ['BSC-CNC-2568'] : ['BSC-CS-2566', 'BSC-CNC-2568'];
-  const marks = curriculumIds.map(() => '?').join(',');
+  const prefixes = curriculumIds.map(() => '?');
   const [rows] = await conn.query(`SELECT g.grade_record_id, g.curriculum_id, g.course_code, g.entry_type,
       cc.course_group, cl.course_type_code FROM graduation_grade_record g
       LEFT JOIN course c ON REPLACE(c.course_code, ' ', '') = REPLACE(g.course_code, ' ', '')
       LEFT JOIN curriculum_course cc ON cc.course_id = c.course_id AND cc.curriculum_id = g.curriculum_id
       LEFT JOIN course_classification cl ON cl.curriculum_course_id = cc.curriculum_course_id
-      WHERE g.category_code IS NULL AND g.curriculum_id IN (${marks}) ORDER BY g.grade_record_id`, curriculumIds);
+      WHERE g.category_code IS NULL AND (${prefixes.map(() => 'g.curriculum_id LIKE CONCAT(?, \'%\')').join(' OR ')}) ORDER BY g.grade_record_id`, curriculumIds);
   const updates = rows.map(row => {
     const category = row.entry_type === 'free_elective' ? { code: 'free_elective', label: 'วิชาเลือกเสรี' }
       : configCategory(row.curriculum_id, row.course_code)
