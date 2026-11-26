@@ -1030,14 +1030,12 @@ const GRADUATION_GRADE_OPTIONS = ["A", "B+", "B", "C+", "C", "D+", "D", "F", "S"
 // Courses graded pass/fail give credits but no letter grade. They count toward total credits
 // and stay out of the GPA, so they get their own group and a plain-language label.
 const GRADUATION_LETTER_GRADES = ["A", "B+", "B", "C+", "C", "D+", "D", "F"];
-const GRADUATION_CREDIT_ONLY_GRADES = ["S", "P"];
-const GRADUATION_OTHER_GRADES = ["U", "W", "I"];
+const GRADUATION_CREDIT_ONLY_GRADES = ["S"];
+const GRADUATION_OTHER_GRADES = ["U", "W"];
 const GRADUATION_GRADE_NAMES = {
   S: "S · ผ่าน (ได้หน่วยกิต ไม่มีเกรด)",
-  P: "P · ผ่าน (ได้หน่วยกิต ไม่มีเกรด)",
   U: "U · ไม่ผ่าน (ไม่ได้หน่วยกิต)",
   W: "W · ถอนรายวิชา",
-  I: "I · ยังไม่สมบูรณ์",
 };
 
 function graduationGradeOptionsHtml(selected = "", { blankLabel = "—", inProgress = true } = {}) {
@@ -1055,17 +1053,36 @@ function graduationCurriculumOptions(selectedId) {
     .join("");
 }
 
+function graduationDraftKey() {
+  return `cs361:graduation-grade-draft:${state.user?.username ?? "anonymous"}`;
+}
+
+function readGraduationDraft() {
+  try { return JSON.parse(localStorage.getItem(graduationDraftKey()) ?? "null") ?? {}; } catch { return {}; }
+}
+
+function saveGraduationDraft(form) {
+  const data = Object.fromEntries(new FormData(form).entries());
+  localStorage.setItem(graduationDraftKey(), JSON.stringify(data));
+}
+
 // Lets a student add one grade. The row stays "unverified" until instructor/staff confirm it.
 function renderGraduationGradeForm(result) {
   const buddhistYear = new Date().getFullYear() + 543;
-  return `<details class="graduation-extra"><summary>เพิ่มวิชาที่ไม่อยู่ในแผน (ทีละวิชา)</summary><form class="graduation-assignment-form graduation-grade-form" data-graduation-grade-form>
+  const draft = readGraduationDraft();
+  const selectedCurriculum = draft.curriculumId ?? result?.curriculum?.curriculumId ?? "";
+  return `<details class="graduation-extra" open><summary>＋ เพิ่มวิชารายเทอม / วิชาที่หาไม่เจอ</summary><p class="graduation-hint">ค้นหาวิชาจากรหัสหรือชื่อได้ ถ้าไม่พบให้เลือก “วิชาเสรีที่นักศึกษาเพิ่มเอง”</p><form class="graduation-assignment-form graduation-grade-form" data-graduation-grade-form>
     <div>
-      <select name="curriculumId" required aria-label="หลักสูตร"><option value="">หลักสูตร</option>${graduationCurriculumOptions(result?.curriculum?.curriculumId)}</select>
-      <input name="courseCode" required maxlength="30" placeholder="รหัสวิชา เช่น CS361" aria-label="รหัสวิชา">
-      <input name="academicYear" type="number" required min="2500" max="2700" value="${buddhistYear}" aria-label="ปีการศึกษา (พ.ศ.)">
-      <select name="semester" required aria-label="ภาคเรียน"><option value="1">ภาค 1</option><option value="2">ภาค 2</option><option value="3">Summer</option></select>
-      <input name="credits" type="number" step="0.5" min="0" max="12" placeholder="หน่วยกิต" aria-label="หน่วยกิต">
-      <select name="grade" aria-label="เกรด">${graduationGradeOptionsHtml("", { blankLabel: "เกรด", inProgress: false })}</select>
+      <select name="curriculumId" required aria-label="หลักสูตร"><option value="">หลักสูตร</option>${graduationCurriculumOptions(selectedCurriculum)}</select>
+      <input name="courseCode" required maxlength="30" list="graduation-course-options" value="${esc(draft.courseCode ?? "")}" placeholder="รหัสวิชา เช่น CS361" aria-label="รหัสวิชา">
+      <datalist id="graduation-course-options"></datalist>
+      <input name="courseName" maxlength="255" value="${esc(draft.courseName ?? "")}" placeholder="ชื่อวิชา (จำเป็นถ้าเป็นวิชาเสรี)" aria-label="ชื่อวิชา">
+      <select name="entryType" data-graduation-entry-type aria-label="ประเภทวิชา"><option value="catalog"${draft.entryType !== "free_elective" ? " selected" : ""}>วิชาในหลักสูตร</option><option value="free_elective"${draft.entryType === "free_elective" ? " selected" : ""}>วิชาเสรีที่นักศึกษาเพิ่มเอง</option></select>
+      <input name="academicYear" type="number" required min="2500" max="2700" value="${esc(draft.academicYear ?? buddhistYear)}" aria-label="ปีการศึกษา (พ.ศ.)">
+      <select name="semester" required aria-label="ภาคเรียน"><option value="1"${draft.semester === "1" ? " selected" : ""}>ภาค 1</option><option value="2"${draft.semester === "2" ? " selected" : ""}>ภาค 2</option><option value="3"${draft.semester === "3" ? " selected" : ""}>Summer</option></select>
+      <input name="attemptNo" type="number" min="1" max="9" value="${esc(draft.attemptNo ?? "")}" aria-label="รอบที่เรียน" placeholder="เว้นว่าง = รอบถัดไปอัตโนมัติ" title="ถ้าเป็นการเรียนซ้ำ ให้เลือกเลขรอบ">
+      <input name="credits" type="number" step="1" min="1" max="12" value="${esc(draft.credits ?? "")}" placeholder="หน่วยกิต" aria-label="หน่วยกิต">
+      <select name="grade" aria-label="เกรด">${graduationGradeOptionsHtml(draft.grade ?? "", { blankLabel: "เกรด", inProgress: false })}</select>
       <label class="graduation-inprogress"><input name="inProgress" type="checkbox"> กำลังเรียน</label>
       <button type="submit" class="workflow-action workflow-action--primary">เพิ่มรายการ</button>
     </div>
@@ -1293,11 +1310,11 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
     const years = [...new Set(rows.map(row => Number(row.academicYear)))].sort((a, b) => a - b);
     const latest = years[years.length - 1];
     const showActions = rows.some(rowActions);
-    const rowHtml = row => `<tr><td>${esc(row.courseCode)}</td><td>${esc(row.courseNameTh ?? row.courseNameEn ?? "ไม่พบชื่อวิชา")}</td><td>${esc(row.semester === 3 ? "Summer" : `ภาค ${row.semester}`)}</td><td>${esc(row.credits)}</td><td>${mode === "student" && state.graduationEditRow === row.id
+    const rowHtml = row => `<tr><td>${esc(row.courseCode)}${row.attemptNo > 1 ? ` <span class="graduation-pill graduation-pill--info">รอบที่ ${esc(row.attemptNo)}</span>` : ""}</td><td>${esc(row.courseNameTh ?? row.courseNameEn ?? "ไม่พบชื่อวิชา")}${row.entryType === "free_elective" ? ` <span class="graduation-pill graduation-pill--warn">วิชาเสรี</span>` : ""}</td><td>${esc(row.semester === 3 ? "Summer" : `ภาค ${row.semester}`)}</td><td>${esc(row.credits)}</td><td>${mode === "student" && state.graduationEditRow === row.id
       ? `<select data-graduation-edit-select aria-label="เกรดใหม่ของ ${esc(row.courseCode)}">${graduationGradeOptionsHtml(row.isInProgress ? "IP" : row.grade, { blankLabel: null })}</select>`
       : (row.isInProgress
         ? `<span class="graduation-pill graduation-pill--info">กำลังเรียน</span>`
-        : `<strong${["F", "U"].includes(row.grade) ? ` class="graduation-grade--fail"` : ""}>${esc(gradeLabel[row.grade] ?? row.grade ?? "-")}</strong>${["F", "U"].includes(row.grade) ? ` <span class="graduation-pill graduation-pill--fail">ไม่ผ่าน</span>` : ""}`)}</td><td>${esc(sourceText(row))}${row.verificationNote ? `<small> · ${esc(row.verificationNote)}</small>` : ""}</td>${showActions ? `<td class="graduation-row-actions">${rowActions(row)}</td>` : ""}</tr>`;
+        : `<strong${["F", "U"].includes(row.grade) ? ` class="graduation-grade--fail"` : ""}>${esc(gradeLabel[row.grade] ?? row.grade ?? "-")}</strong>${row.grade === "W" ? ` <span class="graduation-pill graduation-pill--info">ถอน · ไม่นับหน่วยกิต</span>` : row.grade === "F" ? ` <span class="graduation-pill graduation-pill--fail">ตก · ไม่นับหน่วยกิต</span>` : row.grade === "U" ? ` <span class="graduation-pill graduation-pill--fail">ไม่ผ่าน</span>` : ""}`)}</td><td>${esc(sourceText(row))}${row.verificationNote ? `<small> · ${esc(row.verificationNote)}</small>` : ""}</td>${showActions ? `<td class="graduation-row-actions">${rowActions(row)}</td>` : ""}</tr>`;
     return years.map(year => {
       const group = rows.filter(row => Number(row.academicYear) === year).sort((a, b) => a.semester - b.semester);
       const credits = group.reduce((sum, row) => sum + (Number(row.credits) || 0), 0);
@@ -5137,12 +5154,57 @@ function bind() {
   });
 
   document.querySelectorAll("[data-graduation-grade-form]").forEach(form => {
+    form.querySelectorAll("input, select").forEach(input => input.addEventListener("input", () => saveGraduationDraft(form)));
+    const entryType = form.querySelector("[data-graduation-entry-type]");
+    const credits = form.elements.credits;
+    const courseName = form.elements.courseName;
+    const syncEntryType = () => {
+      const free = entryType?.value === "free_elective";
+      if (credits) { credits.step = free ? "1" : "0.5"; credits.min = free ? "1" : "0"; }
+      if (courseName) courseName.required = free;
+    };
+    entryType?.addEventListener("change", syncEntryType);
+    form.elements.grade?.addEventListener("change", event => {
+      if (["D+", "D", "F"].includes(event.target.value) && form.dataset.requirementType === "required") {
+        alert("วิชาบังคับได้ต่ำกว่า C: ต้องเรียนซ้ำ");
+      }
+    });
+    syncEntryType();
+    form.elements.courseCode?.addEventListener("input", async event => {
+      const query = String(event.target.value ?? "").trim();
+      if (query.length < 2) return;
+      try {
+        const curriculumId = String(form.elements.curriculumId?.value ?? "").trim();
+        const curriculumQuery = curriculumId ? `&curriculumId=${encodeURIComponent(curriculumId)}` : "";
+        const response = await fetch(`${API_BASE}/api/courses?q=${encodeURIComponent(query)}${curriculumQuery}&limit=20`);
+        const payload = await response.json().catch(() => ({}));
+        const courses = payload.data ?? [];
+        const list = form.querySelector("#graduation-course-options");
+        if (list) list.innerHTML = courses.map(course => `<option value="${esc(course.course_code)}">${esc(course.title_th ?? course.title_en ?? "")}</option>`).join("");
+        const normalized = query.replace(/\s+/g, "").toUpperCase();
+        const match = courses.find(course => String(course.course_code ?? "").replace(/\s+/g, "").toUpperCase() === normalized);
+        if (match) {
+          form.dataset.catalogMatch = "true";
+          form.dataset.requirementType = match.requirement_type ?? "";
+          if (entryType?.value !== "free_elective") {
+            if (form.elements.courseName) form.elements.courseName.value = match.title_th ?? match.title_en ?? "";
+            if (form.elements.credits && match.credits_total != null) form.elements.credits.value = match.credits_total;
+          }
+        }
+      } catch { /* search is an enhancement; manual entry remains available */ }
+    });
     form.onsubmit = async event => {
       event.preventDefault();
       const formData = new FormData(form);
       const inProgress = formData.get("inProgress") === "on";
       const grade = String(formData.get("grade") ?? "");
       if (!inProgress && !grade) return alert("เลือกเกรด หรือติ๊ก \"กำลังเรียน\"");
+      const entryType = String(formData.get("entryType") ?? "catalog");
+      const courseName = String(formData.get("courseName") ?? "").trim();
+      const credits = Number(formData.get("credits"));
+      if (entryType === "free_elective" && !courseName) return alert("กรอกชื่อวิชาเสรี");
+      if (entryType === "free_elective" && (!Number.isInteger(credits) || credits < 1)) return alert("หน่วยกิตวิชาเสรีต้องเป็นจำนวนเต็มตั้งแต่ 1 ขึ้นไป");
+      if (entryType === "free_elective" && form.dataset.catalogMatch === "true" && !confirm("รหัสนี้พบในรายการหลักสูตรแล้ว ต้องการบันทึกเป็นวิชาเสรีต่อหรือไม่")) return;
       const button = form.querySelector("button[type=submit]");
       button.disabled = true;
       try {
@@ -5152,15 +5214,19 @@ function bind() {
           body: JSON.stringify({
             curriculumId: String(formData.get("curriculumId") ?? ""),
             courseCode: String(formData.get("courseCode") ?? "").trim(),
+            courseName,
+            entryType,
+            ...(formData.get("attemptNo") ? { attemptNo: Number(formData.get("attemptNo")) } : {}),
             academicYear: Number(formData.get("academicYear")),
             semester: Number(formData.get("semester")),
-            credits: formData.get("credits") === "" ? undefined : Number(formData.get("credits")),
+            credits: formData.get("credits") === "" ? undefined : credits,
             grade: inProgress ? undefined : grade,
             inProgress,
           }),
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(payload.error ?? "เพิ่มผลการเรียนไม่สำเร็จ");
+        localStorage.removeItem(graduationDraftKey());
         await reloadGraduation();
       } catch (error) {
         alert(error.message ?? "เพิ่มผลการเรียนไม่สำเร็จ");

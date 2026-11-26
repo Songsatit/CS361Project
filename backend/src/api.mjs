@@ -2,7 +2,6 @@
 import jwt from 'jsonwebtoken';
 import crypto from 'node:crypto';
 import {
-  ACCEPTED_GRADES,
   DEFAULT_SNAPSHOT_MAX_AGE_DAYS,
   canViewGraduation,
   evaluateGraduation,
@@ -11,6 +10,7 @@ import {
   resolveDataSource,
   resolveSelfReportedSource,
 } from './graduation/evaluate.mjs';
+import { SELF_REPORTED_GRADES, validateGradeEntry } from './graduation/grade-entry.mjs';
 
 const allowedRoles = new Set(['student', 'instructor', 'curriculum_admin', 'staff']);
 const jwtIssuer = 'cs361-curriculum-api';
@@ -1817,7 +1817,7 @@ const GRADUATION_SOURCE_KEY = 'registrar-demo';
 const graduationStudentIdPattern = /^[A-Za-z0-9]{1,20}$/;
 
 // Columns added by migration 015. Selected only when that migration is applied.
-const GRADE_SOURCE_COLUMNS = 'g.source, g.verification_status, g.is_in_progress, g.verification_note, g.verified_at,';
+const GRADE_SOURCE_COLUMNS = 'g.source, g.verification_status, g.is_in_progress, g.verification_note, g.verified_at, g.course_name, g.entry_type, g.attempt_no,';
 
 // batch_id is NULL for self-reported rows (migration 015), so batches are joined with LEFT JOIN.
 // An inner join would silently drop every row a student entered.
@@ -1854,7 +1854,7 @@ function shapeGradeRecord(record) {
   return {
     id: Number(record.grade_record_id),
     courseCode: record.course_code,
-    courseNameTh: record.course_name_th ?? null,
+    courseNameTh: record.course_name ?? record.course_name_th ?? null,
     courseNameEn: record.course_name_en ?? null,
     academicYear: Number(record.academic_year),
     semester: Number(record.semester),
@@ -1864,6 +1864,8 @@ function shapeGradeRecord(record) {
     source: record.source ?? 'imported',
     verificationStatus: record.verification_status ?? 'verified',
     isInProgress: Number(record.is_in_progress ?? 0) === 1,
+    entryType: record.entry_type ?? 'catalog',
+    attemptNo: Number(record.attempt_no ?? 1),
     verificationNote: record.verification_note ?? null,
   };
 }
@@ -2454,17 +2456,16 @@ async function saveSelfReportedGrade(actor, body) {
   if (!graduationStudentIdPattern.test(studentId)) return response(400, { error: 'studentId is invalid' });
 
   const curriculumId = String(body.curriculumId ?? '').trim();
-  const courseCode = normalizeGradeCourseCode(body.courseCode);
   const academicYear = Number(body.academicYear);
   const semester = Number(body.semester);
-  const inProgress = body.inProgress === true;
-  const grade = inProgress ? '-' : String(body.grade ?? '').trim().toUpperCase();
+  const entry = validateGradeEntry(body);
+  const { inProgress, grade, entryType, courseName, courseCode } = entry;
 
   if (!curriculumId || curriculumId.length > 50) return response(400, { error: 'curriculumId is required' });
-  if (!/^[A-Z0-9]{2,30}$/.test(courseCode)) return response(400, { error: 'courseCode is invalid' });
+  if (!entry.ok) return response(400, { error: entry.errors[0] });
   if (!Number.isInteger(academicYear) || academicYear < 2500 || academicYear > 2700) return response(400, { error: 'academicYear must be a Buddhist Era year such as 2566' });
   if (![1, 2, 3].includes(semester)) return response(400, { error: 'semester must be 1, 2, or 3' });
-  if (!inProgress && !ACCEPTED_GRADES.has(grade)) return response(400, { error: 'grade is not accepted' });
+  if (!inProgress && !SELF_REPORTED_GRADES.has(grade)) return response(400, { error: 'grade is not accepted' });
 
   const [curriculum] = await queryRows('SELECT curriculum_id FROM curriculum WHERE curriculum_id = ? LIMIT 1', [curriculumId]);
   if (!curriculum) return response(400, { error: 'curriculumId does not exist' });
@@ -2476,7 +2477,10 @@ async function saveSelfReportedGrade(actor, body) {
       ORDER BY active DESC, course_id LIMIT 1`,
     [courseCode],
   );
-  const credits = catalogCourse ? Number(catalogCourse.credits_total) : Number(body.credits);
+  const credits = entryType === 'catalog' && catalogCourse ? Number(catalogCourse.credits_total) : Number(body.credits);
+  if (entryType === 'free_elective' && (!Number.isInteger(credits) || credits < 1)) {
+    return response(400, { error: 'credits must be a positive integer for a free elective' });
+  }
   if (!Number.isFinite(credits) || credits < 0 || credits > 12 || (credits * 2) % 1 !== 0) {
     return response(400, { error: 'credits must be between 0 and 12 in steps of 0.5' });
   }
@@ -2487,13 +2491,19 @@ async function saveSelfReportedGrade(actor, body) {
 
   let recordId;
   try {
-    const [existing] = await queryRows(
-      `SELECT grade_record_id, source, verification_status FROM graduation_grade_record
-        WHERE student_id = ? AND curriculum_id = ? AND academic_year = ? AND semester = ?
-          AND REPLACE(course_code, ' ', '') = ?
-        LIMIT 1`,
-      [studentId, curriculumId, academicYear, semester, courseCode],
+    const existingRows = await queryRows(
+      `SELECT grade_record_id, academic_year, semester, source, verification_status, attempt_no FROM graduation_grade_record
+        WHERE student_id = ? AND curriculum_id = ?
+        AND REPLACE(course_code, ' ', '') = ?
+        ORDER BY attempt_no DESC`,
+      [studentId, curriculumId, courseCode],
     );
+    const sameTermRows = existingRows.filter(row => Number(row.academic_year) === academicYear && Number(row.semester) === semester);
+    const requestedAttempt = Number(body.attemptNo);
+    const existing = Number.isInteger(requestedAttempt) && requestedAttempt > 0
+      ? sameTermRows.find(row => Number(row.attempt_no) === requestedAttempt)
+      : sameTermRows.find(row => row.source === 'self_reported' && ['unverified', 'rejected'].includes(row.verification_status));
+    const attemptNo = existing ? Number(existing.attempt_no) : (requestedAttempt > 0 ? requestedAttempt : (Number(existingRows[0]?.attempt_no ?? 0) + 1));
     if (existing) {
       // Imported and verified rows are fixed. A student may only redo their own row that is
       // still unverified or was rejected, and the row then goes back to waiting for review.
@@ -2502,19 +2512,19 @@ async function saveSelfReportedGrade(actor, body) {
       if (!editable) return response(409, { error: 'A grade for this course and term already exists' });
       await pool.execute(
         `UPDATE graduation_grade_record
-            SET credits = ?, grade = ?, is_in_progress = ?, row_hash = ?, verification_status = 'unverified',
+            SET course_name = ?, entry_type = ?, credits = ?, grade = ?, is_in_progress = ?, row_hash = ?, verification_status = 'unverified',
                 verified_by = NULL, verified_at = NULL, verification_note = NULL
           WHERE grade_record_id = ? AND student_id = ?`,
-        [credits, grade, inProgress ? 1 : 0, rowHash, existing.grade_record_id, studentId],
+        [courseName || null, entryType, credits, grade, inProgress ? 1 : 0, rowHash, existing.grade_record_id, studentId],
       );
       recordId = Number(existing.grade_record_id);
     } else {
       const [inserted] = await pool.execute(
         `INSERT INTO graduation_grade_record
-          (student_id, curriculum_id, academic_year, semester, course_code, credits, grade,
+          (student_id, curriculum_id, academic_year, semester, course_code, course_name, entry_type, attempt_no, credits, grade,
            source, verification_status, is_in_progress, row_hash, batch_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'self_reported', 'unverified', ?, ?, NULL)`,
-        [studentId, curriculumId, academicYear, semester, courseCode, credits, grade, inProgress ? 1 : 0, rowHash],
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'self_reported', 'unverified', ?, ?, NULL)`,
+        [studentId, curriculumId, academicYear, semester, courseCode, courseName || null, entryType, attemptNo, credits, grade, inProgress ? 1 : 0, rowHash],
       );
       recordId = Number(inserted.insertId);
     }
@@ -2540,6 +2550,9 @@ async function saveSelfReportedGrade(actor, body) {
     credits,
     grade,
     isInProgress: inProgress,
+    courseName: courseName || null,
+    entryType,
+    attemptNo,
     source: 'self_reported',
     verificationStatus: 'unverified',
   } });
@@ -2557,7 +2570,7 @@ async function updateSelfReportedGrade(event) {
   if (!body) return response(400, { error: 'Request body must be valid JSON' });
   const inProgress = body.inProgress === true;
   const grade = inProgress ? '-' : String(body.grade ?? '').trim().toUpperCase();
-  if (!inProgress && !ACCEPTED_GRADES.has(grade)) return response(400, { error: 'grade is not accepted' });
+  if (!inProgress && !SELF_REPORTED_GRADES.has(grade)) return response(400, { error: 'grade is not accepted' });
 
   try {
     const [row] = await queryRows(
