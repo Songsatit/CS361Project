@@ -13,10 +13,15 @@ import {
 import { SELF_REPORTED_GRADES, validateGradeEntry } from './graduation/grade-entry.mjs';
 import { categoryConfigFor, classifyCurriculumCourse } from './graduation/category-config/index.mjs';
 import { evaluateByCategory } from './graduation/category-evaluate.mjs';
+import { evaluatePrerequisites } from './graduation/prerequisite-evaluate.mjs';
 
 const allowedRoles = new Set(['student', 'instructor', 'curriculum_admin', 'staff']);
 const jwtIssuer = 'cs361-curriculum-api';
 const jwtAudience = 'cs361-frontend';
+
+const PREREQUISITE_MINIMUM_BY_COURSE = Object.freeze({
+  CS403: 'C', CS404: 'C', CS335: 'C', CNC303: 'C', CNC304: 'C', CNC403: 'C', CNC404: 'C',
+});
 
 // Name of the HttpOnly cookie that carries the access token.
 const AUTH_COOKIE_NAME = 'token';
@@ -1942,6 +1947,7 @@ async function buildGraduationResult(studentId) {
       rejectedRecords: [],
       uncategorizedRecords: [],
       categoryEvaluation: null,
+      prerequisiteWarnings: [],
       submission: shapeGradeSubmission(submission),
       submissionHistory,
     };
@@ -1957,6 +1963,35 @@ async function buildGraduationResult(studentId) {
   const { counted, pending, rejected, inProgress } = partitionGradeRecords(allCurriculumRecords, { countSelfReported });
   const curriculumRecords = counted;
   const categoryEvaluation = evaluateByCategory(curriculumRecords, { curriculumId });
+  let prerequisiteWarnings = [];
+  if (curriculumRecords.length) {
+    const courseCodes = [...new Set(curriculumRecords.map(row => String(row.course_code ?? '').replace(/\s+/g, '').toUpperCase()).filter(Boolean))];
+    const marks = courseCodes.map(() => '?').join(',');
+    const prerequisiteRows = await queryRows(
+      `SELECT target.course_code AS course_code, required.course_code AS prerequisite_code
+         FROM prerequisite p
+         JOIN course target ON target.course_id = p.course_id
+         JOIN course required ON required.course_id = p.prerequisite_course_id
+        WHERE REPLACE(UPPER(target.course_code), ' ', '') IN (${marks})`,
+      courseCodes,
+    );
+    const byTarget = new Map();
+    for (const row of prerequisiteRows) {
+      const target = String(row.course_code ?? '').replace(/\s+/g, '').toUpperCase();
+      if (!byTarget.has(target)) byTarget.set(target, []);
+      byTarget.get(target).push({ prerequisiteCode: row.prerequisite_code, minimumGrade: PREREQUISITE_MINIMUM_BY_COURSE[target] ?? 'D' });
+    }
+    for (const [target, rulesForCourse] of byTarget) {
+      const attempt = curriculumRecords.find(row => String(row.course_code ?? '').replace(/\s+/g, '').toUpperCase() === target);
+      const result = evaluatePrerequisites(curriculumRecords, rulesForCourse, {
+        currentCourseCode: target,
+        currentAcademicYear: attempt?.academic_year,
+        currentSemester: attempt?.semester,
+        timingPolicy: 'before_term',
+      });
+      prerequisiteWarnings.push(...result.warnings);
+    }
+  }
   const [studentMeta = {}] = await queryRows(
     `SELECT student_id, display_name, student_year
        FROM graduation_student_assignment
@@ -2069,6 +2104,7 @@ async function buildGraduationResult(studentId) {
     rejectedRecords: rejected.map(shapeGradeRecord),
     uncategorizedRecords: uncategorizedRecords.map(shapeGradeRecord),
     categoryEvaluation,
+    prerequisiteWarnings,
     submission: shapeGradeSubmission(submission),
     submissionHistory,
     plan: progressPlan,
