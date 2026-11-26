@@ -6,6 +6,10 @@ export const CATEGORY_CONFIG_BY_CURRICULUM = Object.freeze({
   [CNC_CATEGORY_CONFIG.curriculumId]: CNC_CATEGORY_CONFIG,
 });
 
+export function categoryConfigFor(curriculumId) {
+  return CATEGORY_CONFIG_BY_CURRICULUM[curriculumId] ?? null;
+}
+
 const CATEGORY_BY_CODE = new Map(
   Object.values(CATEGORY_CONFIG_BY_CURRICULUM)
     .flatMap(config => config.categories.map(category => [`${config.curriculumId}:${category.code}`, category])),

@@ -483,6 +483,24 @@ Resources:
             ApiId: !Ref CurriculumApi
             Path: /api/graduation/me/grades/{gradeRecordId}
             Method: DELETE
+        SubmitGraduationGrades:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/graduation/me/submission
+            Method: POST
+        ReviewGraduationSubmission:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/graduation/students/{studentId}/submission
+            Method: POST
+        CategorizeGraduationGrade:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CurriculumApi
+            Path: /api/graduation/students/{studentId}/grades/{gradeRecordId}/category
+            Method: PATCH
         DecideSelfReportedGrade:
           Type: HttpApi
           Properties:

@@ -3361,6 +3361,42 @@
   line-height: 1.55;
 }
 
+.graduation-submission-panel,
+.graduation-warning-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid #d7dbe2;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.graduation-submission-panel > div:first-child {
+  display: grid;
+  gap: 3px;
+  flex: 1 1 240px;
+}
+
+.graduation-submission-panel--SUBMITTED { background: #fff8e6; border-color: #f0c36a; }
+.graduation-submission-panel--RETURNED { background: #fff0f0; border-color: #e8a4ab; }
+.graduation-submission-panel--APPROVED { background: #eaf7ef; border-color: #9ad1aa; }
+.graduation-submission-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.graduation-return-note { margin: 6px 0 0; color: #7b2934; }
+.graduation-submission-panel details { flex-basis: 100%; }
+.graduation-submission-panel ul { margin: 8px 0 0; padding-left: 20px; }
+.graduation-warning-panel { display: block; background: #fff8e6; border-color: #f0c36a; }
+.graduation-warning-panel h2,
+.graduation-warning-panel h3 { margin-top: 0; }
+.graduation-category-row { display: grid; grid-template-columns: minmax(90px, 140px) 1fr minmax(180px, 280px); gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid rgba(120, 90, 20, .15); }
+.graduation-category-row select { min-height: 42px; }
+
+@media (max-width: 600px) {
+  .graduation-category-row { grid-template-columns: 1fr; }
+}
+
 .graduation-error {
   background: #fff0f0;
   color: #9c1c2d;

@@ -1261,6 +1261,9 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
       : (graduationSourceLabels[source.status] ?? "ไม่ทราบสถานะข้อมูล");
   const gradeRows = result.records ?? [];
   const planRows = result.plan ?? [];
+  const submission = result.submission ?? { status: "DRAFT" };
+  const submissionStatus = { DRAFT: ["✎", "ฉบับร่าง", "แก้ไขได้"], SUBMITTED: ["⏳", "ส่งตรวจแล้ว", "รอเจ้าหน้าที่ตรวจ"], RETURNED: ["↩", "ส่งกลับแก้ไข", "แก้ไขตามหมายเหตุแล้วส่งใหม่ได้"], APPROVED: ["✓", "อนุมัติแล้ว", "ล็อกถาวร"] };
+  const canEditSubmission = ["DRAFT", "RETURNED"].includes(submission.status);
   const gradeLabel = { A: "A", "B+": "B+", B: "B", "C+": "C+", C: "C", "D+": "D+", D: "D", F: "F", S: "S (ผ่าน ไม่มีเกรด)", P: "P (ผ่าน ไม่มีเกรด)", U: "U (ไม่ผ่าน)", W: "W (ถอน)", I: "I (ไม่สมบูรณ์)" };
   const planStatus = {
     completed: "เรียนแล้ว",
@@ -1279,6 +1282,7 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
   const waitingForReview = row => row.source === "self_reported" && row.verificationStatus === "unverified";
   const rowActions = row => {
     if (mode === "student") {
+      if (!canEditSubmission) return "";
       // A student fixes or removes their own row until staff verify it.
       if (row.source !== "self_reported" || !["unverified", "rejected"].includes(row.verificationStatus)) return "";
       if (state.graduationEditRow === row.id) {
@@ -1356,6 +1360,15 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
   const groupTable = (rows, title, note, prefix) => rows?.length
     ? `<section class="graduation-history graduation-history--unconfirmed"><h3>${esc(title)}</h3><p class="graduation-student-meta">${esc(note)}</p>${recordsByYear(rows, prefix)}</section>`
     : "";
+  const statusInfo = submissionStatus[submission.status] ?? submissionStatus.DRAFT;
+  const categoryOptions = {
+    "BSC-CS-2566": [["general_education", "วิชาศึกษาทั่วไป"], ["major_core", "วิชาเฉพาะ–วิชาแกน"], ["major_specific", "วิชาเฉพาะ–วิชาเฉพาะด้าน"], ["major", "วิชาเอก"], ["outside_major_required", "วิชาบังคับนอกสาขา"], ["free_elective", "วิชาเลือกเสรี"]],
+    "BSC-CNC-2568": [["general_education", "วิชาศึกษาทั่วไป"], ["mathematics_foundation", "วิชาเฉพาะ–พื้นฐานด้านคณิตศาสตร์"], ["major_required", "วิชาเฉพาะ–วิชาบังคับ"], ["project_or_coop", "วิชาโครงงาน/สหกิจศึกษา"], ["free_elective", "วิชาเลือกเสรี"]],
+  }[result.curriculum?.curriculumId] ?? [];
+  const uncategorizedPanel = result.uncategorizedRecords?.length
+    ? `<section class="graduation-warning-panel"><h3>⚠ รายการที่ยังไม่จัดหมวด</h3><p>ต้องจัดหมวดก่อนใช้ข้อมูลรายหมวด รายการนี้ยังไม่หายจากระบบ</p>${mode === "reviewer" ? result.uncategorizedRecords.map(row => `<div class="graduation-category-row"><strong>${esc(row.courseCode)}</strong><span>${esc(row.courseNameTh ?? "ไม่พบชื่อวิชา")}</span><select data-graduation-category-record="${esc(row.id)}" aria-label="จัดหมวด ${esc(row.courseCode)}"><option value="">เลือกหมวด</option>${categoryOptions.map(([code, label]) => `<option value="${esc(code)}">${esc(label)}</option>`).join("")}</select></div>`).join("") : result.uncategorizedRecords.map(row => `<p>⚠ ${esc(row.courseCode)} ${esc(row.courseNameTh ?? "")}</p>`).join("")}</section>`
+    : "";
+  const submissionPanel = `<section class="graduation-submission-panel graduation-submission-panel--${esc(submission.status)}" role="status"><div><strong>${esc(statusInfo[0])} ${esc(statusInfo[1])}</strong><span>${esc(statusInfo[2])}</span>${submission.returnNote ? `<p class="graduation-return-note">หมายเหตุเจ้าหน้าที่: ${esc(submission.returnNote)}</p>` : ""}</div><div class="graduation-submission-actions">${mode === "student" && canEditSubmission ? `<button type="button" class="workflow-action workflow-action--primary" data-graduation-submit>ส่งให้เจ้าหน้าที่ตรวจ</button>` : ""}${mode === "reviewer" && submission.status === "SUBMITTED" ? `<button type="button" class="workflow-action workflow-action--primary" data-graduation-submission-action="approve">อนุมัติจบ</button><button type="button" class="workflow-action workflow-action--muted" data-graduation-submission-action="return">ส่งกลับแก้ไข</button>` : ""}</div>${result.submissionHistory?.length ? `<details><summary>ประวัติสถานะ</summary><ul>${result.submissionHistory.map(item => `<li>${esc(item.createdAt ? new Date(item.createdAt).toLocaleString("th-TH") : "")} · ${esc(item.actorUsername)} · ${esc(item.action)}${item.note ? ` · ${esc(item.note)}` : ""}</li>`).join("")}</ul></details>` : ""}</section>`;
   return `
     <section class="graduation-result-card">
       <div class="graduation-result-head">
@@ -1363,6 +1376,8 @@ function renderGraduationResult(result, audienceLabel, mode = "view") {
         <div class="graduation-result-head-side">
           <button type="button" class="workflow-action workflow-action--primary" data-graduation-check-toggle aria-expanded="${state.graduationCheckOpen ? "true" : "false"}">${state.graduationCheckOpen ? "ซ่อนผลตรวจสอบ" : "ตรวจสอบการจบ"}</button></div>
       </div>
+      ${submissionPanel}
+      ${uncategorizedPanel}
       ${renderGraduationHero(result)}
       ${tabBar}
       ${tab === "overview" ? `
@@ -1490,8 +1505,9 @@ function renderGraduationStudentView() {
   const defaultTab = result?.verdict === "no_data" ? "enter" : "result";
   const pageTab = ["result", "enter"].includes(state.graduationPageTab) ? state.graduationPageTab : defaultTab;
   const tabs = renderGraduationTabs([["result", "ผลตรวจสอบของฉัน"], ["enter", "กรอก / แก้ไขเกรด"]], pageTab, "page");
+  const editable = !result?.submission || ["DRAFT", "RETURNED"].includes(result.submission.status);
   const body = pageTab === "enter"
-    ? `<p class="graduation-hint">กรอกเกรดตามวิชาในแผน แล้วกด "บันทึก" ถ้าต้องแก้เกรดที่กรอกไปแล้ว ไปที่แท็บ "ผลตรวจสอบของฉัน" &gt; "ผลการเรียน" แล้วกด "แก้ไข"</p>${renderGraduationPlanForm(result)}${renderGraduationGradeForm(result)}`
+    ? (editable ? `<p class="graduation-hint">กรอกเกรดตามวิชาในแผน แล้วกด "บันทึก" ถ้าต้องแก้เกรดที่กรอกไปแล้ว ไปที่แท็บ "ผลตรวจสอบของฉัน" &gt; "ผลการเรียน" แล้วกด "แก้ไข"</p>${renderGraduationPlanForm(result)}${renderGraduationGradeForm(result)}` : `<section class="graduation-warning-panel"><h2>🔒 แก้ไขข้อมูลไม่ได้ตอนนี้</h2><p>ชุดเกรดอยู่ในสถานะ ${esc(result.submission.status)} ระบบล็อกการแก้ไขและลบไว้จนกว่าเจ้าหน้าที่จะส่งกลับแก้ไข</p>${result.submission.returnNote ? `<p>หมายเหตุ: ${esc(result.submission.returnNote)}</p>` : ""}</section>`)
     : renderGraduationResult(result, "ผลตรวจสอบของนักศึกษา", "student");
   return `${tabs}${body}`;
 }
@@ -5287,6 +5303,66 @@ function bind() {
       } catch (error) {
         alert(error.message ?? "ลบรายการไม่สำเร็จ");
         button.disabled = false;
+      }
+    };
+  });
+
+  document.querySelectorAll("[data-graduation-submit]").forEach(button => {
+    button.onclick = async () => {
+      if (!confirm("ส่งผลการเรียนทั้งหมดให้เจ้าหน้าที่ตรวจหรือไม่ หลังส่งจะแก้ไขหรือลบไม่ได้จนกว่าจะถูกส่งกลับ")) return;
+      button.disabled = true;
+      try {
+        const response = await fetch(`${API_BASE}/api/graduation/me/submission`, { method: "POST", headers: draftApiHeaders(), body: JSON.stringify({}) });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? "ส่งตรวจไม่สำเร็จ");
+        await reloadGraduation();
+      } catch (error) {
+        alert(error.message ?? "ส่งตรวจไม่สำเร็จ");
+        button.disabled = false;
+      }
+    };
+  });
+
+  document.querySelectorAll("[data-graduation-submission-action]").forEach(button => {
+    button.onclick = async () => {
+      const action = button.dataset.graduationSubmissionAction;
+      const studentId = state.graduationSelectedStudentId;
+      if (!action || !studentId) return;
+      let note = "";
+      if (action === "return") {
+        const answer = prompt("ระบุหมายเหตุที่ต้องแก้ไข (จำเป็น)");
+        if (answer === null) return;
+        note = answer.trim();
+        if (!note) return alert("การส่งกลับต้องมีหมายเหตุ");
+      } else if (!confirm("ยืนยันอนุมัติชุดเกรดนี้หรือไม่")) return;
+      button.disabled = true;
+      try {
+        const response = await fetch(`${API_BASE}/api/graduation/students/${encodeURIComponent(studentId)}/submission`, { method: "POST", headers: draftApiHeaders(), body: JSON.stringify({ action, note }) });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? "เปลี่ยนสถานะไม่สำเร็จ");
+        await reloadGraduation();
+      } catch (error) {
+        alert(error.message ?? "เปลี่ยนสถานะไม่สำเร็จ");
+        button.disabled = false;
+      }
+    };
+  });
+
+  document.querySelectorAll("[data-graduation-category-record]").forEach(select => {
+    select.onchange = async () => {
+      const categoryCode = select.value;
+      const studentId = state.graduationSelectedStudentId;
+      const curriculumId = state.graduationResult?.curriculum?.curriculumId;
+      if (!categoryCode || !studentId || !curriculumId) return;
+      select.disabled = true;
+      try {
+        const response = await fetch(`${API_BASE}/api/graduation/students/${encodeURIComponent(studentId)}/grades/${encodeURIComponent(select.dataset.graduationCategoryRecord)}/category`, { method: "PATCH", headers: draftApiHeaders(), body: JSON.stringify({ curriculumId, categoryCode }) });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? "จัดหมวดไม่สำเร็จ");
+        await reloadGraduation();
+      } catch (error) {
+        alert(error.message ?? "จัดหมวดไม่สำเร็จ");
+        select.disabled = false;
       }
     };
   });

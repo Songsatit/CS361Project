@@ -44,6 +44,7 @@ const MIGRATIONS = [
   '016_student_contact.sql',
   '019_graduation_grade_attempts.sql',
   '020_graduation_grade_categories.sql',
+  '021_graduation_submission_workflow.sql',
 ];
 
 let conn;
@@ -357,6 +358,38 @@ test('a draft referenced by a curriculum version cannot be deleted', { skip: !en
   assert.match(response.body.error, /referenced by a curriculum version/i);
   await conn.execute('DELETE FROM curriculum_versions WHERE based_on_request_id = ?', [requestId]);
   await conn.execute('DELETE FROM change_requests WHERE id = ?', [requestId]);
+});
+
+test('submission workflow locks edits, returns with a note, and blocks approval with unverified rows', { skip: !enabled }, async () => {
+  const first = await call('GET /api/graduation/me', { role: 'student', username: 'DEMO0001' });
+  assert.equal(first.body.data.submission.status, 'DRAFT');
+  const submitted = await call('POST /api/graduation/me/submission', { role: 'student', username: 'DEMO0001', body: {} });
+  assert.equal(submitted.status, 200);
+  assert.equal(submitted.body.data.status, 'SUBMITTED');
+  const locked = await call('POST /api/graduation/me/grades', { role: 'student', username: 'DEMO0001', body: { curriculumId: 'BSC-CS-2566', courseCode: 'FREELOCK', courseName: 'วิชาเสรีล็อก', entryType: 'free_elective', credits: 3, academicYear: 2566, semester: 1, grade: 'A' } });
+  assert.equal(locked.status, 409);
+  const wrongTransition = await call('POST /api/graduation/me/submission', { role: 'student', username: 'DEMO0001', body: {} });
+  assert.equal(wrongTransition.status, 409);
+
+  const created = await call('POST /api/graduation/me/grades', { role: 'student', username: 'DEMO0002', body: { curriculumId: 'BSC-CS-2566', courseCode: 'FREEWORK', courseName: 'วิชาเสรีทดสอบ', entryType: 'free_elective', credits: 3, academicYear: 2566, semester: 1, grade: 'A' } });
+  assert.equal(created.status, 201);
+  const recordId = created.body.data.id;
+  assert.equal((await call('POST /api/graduation/me/submission', { role: 'student', username: 'DEMO0002', body: {} })).status, 200);
+  const blockedApproval = await call('POST /api/graduation/students/{studentId}/submission', { role: 'staff', username: 'staff', studentId: 'DEMO0002', body: { action: 'approve' } });
+  assert.equal(blockedApproval.status, 409);
+  const returned = await call('POST /api/graduation/students/{studentId}/submission', { role: 'staff', username: 'staff', studentId: 'DEMO0002', body: { action: 'return', note: 'กรุณาตรวจชื่อวิชาอีกครั้ง' } });
+  assert.equal(returned.status, 200);
+  assert.equal(returned.body.data.status, 'RETURNED');
+  const edited = await call('PATCH /api/graduation/me/grades/{gradeRecordId}', { role: 'student', username: 'DEMO0002', pathParameters: { gradeRecordId: String(recordId) }, body: { grade: 'B' } });
+  assert.equal(edited.status, 200);
+  assert.equal((await call('POST /api/graduation/me/submission', { role: 'student', username: 'DEMO0002', body: {} })).status, 200);
+  const verified = await call('POST /api/graduation/students/{studentId}/grades/{gradeRecordId}/verification', { role: 'staff', username: 'staff', studentId: 'DEMO0002', pathParameters: { studentId: 'DEMO0002', gradeRecordId: String(recordId) }, body: { decision: 'verify' } });
+  assert.equal(verified.status, 200);
+  const approved = await call('POST /api/graduation/students/{studentId}/submission', { role: 'staff', username: 'staff', studentId: 'DEMO0002', body: { action: 'approve' } });
+  assert.equal(approved.status, 200);
+  assert.equal(approved.body.data.status, 'APPROVED');
+  const lockedAfterApproval = await call('PATCH /api/graduation/me/grades/{gradeRecordId}', { role: 'student', username: 'DEMO0002', pathParameters: { gradeRecordId: String(recordId) }, body: { grade: 'A' } });
+  assert.equal(lockedAfterApproval.status, 409);
 });
 
 test('category migration up/down preserves the complete grade data set and schema', { skip: !enabled }, async () => {
